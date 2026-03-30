@@ -1,0 +1,178 @@
+version: "3"
+services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy
+    privileged: true # Necesario para tocar el socket real
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Montamos el socket SOLO aquí
+    environment:
+      # Habilitamos SOLO lo que necesitas para que sea seguro
+      CONTAINERS: 1 # Para listar y ver contenedores
+      EXEC: 1       # Para hacer 'docker exec'
+      POST: 1       # Necesario para enviar comandos (como kill o exec)
+      # Opcional: Si necesitas matar procesos específicamente
+      # KILL: 1
+  docker-in-docker:
+    extends:
+      file: ../tools/docker/docker-compose.yml
+      service: docker-in-docker
+
+  runner-1:
+    image: "code.forgejo.org/forgejo/runner:11"
+    links:
+      - docker-in-docker
+    depends_on:
+      docker-in-docker:
+        condition: service_started
+    container_name: "runner-1"
+    environment:
+      DOCKER_HOST: tcp://docker-in-docker:2375
+    user: 1001:1001
+    volumes:
+      - ./data-1:/data
+    restart: "unless-stopped"
+
+    # command: '/bin/sh -c "sleep 5; forgejo-runner daemon"'
+    command: '/bin/sh -c "while : ; do sleep 1 ; done ;"'
+
+  runner-2:
+    image: "code.forgejo.org/forgejo/runner:11"
+    links:
+      - docker-in-docker
+    depends_on:
+      docker-in-docker:
+        condition: service_started
+    container_name: "runner-2"
+    environment:
+      DOCKER_HOST: tcp://docker-in-docker:2375
+    user: 1001:1001
+    volumes:
+      - ./data-2:/data
+    restart: "unless-stopped"
+
+    # command: '/bin/sh -c "sleep 5; forgejo-runner daemon"'
+    command: '/bin/sh -c "while : ; do sleep 1 ; done ;"'
+    
+  runner-3:
+    image: "code.forgejo.org/forgejo/runner:11"
+    links:
+      - docker-in-docker
+    depends_on:
+      docker-in-docker:
+        condition: service_started
+    container_name: "runner-3"
+    environment:
+      DOCKER_HOST: tcp://docker-in-docker:2375
+    user: 1001:1001
+    volumes:
+      - ./data-3:/data
+    restart: "unless-stopped"
+
+    # command: '/bin/sh -c "sleep 5; forgejo-runner daemon"'
+    command: '/bin/sh -c "while : ; do sleep 1 ; done ;"'
+
+  minio:
+    extends:
+      file: ../tools/docker/docker-compose.yml
+      service: minio
+    ports: !override
+      - "19020:9000"
+      - "19001:9001"
+
+  app:
+    platform: linux/arm64/v8
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    # Source - https://stackoverflow.com/a
+    # Posted by RustyShackleford, modified by community. See post 'Timeline' for change history
+    # Retrieved 2025-11-26, License - CC BY-SA 4.0
+
+    command: bash -c "rm -rf /workspace/data/* && cp -rf /workspace/.devcontainer/data/* /workspace/data && cp -rf /workspace/.devcontainer/init/config/app.ini /workspace/custom/conf/app.ini && sleep infinity"
+    volumes:
+      - ..:/workspace:cached
+      - ~/.ssh:/home/vscode/.ssh
+      - forgejo_lib:/var/lib/gitea
+      - forgejo_gitea:/etc/gitea
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "3000:3000"
+      - "6060:6060"
+      - "222:22"
+    environment:
+      - RUN_MODE=dev
+      - FORGEJO__server_LFS_START_SERVER=true
+      - FORGEJO__database__DB_TYPE=postgres
+      - FORGEJO__database__HOST=db:5432
+      - FORGEJO__database__NAME=forgejo
+      - FORGEJO__database__USER=forgejo
+      - FORGEJO__database__PASSWD=forgejo
+      - FORGEJO__metrics__ENABLED=true
+      - FORGEJO__metrics__ENABLED_ISSUE_BY_REPOSITORY=true
+      - FORGEJO__metrics__ENABLED_ISSUE_BY_LABEL=true
+      - FORGEJO__log__LEVEL=info
+      - FORGEJO__stackitgitsettings__ENABLE_USER_PASS_SIGNIN=false
+      - FORGEJO__stackitgitsettings__ORGANIZATIONID=
+      - FORGEJO__stackitgitsettings__ADMIN_PERMISSIONS=
+      - FORGEJO__stackitgitsettings__INSTANCEID=
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  db:
+    ports:
+      - "6432:5432"
+    image: postgres:17
+    container_name: db
+    restart: always
+    healthcheck:
+      test: pg_isready
+      interval: 60s
+      retries: 3
+      start_period: 10s
+      timeout: 10s
+    environment:
+      - POSTGRES_USER=forgejo
+      - POSTGRES_PASSWORD=forgejo
+      - POSTGRES_DB=forgejo
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init/dump.sql:/docker-entrypoint-initdb.d/dump.sql
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./init/minio:/backup
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Create alias for minio'
+      sleep 5;
+      /usr/bin/mc alias set myminio http://minio:9000 minio 12345678;
+      /usr/bin/mc admin info myminio;
+      echo 'Create acces and secret';
+      /usr/bin/mc admin user svcacct add --access-key myuserserviceaccount --secret-key myuserserviceaccountpassword myminio minio;
+      echo 'mc admin policy attach myminio readwrite --user myuserserviceaccount';
+      /usr/bin/mc admin policy attach myminio readwrite --user myuserserviceaccount;
+      echo 'Create bucket forgejo';
+      /usr/bin/mc mb myminio/forgejo;
+      echo 'Created bucket forgejo';
+      /usr/bin/mc ls myminio/forgejo;
+      /usr/bin/mc ready myminio;
+      /usr/bin/mc mirror /backup/forgejo myminio/forgejo --overwrite
+      "
+
+volumes:
+  minio_data:
+  pg_data:
+  forgejo_lib:
+    external: false
+  forgejo_gitea:
+    external: false

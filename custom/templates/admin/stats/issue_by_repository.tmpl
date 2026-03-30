@@ -1,0 +1,14 @@
+<table class="ui very embeded striped table unstackable">
+	<tr>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.issue_by_repository_count.owner_name"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.issue_by_repository_count.repository"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.issue_by_repository_count.count"}}</td>
+	</tr>
+	{{ range $issue := .ctxValue }}
+		<tr>
+			<td>{{ $issue.OwnerName }}</td>
+			<td>{{ $issue.Repository }}</td>
+			<td>{{ $issue.Count }}</td>
+		</tr>
+	{{ end }}
+</table>

@@ -1,0 +1,68 @@
+{
+  "name": "Gitea DevContainer",
+  "dockerComposeFile": [
+    "./docker-compose.yml"
+  ],
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "features": {
+    // installs nodejs into container
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "24"
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/git-lfs:1": {},
+    "ghcr.io/warrenbuckley/codespace-features/sqlite:1": {}
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "go.gopath": "/go",
+        "go.toolsManagement.checkForUpdates": "local",
+        "go.useLanguageServer": true,
+        "remote.localPortHost": "allInterfaces"
+      },
+      // same extensions as Gitpod, should match /.gitpod.yml
+      "extensions": [
+        "editorconfig.editorconfig",
+        "dbaeumer.vscode-eslint",
+        "golang.go",
+        "stylelint.vscode-stylelint",
+        "DavidAnson.vscode-markdownlint",
+        "Vue.volar",
+        "ms-azuretools.vscode-docker",
+        "vitest.explorer",
+        "cweijan.vscode-database-client2",
+        "GitHub.vscode-pull-request-github",
+        "Azurite.azurite"
+      ]
+    }
+  },
+  "portsAttributes": {
+    "3000": {
+      "label": "Gitea Web",
+      "onAutoForward": "notify"
+    }
+  },
+  "runServices": [
+    "docker-proxy",
+    "docker-in-docker",
+    "runner-1",
+    "runner-2",
+    "runner-3",
+    "minio",
+    "minio-init",
+    "db"
+  ],
+  "shutdownAction": "stopCompose",
+  "postCreateCommand": "zsh ./.devcontainer/commands/post-create.sh",
+  "postStartCommand": "zsh ./.devcontainer/commands/post-start.sh",
+  "postAttachCommand": "zsh ./.devcontainer/commands/post-attach.sh",
+  "initializeCommand": "zsh ./.devcontainer/commands/initialize.sh",
+  "onCreateCommand": "zsh ./.devcontainer/commands/on-create.sh",
+  "updateContentCommand": "zsh ./.devcontainer/commands/update-content.sh",
+  "remoteUser": "vscode"
+}

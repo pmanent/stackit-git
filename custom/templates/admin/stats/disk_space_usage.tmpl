@@ -1,0 +1,14 @@
+<table class="ui very embeded striped table unstackable">
+	<tr>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.disk_space_usage.bytes"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.disk_space_usage.size"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.disk_space_usage.limit"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.disk_space_usage.percentage"}}</td>
+	</tr>
+	<tr>
+		<td>{{ .ctxValue.Bytes }}</td>
+		<td>{{ .ctxValue.Human }}</td>
+		<td>{{ .ctxValue.LimitHuman }}</td>
+		<td>{{ .ctxValue.Percentage }} %</td>
+	</tr>
+</table>

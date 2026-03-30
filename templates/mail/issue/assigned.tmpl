@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<style>
+		body {
+			font-family: Aptos, Arial, sans-serif;
+			font-size: 11px;
+		}
+		.footer { font-size:small; color:#666;}
+	</style>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+</head>
+
+{{$repo_url := HTMLFormat "<a href='%s'>%s</a>" .Issue.Repo.HTMLURL .Issue.Repo.FullName}}
+{{$link := HTMLFormat "<a href='%s'>#%d</a>" .Link .Issue.Index}}
+<body>
+	<p>{{.locale.Tr "mail.hi_user_x" (.Recipient|DotEscape)}}</p><br>
+	<p>
+		{{if .IsPull}}
+			{{.locale.Tr "mail.issue_assigned.pull" .Doer.Name $link $repo_url}}
+		{{else}}
+			{{.locale.Tr "mail.issue_assigned.issue" .Doer.Name $link $repo_url}}
+		{{end}}
+	</p>
+	<div class="footer">
+		<p>
+			---
+			<br>
+			<a href="{{.Link}}">{{.locale.Tr "mail.click_to_view"}}</a>.
+		</p>
+	</div>
+
+</body>
+</html>

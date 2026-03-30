@@ -1,0 +1,14 @@
+{{template "base/head" .}}
+<div class="page-content repository actions">
+	{{template "repo/header" .}}
+	<div class="ui container">
+		{{template "base/alert" .}}
+		<div class="empty-placeholder">
+			{{svg "octicon-no-entry" 48}}
+			<h2>{{ctx.Locale.Tr "actions.runs.no_actions.title"}}</h2>
+			<p>{{ctx.Locale.Tr "actions.runs.no_actions.status"}}</p>
+			<p>{{ctx.Locale.Tr "actions.runs.no_actions.quick_start"}}</p>
+		</div>
+	</div>
+</div>
+{{template "base/footer" .}}

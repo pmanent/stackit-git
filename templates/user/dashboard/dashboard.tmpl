@@ -1,0 +1,21 @@
+<!-- DO NOT EDIT. Changes made to this file will not be picked up by forgejo. -->
+<!-- Instead, edit its "custom" counterpart that lives in: -->
+<!-- /custom/templates/user/dashboard/dashboard.tmpl -->
+
+{{template "base/head" .}}
+<div role="main" aria-label="{{.Title}}" class="page-content dashboard feeds">
+	{{template "user/dashboard/navbar" .}}
+	<div class="ui container flex-container">
+		<div class="flex-container-main">
+			{{template "base/alert" .}}
+			{{template "user/heatmap" .}}
+			{{if .Feeds}}
+				{{template "user/dashboard/feeds" .}}
+			{{else}}
+				{{template "user/dashboard/guide" .}}
+			{{end}}
+		</div>
+		{{template "user/dashboard/repolist" .}}
+	</div>
+</div>
+{{template "base/footer" .}}

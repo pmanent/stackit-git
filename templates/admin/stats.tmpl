@@ -1,0 +1,21 @@
+<!-- DO NOT EDIT. Changes made to this file will not be picked up by forgejo. -->
+<!-- Instead, edit its "custom" counterpart that lives in: -->
+<!-- /custom/templates/admin/stats.tmpl -->
+
+{{template "admin/layout_head" (dict "ctxData" . "pageClass" "admin monitor")}}
+<div class="admin-setting-content">
+	<h4 class="ui top attached header">
+		{{ctx.Locale.Tr "admin.dashboard.statistic"}}
+	</h4>
+	<div class="ui attached table segment">
+		<table class="ui very basic striped table unstackable">
+			{{range $statsKey, $statsValue := .Stats}}
+			<tr>
+				<td width="200">{{$statsKey}}</td>
+				<td>{{$statsValue}}</td>
+			</tr>
+			{{end}}
+		</table>
+	</div>
+</div>
+{{template "admin/layout_footer" .}}

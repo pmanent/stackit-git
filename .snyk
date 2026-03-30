@@ -1,0 +1,20 @@
+# Snyk (https://snyk.io) policy file, patches or ignores known vulnerabilities.
+version: v1.25.1
+# ignores vulnerabilities until expiry date; change duration by modifying expiry date
+ignore:
+  SNYK-JS-INFLIGHT-6095116:
+    - '*':
+        reason: Refactor all the code to fix. Separated task
+        expires: 2044-12-02T16:14:18.519Z
+        created: 2024-11-02T16:14:18.520Z
+  SNYK-JS-LODASHTEMPLATE-1088054:
+    - '*':
+        reason: Refactor all the code to fix. Separated task
+        expires: 2044-12-02T16:14:18.519Z
+        created: 2024-11-02T16:20:38.182Z
+  'snyk:lic:npm:elkjs:EPL-2.0':
+    - '*':
+        reason: Non modified code in elkjs, no need to change the product to EPL license
+        expires: 2044-12-02T16:14:18.519Z
+        created: 2024-11-02T16:21:21.383Z
+patch: {}
