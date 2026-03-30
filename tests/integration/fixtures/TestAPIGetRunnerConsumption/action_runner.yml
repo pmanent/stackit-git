@@ -1,0 +1,53 @@
+-
+  # A stackit runner
+  id: 123456781001
+  uuid: "019adb61-c566-73ea-a8b3-0677cb90ffb4"
+  name: "stackit-runner-1"
+  version: ""
+  owner_id: 0
+  repo_id: 0
+  description: ""
+  base: 0
+  repo_range: ""
+  last_online: 0
+  last_active: 0
+  agent_labels: '["stackit-ubuntu-20", "stackit-docker"]'
+  created: 1216104432
+  updated: 1416104432
+  deleted: ~
+-
+  # A global runner
+  # Secret is 7e577e577e577e57feedfacefeedfacefeedface
+  id: 123456781002
+  uuid: "019add1c-25b3-7a1e-9a71-3a12b8159257"
+  name: "global-runner-1"
+  version: ""
+  owner_id: 0
+  repo_id: 0
+  description: ""
+  base: 0
+  repo_range: ""
+  last_online: 0
+  last_active: 0
+  agent_labels: '["ubuntu-20", "docker"]'
+  created: 1216104432
+  updated: 1416104432
+  deleted: ~
+-
+  # A global runner
+  # Secret is 7e577e577e577e57feedfacefeedfacefeedface
+  id: 123456781003
+  uuid: "019add1d-c773-72e5-826a-435d1e224e3c"
+  name: "global-runner-2"
+  version: ""
+  owner_id: 0
+  repo_id: 0
+  description: ""
+  base: 0
+  repo_range: ""
+  last_online: 0
+  last_active: 0
+  agent_labels: '["debian-20", "docker"]'
+  created: 1716104432
+  updated: 1716104432
+  deleted: ~

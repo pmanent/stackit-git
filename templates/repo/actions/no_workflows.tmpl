@@ -1,0 +1,13 @@
+<!-- DO NOT EDIT. Changes made to this file will not be picked up by forgejo. -->
+<!-- Instead, edit its "custom" counterpart that lives in: -->
+<!-- /custom/templates/repo/actions/no_workflows.tmpl -->
+
+<div class="empty-placeholder">
+	{{svg "octicon-no-entry" 48}}
+	<h2>{{ctx.Locale.Tr "actions.runs.no_workflows"}}</h2>
+	{{if and .CanWriteCode .CanWriteActions}}
+		<p>{{ctx.Locale.Tr "actions.runs.no_workflows.help_write_access" "https://forgejo.org/docs/latest/user/actions/#quick-start" "https://forgejo.org/docs/latest/admin/runner-installation/"}}</p>
+	{{else}}
+		<p>{{ctx.Locale.Tr "actions.runs.no_workflows.help_no_write_access" "https://forgejo.org/docs/latest/user/actions/"}}</p>
+	{{end}}
+</div>

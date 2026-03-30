@@ -1,0 +1,21 @@
+-
+  id: 1010
+  uuid: "fb857e63-c0ce-4571-a6c9-fde26c128073"
+  name: "Repo runner"
+  owner_id: 0
+  repo_id: 1
+  deleted: 0
+-
+  id: 1011
+  uuid: "019a2fb6-2adf-7437-b614-ae819856816a"
+  name: "Global runner"
+  owner_id: 0
+  repo_id: 0
+  deleted: 0
+-
+  id: 1012
+  uuid: "019a2fb6-66b1-75ab-bca2-0fb86587f007"
+  name: "Stackit runner"
+  owner_id: 0
+  repo_id: 0
+  deleted: 0

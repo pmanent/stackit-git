@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<style>
+		.footer { font-size:small; color:#666;}
+		body {
+			font-family: Aptos, Arial, sans-serif; 
+			font-size: 11px;
+		}
+	</style>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+</head>
+
+<body>
+<p>{{.locale.Tr "mail.hi_user_x" (.Recipient|DotEscape)}}</p><br>
+	<p>{{.locale.Tr "mail.repo.collaborator.added.text"}} <code>{{.RepoName}}</code></p>
+	<div class="footer">
+		<p>
+			---
+			<br>
+			<a href="{{.Link}}">{{.locale.Tr "mail.view_it_on" AppName}}</a>.
+		</p>
+	</div>
+</body>
+</html>

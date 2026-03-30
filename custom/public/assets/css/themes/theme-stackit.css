@@ -1,0 +1,2 @@
+@import "./theme-stackit-light.css";
+@import "./theme-stackit-dark.css" (prefers-color-scheme: dark);

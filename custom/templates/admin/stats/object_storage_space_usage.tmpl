@@ -1,0 +1,22 @@
+<table class="ui very embeded striped table unstackable">
+	<tr>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.object_storage_space_usage.client"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.object_storage_space_usage.bucket_name"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.object_storage_space_usage.bytes"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.object_storage_space_usage.size"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.object_storage_space_usage.limit"}}</td>
+		<td>{{ctx.Locale.Tr "admin.dashboard.statistic.object_storage_space_usage.percentage"}}</td>
+	</tr>
+	{{ range $minioClientKey, $minioClientValue := .ctxValue }}
+		{{ range $minioKey, $minioValue := $minioClientValue }}
+			<tr>
+				<td>{{ $minioClientKey }}</td>
+				<td>{{ $minioKey }}</td>
+				<td>{{ $minioValue.Bytes }}</td>
+				<td>{{ $minioValue.Human }}</td>
+				<td>{{ $minioValue.LimitHuman }}</td>
+				<td>{{ $minioValue.Percentage }} %</td>
+			</tr>
+		{{ end }}
+	{{ end }}
+</table>

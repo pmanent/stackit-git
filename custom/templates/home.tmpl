@@ -1,0 +1,50 @@
+{{template "base/head" .}}
+<div role="main" aria-label="{{if .IsSigned}}{{ctx.Locale.Tr "dashboard"}}{{else}}{{ctx.Locale.Tr "home"}}{{end}}" class="page-content home">
+	<div class="tw-mb-8 tw-px-8">
+		<div class="center">
+			<img class="logo" width="220" height="220" src="{{AssetUrlPrefix}}/img/logo.svg" alt="{{ctx.Locale.Tr "logo"}}">
+			<div class="hero">
+				<h1 class="ui icon header title">
+					{{AppDisplayName}}
+				</h1>
+			</div>
+		</div>
+	</div>
+	<div class="ui stackable middle very relaxed page grid">
+		<div class="eight wide center column">
+			<h2 class="hero ui icon header">
+				{{svg "octicon-shield-check" 48}} {{ctx.Locale.Tr "startpage.install"}}
+			</h2>
+			<p class="large">
+				{{ctx.Locale.Tr "startpage.install_desc"}}
+			</p>
+		</div>
+		<div class="eight wide center column">
+			<h2 class="hero ui icon header">
+				{{svg "octicon-location" 48}} {{ctx.Locale.Tr "startpage.platform"}}
+			</h2>
+			<p class="large">
+				{{ctx.Locale.Tr "startpage.platform_desc"}}
+			</p>
+		</div>
+	</div>
+	<div class="ui stackable middle very relaxed page grid">
+		<div class="eight wide center column">
+			<h2 class="hero ui icon header">
+				{{svg "octicon-issue-reopened" 48}} {{ctx.Locale.Tr "startpage.lightweight"}}
+			</h2>
+			<p class="large">
+				{{ctx.Locale.Tr "startpage.lightweight_desc"}}
+			</p>
+		</div>
+		<div class="eight wide center column">
+			<h2 class="hero ui icon header">
+				{{svg "octicon-code-of-conduct" 48}} {{ctx.Locale.Tr "startpage.license"}}
+			</h2>
+			<p class="large">
+				{{ctx.Locale.Tr "startpage.license_desc"}}
+			</p>
+		</div>
+	</div>
+</div>
+{{template "base/footer" .}}
