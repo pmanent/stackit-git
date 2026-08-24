@@ -16,8 +16,7 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
-	auth_service "forgejo.org/services/auth"
-	"forgejo.org/services/auth/source/oauth2"
+	auth_method "forgejo.org/services/auth/method"
 	"forgejo.org/services/context"
 	"forgejo.org/services/externalaccount"
 	"forgejo.org/services/forms"
@@ -32,15 +31,9 @@ func LinkAccount(ctx *context.Context) {
 	ctx.Data["DisablePassword"] = !setting.Service.RequireExternalRegistrationPassword || setting.Service.AllowOnlyExternalRegistration
 	ctx.Data["Title"] = ctx.Tr("link_account")
 	ctx.Data["LinkAccountMode"] = true
-	ctx.Data["EnableCaptcha"] = setting.Service.EnableCaptcha && setting.Service.RequireExternalRegistrationCaptcha
-	ctx.Data["Captcha"] = context.GetImageCaptcha()
-	ctx.Data["CaptchaType"] = setting.Service.CaptchaType
-	ctx.Data["RecaptchaURL"] = setting.Service.RecaptchaURL
-	ctx.Data["RecaptchaSitekey"] = setting.Service.RecaptchaSitekey
-	ctx.Data["HcaptchaSitekey"] = setting.Service.HcaptchaSitekey
-	ctx.Data["McaptchaSitekey"] = setting.Service.McaptchaSitekey
-	ctx.Data["McaptchaURL"] = setting.Service.McaptchaURL
-	ctx.Data["CfTurnstileSitekey"] = setting.Service.CfTurnstileSitekey
+	if setting.Service.RequireExternalRegistrationCaptcha {
+		context.SetCaptchaData(ctx)
+	}
 	ctx.Data["DisableRegistration"] = setting.Service.DisableRegistration
 	ctx.Data["AllowOnlyInternalRegistration"] = setting.Service.AllowOnlyInternalRegistration
 	ctx.Data["ShowRegistrationButton"] = false
@@ -117,15 +110,9 @@ func LinkAccountPostSignIn(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("link_account")
 	ctx.Data["LinkAccountMode"] = true
 	ctx.Data["LinkAccountModeSignIn"] = true
-	ctx.Data["EnableCaptcha"] = setting.Service.EnableCaptcha && setting.Service.RequireExternalRegistrationCaptcha
-	ctx.Data["RecaptchaURL"] = setting.Service.RecaptchaURL
-	ctx.Data["Captcha"] = context.GetImageCaptcha()
-	ctx.Data["CaptchaType"] = setting.Service.CaptchaType
-	ctx.Data["RecaptchaSitekey"] = setting.Service.RecaptchaSitekey
-	ctx.Data["HcaptchaSitekey"] = setting.Service.HcaptchaSitekey
-	ctx.Data["McaptchaSitekey"] = setting.Service.McaptchaSitekey
-	ctx.Data["McaptchaURL"] = setting.Service.McaptchaURL
-	ctx.Data["CfTurnstileSitekey"] = setting.Service.CfTurnstileSitekey
+	if setting.Service.EnableCaptcha && setting.Service.RequireExternalRegistrationCaptcha {
+		context.SetCaptchaData(ctx)
+	}
 	ctx.Data["DisableRegistration"] = setting.Service.DisableRegistration
 	ctx.Data["ShowRegistrationButton"] = false
 	ctx.Data["EnableInternalSignIn"] = true
@@ -145,7 +132,7 @@ func LinkAccountPostSignIn(ctx *context.Context) {
 		return
 	}
 
-	u, _, err := auth_service.UserSignIn(ctx, signInForm.UserName, signInForm.Password)
+	u, _, err := auth_method.UserSignIn(ctx, signInForm.UserName, signInForm.Password)
 	if err != nil {
 		handleSignInError(ctx, signInForm.UserName, &signInForm, tplLinkAccount, "UserLinkAccount", err)
 		return
@@ -162,7 +149,7 @@ func linkAccount(ctx *context.Context, u *user_model.User, gothUser goth.User, r
 	// We deliberately ignore the skip local 2fa setting here because we are linking to a previous user here
 	hasTwoFactor, err := auth.HasTwoFactorByUID(ctx, u.ID)
 	if err != nil {
-		ctx.ServerError("UserLinkAccount", err)
+		ctx.ServerError("HasTwoFactorByUID", err)
 		return
 	}
 
@@ -205,15 +192,9 @@ func LinkAccountPostRegister(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("link_account")
 	ctx.Data["LinkAccountMode"] = true
 	ctx.Data["LinkAccountModeRegister"] = true
-	ctx.Data["EnableCaptcha"] = setting.Service.EnableCaptcha && setting.Service.RequireExternalRegistrationCaptcha
-	ctx.Data["RecaptchaURL"] = setting.Service.RecaptchaURL
-	ctx.Data["Captcha"] = context.GetImageCaptcha()
-	ctx.Data["CaptchaType"] = setting.Service.CaptchaType
-	ctx.Data["RecaptchaSitekey"] = setting.Service.RecaptchaSitekey
-	ctx.Data["HcaptchaSitekey"] = setting.Service.HcaptchaSitekey
-	ctx.Data["McaptchaSitekey"] = setting.Service.McaptchaSitekey
-	ctx.Data["McaptchaURL"] = setting.Service.McaptchaURL
-	ctx.Data["CfTurnstileSitekey"] = setting.Service.CfTurnstileSitekey
+	if setting.Service.RequireExternalRegistrationCaptcha {
+		context.SetCaptchaData(ctx)
+	}
 	ctx.Data["DisableRegistration"] = setting.Service.DisableRegistration
 	ctx.Data["ShowRegistrationButton"] = false
 
@@ -249,7 +230,10 @@ func LinkAccountPostRegister(ctx *context.Context) {
 		}
 	}
 
-	if !form.IsEmailDomainAllowed() {
+	if emailValid, ok := form.IsEmailDomainAllowed(); !emailValid {
+		ctx.RenderWithErr(ctx.Tr("form.email_invalid"), tplSignUp, form)
+		return
+	} else if !ok {
 		ctx.RenderWithErr(ctx.Tr("auth.email_domain_blacklisted"), tplLinkAccount, &form)
 		return
 	}
@@ -294,8 +278,7 @@ func LinkAccountPostRegister(ctx *context.Context) {
 		return
 	}
 
-	source := authSource.Cfg.(*oauth2.Source)
-	if err := syncGroupsToTeams(ctx, source, &gothUser, u); err != nil {
+	if err := syncGroupsToTeams(ctx, authSource, &gothUser, u); err != nil {
 		ctx.ServerError("SyncGroupsToTeams", err)
 		return
 	}

@@ -103,7 +103,7 @@ func Int64sToStrings(ints []int64) []string {
 func EntryIcon(entry *git.TreeEntry) string {
 	switch {
 	case entry.IsLink():
-		te, _, err := entry.FollowLink()
+		te, err := entry.FollowLink()
 		if err != nil {
 			log.Debug(err.Error())
 			return "file-symlink-file"
@@ -114,14 +114,23 @@ func EntryIcon(entry *git.TreeEntry) string {
 		return "file-symlink-file"
 	case entry.IsDir():
 		return "file-directory-fill"
-	case entry.IsSubModule():
+	case entry.IsSubmodule():
 		return "file-submodule"
+	}
+
+	if IsCitationFile(entry) {
+		return "cross-reference"
 	}
 
 	return "file"
 }
 
+func IsCitationFile(entry *git.TreeEntry) bool {
+	return entry.Name() == "CITATION.cff" || entry.Name() == "CITATION.bib"
+}
+
 // SetupGiteaRoot Sets GITEA_ROOT if it is not already set and returns the value
+// TODO: move to a test folder (e.g. models/unittest/) since this isn't called outside tests
 func SetupGiteaRoot() string {
 	giteaRoot := os.Getenv("GITEA_ROOT")
 	if giteaRoot == "" {
@@ -134,7 +143,7 @@ func SetupGiteaRoot() string {
 				giteaRoot = wd
 			}
 		}
-		if _, err := os.Stat(filepath.Join(giteaRoot, "gitea")); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(giteaRoot, "go.mod")); os.IsNotExist(err) {
 			giteaRoot = ""
 		} else if err := os.Setenv("GITEA_ROOT", giteaRoot); err != nil {
 			giteaRoot = ""

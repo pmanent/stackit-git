@@ -26,48 +26,50 @@ import (
 	"forgejo.org/routers/install"
 
 	"github.com/felixge/fgprof"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 // PIDFile could be set from build tag
 var PIDFile = "/run/gitea.pid"
 
 // CmdWeb represents the available web sub-command.
-var CmdWeb = &cli.Command{
-	Name:  "web",
-	Usage: "Start the Forgejo web server",
-	Description: `The Forgejo web server is the only thing you need to run,
+func cmdWeb() *cli.Command {
+	return &cli.Command{
+		Name:  "web",
+		Usage: "Start the Forgejo web server",
+		Description: `The Forgejo web server is the only thing you need to run,
 and it takes care of all the other things for you`,
-	Before: PrepareConsoleLoggerLevel(log.INFO),
-	Action: runWeb,
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:    "port",
-			Aliases: []string{"p"},
-			Value:   "3000",
-			Usage:   "Temporary port number to prevent conflict",
+		Before: multipleBefore(noDanglingArgs, PrepareConsoleLoggerLevel(log.INFO)),
+		Action: runWeb,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "port",
+				Aliases: []string{"p"},
+				Value:   "3000",
+				Usage:   "Temporary port number to prevent conflict",
+			},
+			&cli.StringFlag{
+				Name:  "install-port",
+				Value: "3000",
+				Usage: "Temporary port number to run the install page on to prevent conflict",
+			},
+			&cli.StringFlag{
+				Name:    "pid",
+				Aliases: []string{"P"},
+				Value:   PIDFile,
+				Usage:   "Custom pid file path",
+			},
+			&cli.BoolFlag{
+				Name:    "quiet",
+				Aliases: []string{"q"},
+				Usage:   "Only display Fatal logging errors until logging is set-up",
+			},
+			&cli.BoolFlag{
+				Name:  "verbose",
+				Usage: "Set initial logging to TRACE level until logging is properly set-up",
+			},
 		},
-		&cli.StringFlag{
-			Name:  "install-port",
-			Value: "3000",
-			Usage: "Temporary port number to run the install page on to prevent conflict",
-		},
-		&cli.StringFlag{
-			Name:    "pid",
-			Aliases: []string{"P"},
-			Value:   PIDFile,
-			Usage:   "Custom pid file path",
-		},
-		&cli.BoolFlag{
-			Name:    "quiet",
-			Aliases: []string{"q"},
-			Usage:   "Only display Fatal logging errors until logging is set-up",
-		},
-		&cli.BoolFlag{
-			Name:  "verbose",
-			Usage: "Set initial logging to TRACE level until logging is properly set-up",
-		},
-	},
+	}
 }
 
 func runHTTPRedirector() {
@@ -128,7 +130,7 @@ func showWebStartupMessage(msg string) {
 	}
 }
 
-func serveInstall(ctx *cli.Context) error {
+func serveInstall(_ context.Context, ctx *cli.Command) error {
 	showWebStartupMessage("Prepare to run install page")
 
 	routers.InitWebInstallPage(graceful.GetManager().HammerContext())
@@ -161,9 +163,7 @@ func serveInstall(ctx *cli.Context) error {
 	return nil
 }
 
-func serveInstalled(ctx *cli.Context) error {
-	setting.InitCfgProvider(setting.CustomConf)
-	setting.LoadCommonSettings()
+func serveInstalled(_ context.Context, ctx *cli.Command) error {
 	setting.MustInstalled()
 
 	showWebStartupMessage("Prepare to run web server")
@@ -197,9 +197,6 @@ func serveInstalled(ctx *cli.Context) error {
 	publicFilesSet.Remove("robots.txt")
 	for fn := range publicFilesSet.Seq() {
 		log.Error("Found legacy public asset %q in CustomPath. Please move it to %s/public/assets/%s", fn, setting.CustomPath, fn)
-	}
-	if _, err := os.Stat(filepath.Join(setting.CustomPath, "robots.txt")); err == nil {
-		log.Error(`Found legacy public asset "robots.txt" in CustomPath. Please move it to %s/public/robots.txt`, setting.CustomPath)
 	}
 
 	routers.InitWebInstalled(graceful.GetManager().HammerContext())
@@ -236,7 +233,7 @@ func servePprof() {
 	finished()
 }
 
-func runWeb(ctx *cli.Context) error {
+func runWeb(ctx context.Context, cli *cli.Command) error {
 	defer func() {
 		if panicked := recover(); panicked != nil {
 			log.Fatal("PANIC: %v\n%s", panicked, log.Stack(2))
@@ -254,12 +251,12 @@ func runWeb(ctx *cli.Context) error {
 	}
 
 	// Set pid file setting
-	if ctx.IsSet("pid") {
-		createPIDFile(ctx.String("pid"))
+	if cli.IsSet("pid") {
+		createPIDFile(cli.String("pid"))
 	}
 
 	if !setting.InstallLock {
-		if err := serveInstall(ctx); err != nil {
+		if err := serveInstall(ctx, cli); err != nil {
 			return err
 		}
 	} else {
@@ -270,7 +267,7 @@ func runWeb(ctx *cli.Context) error {
 		go servePprof()
 	}
 
-	return serveInstalled(ctx)
+	return serveInstalled(ctx, cli)
 }
 
 func setPort(port string) error {
@@ -279,8 +276,11 @@ func setPort(port string) error {
 
 	switch setting.Protocol {
 	case setting.HTTPUnix:
+		break
 	case setting.FCGI:
+		break
 	case setting.FCGIUnix:
+		break
 	default:
 		defaultLocalURL := string(setting.Protocol) + "://"
 		if setting.HTTPAddr == "0.0.0.0" {

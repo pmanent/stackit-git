@@ -13,10 +13,9 @@ import (
 type Event struct {
 	Time time.Time
 
-	GoroutinePid string
-	Caller       string
-	Filename     string
-	Line         int
+	Caller   string
+	Filename string
+	Line     int
 
 	Level Level
 
@@ -209,7 +208,7 @@ func EventFormatTextMessage(mode *WriterMode, event *Event, msgFormat string, ms
 			}
 		}
 		if hasColorValue {
-			msg = []byte(fmt.Sprintf(msgFormat, msgArgs...))
+			msg = fmt.Appendf(nil, msgFormat, msgArgs...)
 		}
 	}
 	// try to reuse the pre-formatted simple text message
@@ -225,24 +224,11 @@ func EventFormatTextMessage(mode *WriterMode, event *Event, msgFormat string, ms
 		msg = msg[:len(msg)-1]
 	}
 
-	if flags&Lgopid == Lgopid {
-		if event.GoroutinePid != "" {
-			buf = append(buf, '[')
-			if mode.Colorize {
-				buf = append(buf, ColorBytes(FgHiYellow)...)
-			}
-			buf = append(buf, event.GoroutinePid...)
-			if mode.Colorize {
-				buf = append(buf, resetBytes...)
-			}
-			buf = append(buf, ']', ' ')
-		}
-	}
 	buf = append(buf, msg...)
 
 	if event.Stacktrace != "" && mode.StacktraceLevel <= event.Level {
-		lines := bytes.Split([]byte(event.Stacktrace), []byte("\n"))
-		for _, line := range lines {
+		lines := bytes.SplitSeq([]byte(event.Stacktrace), []byte("\n"))
+		for line := range lines {
 			buf = append(buf, "\n\t"...)
 			buf = append(buf, line...)
 		}

@@ -13,22 +13,36 @@ import (
 	"forgejo.org/models/db"
 	"forgejo.org/models/shared/types"
 	"forgejo.org/modules/container"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
+	"forgejo.org/modules/web"
+	"forgejo.org/routers/api/v1/utils"
 	"forgejo.org/services/context"
+	"forgejo.org/services/convert"
+
+	gouuid "github.com/google/uuid"
 )
 
 // RegistrationToken is a string used to register a runner with a server
-// swagger:response RegistrationToken
 type RegistrationToken struct {
 	Token string `json:"token"`
 }
 
 func GetRegistrationToken(ctx *context.APIContext, ownerID, repoID int64) {
-	token, err := actions_model.GetLatestRunnerToken(ctx, ownerID, repoID)
+	optOwnerID := optional.None[int64]()
+	if ownerID != 0 {
+		optOwnerID = optional.Some(ownerID)
+	}
+	optRepoID := optional.None[int64]()
+	if repoID != 0 {
+		optRepoID = optional.Some(repoID)
+	}
+
+	token, err := actions_model.GetLatestRunnerToken(ctx, optOwnerID, optRepoID)
 	if errors.Is(err, util.ErrNotExist) || (token != nil && !token.IsActive) {
-		token, err = actions_model.NewRunnerToken(ctx, ownerID, repoID)
+		token, err = actions_model.NewRunnerToken(ctx, optOwnerID, optRepoID)
 	}
 	if err != nil {
 		ctx.InternalServerError(err)
@@ -39,7 +53,10 @@ func GetRegistrationToken(ctx *context.APIContext, ownerID, repoID int64) {
 }
 
 func GetActionRunJobs(ctx *context.APIContext, ownerID, repoID int64) {
-	labels := strings.Split(ctx.FormTrim("labels"), ",")
+	labels := []string{}
+	if len(ctx.Req.Form["labels"]) > 0 {
+		labels = strings.Split(ctx.FormTrim("labels"), ",")
+	}
 
 	total, err := db.Find[actions_model.ActionRunJob](ctx, &actions_model.FindTaskOptions{
 		Status:  []actions_model.Status{actions_model.StatusWaiting, actions_model.StatusRunning},
@@ -59,24 +76,144 @@ func GetActionRunJobs(ctx *context.APIContext, ownerID, repoID int64) {
 func fromRunJobModelToResponse(job []*actions_model.ActionRunJob, labels []string) []*structs.ActionRunJob {
 	var res []*structs.ActionRunJob
 	for i := range job {
-		if job[i].ItRunsOn(labels) {
-			res = append(res, &structs.ActionRunJob{
-				ID:      job[i].ID,
-				RepoID:  job[i].RepoID,
-				OwnerID: job[i].OwnerID,
-				Name:    job[i].Name,
-				Needs:   job[i].Needs,
-				RunsOn:  job[i].RunsOn,
-				TaskID:  job[i].TaskID,
-				Status:  job[i].Status.String(),
-			})
+		if len(labels) == 0 || labels[0] == "" && len(job[i].RunsOn) == 0 || job[i].ItRunsOn(labels) {
+			res = append(res, convert.ToActionRunJob(job[i]))
 		}
 	}
 	return res
 }
 
-// >>> @@@@ STACKIT Code @@@
+// ListRunners lists runners for api route validated ownerID and repoID
+// ownerID == 0 and repoID == 0 means all runners including global runners, does not appear in sql where clause
+// ownerID == 0 and repoID != 0 means all runners for the given repo
+// ownerID != 0 and repoID == 0 means all runners for the given user/org
+// ownerID != 0 and repoID != 0 undefined behavior
+// Access rights are checked at the API route level
+func ListRunners(ctx *context.APIContext, ownerID, repoID int64) {
+	if ownerID != 0 && repoID != 0 {
+		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("ownerID and repoID should not be both set: %d and %d", ownerID, repoID))
+		return
+	}
 
+	listOptions := utils.GetListOptions(ctx)
+	runners, total, err := db.FindAndCount[actions_model.ActionRunner](ctx, &actions_model.FindRunnerOptions{
+		OwnerID:     ownerID,
+		RepoID:      repoID,
+		ListOptions: listOptions,
+		WithVisible: ctx.FormBool("visible"),
+	})
+	if err != nil {
+		ctx.Error(http.StatusInternalServerError, "FindCountRunners", map[string]string{})
+		return
+	}
+
+	runnerList := make([]structs.ActionRunner, len(runners))
+	for i, runner := range runners {
+		actionRunner, err := convert.ToActionRunner(runner)
+		if err != nil {
+			ctx.Error(http.StatusInternalServerError, "ToActionRunner", err)
+			return
+		}
+		runnerList[i] = actionRunner
+	}
+
+	ctx.SetLinkHeader(int(total), listOptions.PageSize)
+	ctx.SetTotalCountHeader(total)
+	ctx.JSON(http.StatusOK, &runnerList)
+}
+
+// GetRunner get the runner for api route validated ownerID and repoID
+// ownerID == 0 and repoID == 0 means any runner including global runners
+// ownerID == 0 and repoID != 0 means any runner for the given repo
+// ownerID != 0 and repoID == 0 means any runner for the given user/org
+// ownerID != 0 and repoID != 0 undefined behavior
+// Access rights are checked at the API route level
+func GetRunner(ctx *context.APIContext, ownerID, repoID, runnerID int64) {
+	if ownerID != 0 && repoID != 0 {
+		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("ownerID and repoID should not be both set: %d and %d", ownerID, repoID))
+		return
+	}
+	runner, err := actions_model.GetVisibleRunnerByID(ctx, runnerID, ownerID, repoID)
+	if err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "GetRunnerNotFound", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "GetRunnerFailed", err)
+		}
+		return
+	}
+
+	actionRunner, err := convert.ToActionRunner(runner)
+	if err != nil {
+		ctx.Error(http.StatusInternalServerError, "ToActionRunner", err)
+		return
+	}
+	ctx.JSON(http.StatusOK, actionRunner)
+}
+
+func RegisterRunner(ctx *context.APIContext, ownerID, repoID int64) {
+	if ownerID != 0 && repoID != 0 {
+		ctx.Error(http.StatusUnprocessableEntity, "RegisterRunner", fmt.Errorf("ownerID '%d' and repoID '%d' cannot be set simultaneously", ownerID, repoID))
+		return
+	}
+
+	options := web.GetForm(ctx).(*structs.RegisterRunnerOptions)
+	runner := &actions_model.ActionRunner{
+		UUID:        gouuid.NewString(),
+		Name:        options.Name,
+		OwnerID:     ownerID,
+		RepoID:      repoID,
+		Description: options.Description,
+		Ephemeral:   options.Ephemeral,
+	}
+	runner.GenerateToken()
+	if err := actions_model.CreateRunner(ctx, runner); err != nil {
+		ctx.Error(http.StatusInternalServerError, "CreateRunner", err)
+		return
+	}
+
+	response := &structs.RegisterRunnerResponse{
+		ID:    runner.ID,
+		UUID:  runner.UUID,
+		Token: runner.Token,
+	}
+	ctx.JSON(http.StatusCreated, response)
+}
+
+// DeleteRunner deletes the runner for api route validated ownerID and repoID
+// ownerID == 0 and repoID == 0 means any runner including global runners
+// ownerID == 0 and repoID != 0 means any runner for the given repo
+// ownerID != 0 and repoID == 0 means any runner for the given user/org
+// ownerID != 0 and repoID != 0 undefined behavior
+// Access rights are checked at the API route level
+func DeleteRunner(ctx *context.APIContext, ownerID, repoID, runnerID int64) {
+	if ownerID != 0 && repoID != 0 {
+		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("ownerID and repoID should not be both set: %d and %d", ownerID, repoID))
+		return
+	}
+	runner, err := actions_model.GetVisibleRunnerByID(ctx, runnerID, ownerID, repoID)
+	if err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "DeleteRunnerNotFound", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "DeleteRunnerFailed", err)
+		}
+		return
+	}
+	if !runner.Editable(ownerID, repoID) {
+		ctx.Error(http.StatusNotFound, "EditRunner", "No permission to delete this runner")
+		return
+	}
+
+	err = actions_model.DeleteRunner(ctx, runner)
+	if err != nil {
+		ctx.InternalServerError(err)
+		return
+	}
+	ctx.Status(http.StatusNoContent)
+}
+
+// >>> @@@@ STACKIT Code @@@
 // GetRunnerConsumption retrieves and calculates the consumption of runners based on
 // various filtering criteria provided in the request. It aggregates task data for
 // runners that match the specified labels and types within a given time frame.
@@ -97,11 +234,6 @@ func GetRunnerConsumption(ctx *context.APIContext) {
 		return
 	}
 
-	findTaskOptions := &actions_model.FindTaskOptions{
-		ListOptions: db.ListOptionsAll,
-		RunnerIDs:   []int64{},
-	}
-
 	findRunnerOptions := actions_model.FindRunnerOptions{
 		ListOptions: db.ListOptionsAll,
 	}
@@ -109,10 +241,8 @@ func GetRunnerConsumption(ctx *context.APIContext) {
 	if opts.HasLabels() {
 		findRunnerOptions.AgentLabels = opts.UniqueRawLabels.Values()
 	}
-	findTaskOptions.StartedBefore = timeutil.TimeStamp(opts.EndDateTime().Unix())
-	findTaskOptions.StoppedAfter = timeutil.TimeStamp(opts.StartDateTime().Unix())
 
-	var validOwnerTypes = make(container.Set[types.OwnerType])
+	validOwnerTypes := make(container.Set[types.OwnerType])
 	if opts.HasTypes() {
 		for _, rt := range opts.UniqueRawTypes.Values() {
 			candidate := types.OwnerType(rt)
@@ -143,25 +273,37 @@ func GetRunnerConsumption(ctx *context.APIContext) {
 	runners = make([]*actions_model.ActionRunner, 0, len(runnerList))
 	runners = append(runners, runnerList...)
 
+	startedBefore := timeutil.TimeStamp(opts.EndDateTime().Unix())
+	stoppedAfterUnix := timeutil.TimeStamp(opts.StartDateTime().Unix())
+
+	// Collect all tasks for selected runners
+	var allTasks []*actions_model.ActionTask
 	for _, runner := range runners {
 		if opts.HasTypes() {
 			runnerType := runner.BelongsToOwnerType()
-
-			if validOwnerTypes.Contains(runnerType) {
-				findTaskOptions.RunnerIDs = append(findTaskOptions.RunnerIDs, runner.ID)
+			if !validOwnerTypes.Contains(runnerType) {
+				continue
 			}
-		} else {
-			findTaskOptions.RunnerIDs = append(findTaskOptions.RunnerIDs, runner.ID)
+		}
+
+		tasks, taskErr := db.Find[actions_model.ActionTask](ctx, &actions_model.FindTaskOptions{
+			ListOptions:   db.ListOptionsAll,
+			RunnerID:      runner.ID,
+			StartedBefore: startedBefore,
+		})
+		if taskErr != nil {
+			ctx.Error(http.StatusInternalServerError, "FindRunnerTasks", taskErr)
+			return
+		}
+		// Filter tasks that stopped after the start time
+		for _, t := range tasks {
+			if t.Stopped >= stoppedAfterUnix {
+				allTasks = append(allTasks, t)
+			}
 		}
 	}
 
-	total, err := db.Find[actions_model.ActionTask](ctx, findTaskOptions)
-	if err != nil {
-		ctx.Error(http.StatusInternalServerError, "CountWaitingActionRunJobs", err)
-		return
-	}
-
-	res := fromGetRunnerConsumptionToResponse(total, runners)
+	res := fromGetRunnerConsumptionToResponse(allTasks, runners)
 	res.Meta.FilteredBy.RunnerTypes = container.ToStringSlice(validOwnerTypes.Values())
 	res.Meta.FilteredBy.StartDate = opts.StartDate
 	res.Meta.FilteredBy.EndDate = opts.EndDate
@@ -170,7 +312,7 @@ func GetRunnerConsumption(ctx *context.APIContext) {
 }
 
 func fromGetRunnerConsumptionToResponse(tasks []*actions_model.ActionTask, runners []*actions_model.ActionRunner) *structs.RunnerConsumption {
-	var res = &structs.RunnerConsumption{
+	res := &structs.RunnerConsumption{
 		Meta: structs.RunnerConsumptionMeta{
 			TotalTasksProcessed: len(tasks),
 		},
@@ -188,10 +330,10 @@ func fromGetRunnerConsumptionToResponse(tasks []*actions_model.ActionTask, runne
 		groupedTasksMap[t.RunnerID] = append(groupedTasksMap[t.RunnerID], t)
 	}
 
-	for runnerId, runnerTasks := range groupedTasksMap {
+	for runnerID, runnerTasks := range groupedTasksMap {
 		var runnerItem structs.RunnerConsumptionItem
-		var runnerDuration timeutil.TimeStamp = 0
-		var runnerInfo = groupedRunnerMap[runnerId]
+		var runnerDuration timeutil.TimeStamp
+		runnerInfo := groupedRunnerMap[runnerID]
 		for i := range runnerTasks {
 			currentTaskDuration := runnerTasks[i].Stopped - runnerTasks[i].Started
 			runnerDuration = currentTaskDuration + runnerDuration
@@ -200,7 +342,7 @@ func fromGetRunnerConsumptionToResponse(tasks []*actions_model.ActionTask, runne
 			TotalDurationInSeconds: runnerDuration.AsTime().Unix(),
 			TotalTasksProcessed:    len(runnerTasks),
 		}
-		runnerItem.RunnerID = runnerId
+		runnerItem.RunnerID = runnerID
 		runnerItem.RunnerType = string(runnerInfo.BelongsToOwnerType())
 		runnerItem.RunnerLabels = runnerInfo.AgentLabels
 
@@ -247,4 +389,4 @@ func NewGetRunnerConsumptionOptionsFromRequest(ctx *context.APIContext) *structs
 	return opts
 }
 
-//>>> @@@@ STACKIT Code @@@
+// >>> @@@@ STACKIT Code @@@

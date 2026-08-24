@@ -89,6 +89,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -163,11 +164,20 @@ func ArtifactsV4Routes(prefix string) *web.Route {
 
 func (r artifactV4Routes) buildSignature(endp, expires, artifactName string, taskID, artifactID int64) []byte {
 	mac := hmac.New(sha256.New, setting.GetGeneralTokenSigningSecret())
+	// For each string field, write the length of the string first to prevent user-controlled strings from bleeding into
+	// each other and causing a signature match when it isn't expected.
+	_ = binary.Write(mac, binary.BigEndian, int64(len(endp)))
 	mac.Write([]byte(endp))
+	_ = binary.Write(mac, binary.BigEndian, int64(len(expires)))
 	mac.Write([]byte(expires))
+	_ = binary.Write(mac, binary.BigEndian, int64(len(artifactName)))
 	mac.Write([]byte(artifactName))
-	mac.Write([]byte(fmt.Sprint(taskID)))
-	mac.Write([]byte(fmt.Sprint(artifactID)))
+
+	// Write TaskID & ArtifactID as binary values to prevent them from bleeding together; eg. TaskID="2" &
+	// ArtifactID="18" could look the same in the signature as TaskID="21" and ArtifactID="8" if they're written as
+	// strings.
+	_ = binary.Write(mac, binary.BigEndian, taskID)
+	_ = binary.Write(mac, binary.BigEndian, artifactID)
 	return mac.Sum(nil)
 }
 
@@ -271,12 +281,12 @@ func (r *artifactV4Routes) createArtifact(ctx *ArtifactContext) {
 
 	artifactName := req.Name
 
-	rententionDays := setting.Actions.ArtifactRetentionDays
+	retentionDays := setting.Actions.ArtifactRetentionDays
 	if req.ExpiresAt != nil {
-		rententionDays = int64(time.Until(req.ExpiresAt.AsTime()).Hours() / 24)
+		retentionDays = int64(time.Until(req.ExpiresAt.AsTime()).Hours() / 24)
 	}
 	// create or get artifact with name and path
-	artifact, err := actions.CreateArtifact(ctx, ctx.ActionTask, artifactName, artifactName+".zip", rententionDays)
+	artifact, err := actions.CreateArtifact(ctx, ctx.ActionTask, artifactName, artifactName+".zip", retentionDays)
 	if err != nil {
 		log.Error("Error create or get artifact: %v", err)
 		ctx.Error(http.StatusInternalServerError, "Error create or get artifact")
@@ -562,7 +572,7 @@ func (r *artifactV4Routes) downloadArtifact(ctx *ArtifactContext) {
 		return
 	}
 
-	common.ServeContentByReadSeeker(ctx.Base, artifactName, util.ToPointer(artifact.UpdatedUnix.AsTime()), file)
+	common.ServeContentByReadSeeker(ctx.Base, artifactName, new(artifact.UpdatedUnix.AsTime()), file)
 }
 
 func (r *artifactV4Routes) deleteArtifact(ctx *ArtifactContext) {

@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	uuidHeaderKey  = "x-runner-uuid"
-	tokenHeaderKey = "x-runner-token"
+	uuidHeaderKey       = "x-runner-uuid"
+	tokenHeaderKey      = "x-runner-token"
+	requestKeyHeaderKey = "x-runner-request-key"
 )
 
 // Interceptor that ensures a valid HTTP Status code exists for gRPC error
 // statuses that were raised by the next interceptor.
-var withHttpErrorStatusCodes = connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+var withHTTPErrorStatusCodes = connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, request connect.AnyRequest) (connect.AnyResponse, error) {
 		res, err := next(ctx, request)
 
@@ -86,6 +87,12 @@ var withRunner = connect.UnaryInterceptorFunc(func(unaryFunc connect.UnaryFunc) 
 		}
 
 		ctx = context.WithValue(ctx, runnerCtxKey{}, runner)
+
+		requestKey := request.Header().Get(requestKeyHeaderKey)
+		if requestKey != "" {
+			ctx = context.WithValue(ctx, runnerRequestKeyCtxKey{}, requestKey)
+		}
+
 		return unaryFunc(ctx, request)
 	}
 })
@@ -104,6 +111,17 @@ func GetRunner(ctx context.Context) *actions_model.ActionRunner {
 	if v := ctx.Value(runnerCtxKey{}); v != nil {
 		if r, ok := v.(*actions_model.ActionRunner); ok {
 			return r
+		}
+	}
+	return nil
+}
+
+type runnerRequestKeyCtxKey struct{}
+
+func getRequestKey(ctx context.Context) *string {
+	if v := ctx.Value(runnerRequestKeyCtxKey{}); v != nil {
+		if r, ok := v.(string); ok {
+			return &r
 		}
 	}
 	return nil

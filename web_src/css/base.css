@@ -1,6 +1,6 @@
 :root {
   /* fonts */
-  --fonts-proportional: "MuseoSansW05", -apple-system, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial;
+  --fonts-proportional: -apple-system, "Segoe UI", system-ui, "Noto Sans", "Noto Sans Hebrew", Roboto, "Helvetica Neue", Arial;
   --fonts-monospace: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace, var(--fonts-emoji);
   --fonts-emoji: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla";
   /* font weights - use between 400 and 600 for general purposes. Avoid 700 as it is perceived too bold */
@@ -18,6 +18,7 @@
   /* other variables */
   --border-radius: 4px;
   --border-radius-medium: 6px;
+  --border-radius-large: 25px;
   --border-radius-full: 99999px; /* TODO: use calc(infinity * 1px) */
   --opacity-disabled: 0.55;
   --height-loading: 16rem;
@@ -27,6 +28,7 @@
   --checkbox-size: 15px; /* height and width of checkbox and radio inputs */
   --page-spacing: 16px; /* space between page elements */
   --page-margin-x: 32px; /* minimum space on left and right side of page */
+  --button-spacing: 0.33rem;
 }
 
 @media (min-width: 768px) and (max-width: 1200px) {
@@ -41,8 +43,14 @@
   }
 }
 
+@media (pointer: coarse) {
+  :root {
+    --button-spacing: 0.5rem;
+  }
+}
+
 :root * {
-  --fonts-regular: var(--fonts-override, var(--fonts-proportional)), "Noto Sans", "Liberation Sans", sans-serif, var(--fonts-emoji);
+  --fonts-regular: var(--fonts-override, var(--fonts-proportional)), "Liberation Sans", sans-serif, var(--fonts-emoji);
 }
 
 *, ::before, ::after {
@@ -66,8 +74,10 @@ body {
   tab-size: var(--tab-size);
   display: flex;
   flex-direction: column;
-  overflow-x: visible;
+  overflow-inline: visible;
   overflow-wrap: break-word;
+  text-autospace: normal;
+  text-spacing-trim: normal;
 }
 
 textarea {
@@ -85,8 +95,29 @@ pre,
 code,
 kbd,
 samp,
+tt {
+  text-spacing: none;
+  text-autospace: initial;
+  text-spacing-trim: initial;
+}
+
+pre,
+code,
+kbd,
+samp,
 .tw-font-mono {
   font-size: 0.95em; /* compensate for monospace fonts being usually slightly larger */
+}
+
+kbd {
+  padding: 0.15em 0.35em;
+  line-height: 10px;
+  color: var(--color-text-light);
+  vertical-align: middle;
+  background-color: var(--color-markup-code-inline);
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  box-shadow: inset 0 -1px 0 var(--color-secondary);
 }
 
 b,
@@ -223,9 +254,11 @@ h1.error-code {
   background: var(--color-hover);
 }
 
-::selection {
-  background: var(--color-primary-light-1);
-  color: var(--color-white);
+::selection,
+relative-time::part(relative-time)::selection,
+absolute-date::part(absolute-date)::selection {
+  background: var(--color-selection-bg);
+  color: var(--color-selection-fg);
 }
 
 ::placeholder,
@@ -244,28 +277,6 @@ h1.error-code {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
-}
-
-.button-row {
-  gap: 0.5rem;
-}
-
-.button-sequence {
-  display: flex;
-  flex-flow: wrap;
-  gap: 0.5em;
-}
-
-.button-sequence.right {
-  justify-content: end;
-}
-
-.button-sequence .ui.button {
-  margin: 0 !important;
-}
-
-.button-row .ui.button {
-  margin-right: 0;
 }
 
 .ui.partial.secondary.menu {
@@ -351,6 +362,11 @@ a.label,
   background: var(--color-hover);
 }
 
+.ui.search > .results .content {
+  padding: 0;
+  background: none;
+}
+
 .inline-code-block {
   padding: 2px 4px;
   border-radius: .24em;
@@ -375,7 +391,7 @@ a.label,
 }
 
 .ui.menu .item > .svg {
-  margin-right: 0.35em;
+  margin-inline-end: 0.35em;
 }
 
 .ui.menu .dropdown.item:hover,
@@ -464,7 +480,7 @@ a.label,
   margin-bottom: -0.25rem;
 }
 .ui.dropdown .menu > .item > svg {
-  margin-right: .78rem; /* use the same margin as for <img> */
+  margin-inline-end: .78rem; /* use the same margin as for <img> */
 }
 
 .ui.selection.dropdown .menu > .item {
@@ -493,9 +509,8 @@ a.label,
 
 /* extend fomantic style '.ui.dropdown > .text > img' to include svg.img */
 .ui.dropdown > .text > .img {
-  margin-left: 0;
+  margin-inline: 0 0.78571429rem;
   float: none;
-  margin-right: 0.78571429rem;
 }
 
 .ui.dropdown > .text > .description,
@@ -506,13 +521,11 @@ a.label,
 /* replace item margin on secondary menu items with gap and remove both the
    negative margins on the menu as well as margin on the items */
 .ui.secondary.menu {
-  margin-left: 0;
-  margin-right: 0;
+  margin-inline: 0;
   gap: .35714286em;
 }
 .ui.secondary.menu .item {
-  margin-left: 0;
-  margin-right: 0;
+  margin-inline: 0;
 }
 
 .ui.secondary.menu .dropdown.item:hover,
@@ -525,11 +538,6 @@ a.label,
 .ui.secondary.menu .active.item:hover {
   color: var(--color-text);
   background: var(--color-active);
-}
-
-.ui.secondary.menu.tight .item {
-  padding-left: 0.85714286em;
-  padding-right: 0.85714286em;
 }
 
 /* remove the menu clearfix so that it won't add undesired gaps when using "gap" */
@@ -657,23 +665,19 @@ img.ui.avatar,
 }
 
 .text.red {
-  color: var(--color-red) !important;
+  color: var(--color-thin-red, var(--color-red)) !important;
 }
 
 .text.orange {
-  color: var(--color-orange) !important;
+  color: var(--color-thin-orange, var(--color-orange)) !important;
 }
 
 .text.yellow {
   color: var(--color-yellow) !important;
 }
 
-.text.olive {
-  color: var(--color-olive) !important;
-}
-
 .text.green {
-  color: var(--color-green) !important;
+  color: var(--color-thin-green, var(--color-green)) !important;
 }
 
 .text.teal {
@@ -684,16 +688,8 @@ img.ui.avatar,
   color: var(--color-blue) !important;
 }
 
-.text.violet {
-  color: var(--color-violet) !important;
-}
-
 .text.purple {
-  color: var(--color-purple) !important;
-}
-
-.text.pink {
-  color: var(--color-pink) !important;
+  color: var(--color-thin-purple, var(--color-purple)) !important;
 }
 
 .text.brown {
@@ -750,10 +746,6 @@ img.ui.avatar,
   box-shadow: 0 6px 18px var(--color-shadow) !important;
 }
 
-.ui.dimmer {
-  background: var(--color-overlay-backdrop);
-}
-
 /* Override semantic selector '.ui.menu:not(.vertical) .item > .button' */
 /* This fixes the commit graph button on the commits page */
 /* modal svg icons, copied from fomantic except width and height */
@@ -775,15 +767,15 @@ img.ui.avatar,
 }
 
 .ui .text.left {
-  text-align: left !important;
+  text-align: start !important;
 }
 
 .ui .text.right {
-  text-align: right !important;
+  text-align: end !important;
 }
 
 .ui .text.truncate {
-  overflow-x: hidden;
+  overflow-inline: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   display: inline-block;
@@ -794,14 +786,13 @@ img.ui.avatar,
 }
 
 .ui .message > ul {
-  margin-left: auto;
-  margin-right: auto;
+  margin-inline: auto;
   display: table;
-  text-align: left;
+  text-align: start;
 }
 
 .ui .header > i + .content {
-  padding-left: 0.75rem;
+  padding-inline-start: 0.75rem;
   vertical-align: middle;
 }
 
@@ -814,20 +805,7 @@ img.ui.avatar,
 }
 
 .ui .form .sub.field {
-  margin-left: 25px;
-}
-
-.ui .sha.label {
-  font-family: var(--fonts-monospace);
-  font-size: 13px;
-  font-weight: var(--font-weight-normal);
-  margin: 0 6px;
-  padding: 5px 10px;
-  flex-shrink: 0;
-}
-
-.ui .sha.label .shortsha {
-  display: inline-block; /* not sure whether it is still needed */
+  margin-inline-start: 25px;
 }
 
 .ui .button.truncate {
@@ -837,56 +815,16 @@ img.ui.avatar,
   text-overflow: ellipsis;
   vertical-align: top;
   white-space: nowrap;
-  margin-right: 6px;
+  margin-inline-end: 6px;
 }
 
 .ui.status.buttons .svg {
-  margin-right: 4px;
+  margin-inline-end: 4px;
 }
 
 .ui.inline.delete-button {
   padding: 8px 15px;
   font-weight: var(--font-weight-normal);
-}
-
-.ui .background.red {
-  background-color: var(--color-red) !important;
-}
-
-.ui .background.blue {
-  background-color: var(--color-blue) !important;
-}
-
-.ui .background.black {
-  background-color: var(--color-black) !important;
-}
-
-.ui .background.grey {
-  background-color: var(--color-grey) !important;
-}
-
-.ui .background.light.grey {
-  background-color: var(--color-grey) !important;
-}
-
-.ui .background.green {
-  background-color: var(--color-green) !important;
-}
-
-.ui .background.purple {
-  background-color: var(--color-purple) !important;
-}
-
-.ui .background.yellow {
-  background-color: var(--color-yellow) !important;
-}
-
-.ui .background.orange {
-  background-color: var(--color-orange) !important;
-}
-
-.ui .background.gold {
-  background-color: var(--color-gold) !important;
 }
 
 .ui .migrate {
@@ -961,14 +899,13 @@ img.ui.avatar,
 }
 
 .ui.pagination.menu.narrow .item {
-  padding-left: 8px;
-  padding-right: 8px;
+  padding-inline: 8px;
   min-width: 1em;
   text-align: center;
 }
 
 .ui.pagination.menu.narrow .item .icon {
-  margin-right: 0;
+  margin-inline-end: 0;
 }
 
 .ui.floating.dropdown .overflow.menu .scrolling.menu.items {
@@ -992,7 +929,7 @@ img.ui.avatar,
 
 .color-preview {
   display: inline-block;
-  margin-left: 0.4em;
+  margin-inline-start: 0.4em;
   height: 0.67em;
   width: 0.67em;
   border-radius: var(--border-radius);
@@ -1008,35 +945,35 @@ img.ui.avatar,
 }
 
 blockquote.attention-note {
-  border-left-color: var(--color-blue-dark-1);
+  border-inline-start-color: var(--color-blue-dark-1);
 }
 strong.attention-note, svg.attention-note {
   color: var(--color-blue-dark-1);
 }
 
 blockquote.attention-tip {
-  border-left-color: var(--color-success-text);
+  border-inline-start-color: var(--color-success-text);
 }
 strong.attention-tip, svg.attention-tip {
   color: var(--color-success-text);
 }
 
 blockquote.attention-important {
-  border-left-color: var(--color-violet-dark-1);
+  border-inline-start-color: var(--color-violet-dark-1);
 }
 strong.attention-important, svg.attention-important {
   color: var(--color-violet-dark-1);
 }
 
 blockquote.attention-warning {
-  border-left-color: var(--color-warning-text);
+  border-inline-start-color: var(--color-warning-text);
 }
 strong.attention-warning, svg.attention-warning {
   color: var(--color-warning-text);
 }
 
 blockquote.attention-caution {
-  border-left-color: var(--color-red-dark-1);
+  border-inline-start-color: var(--color-red-dark-1);
 }
 strong.attention-caution, svg.attention-caution {
   color: var(--color-red-dark-1);
@@ -1049,6 +986,7 @@ strong.attention-caution, svg.attention-caution {
 overflow-menu {
   border-bottom: 1px solid var(--color-secondary) !important;
   display: flex;
+  overflow-inline: auto;
 }
 
 overflow-menu .overflow-menu-items {
@@ -1061,8 +999,12 @@ overflow-menu .overflow-menu-items .item {
   height: 100%;
 }
 
+overflow-menu .overflow-menu-items .item > .svg {
+  align-self: center;
+}
+
 overflow-menu .ui.label {
-  margin-left: 7px !important; /* save some space */
+  margin-inline-start: 7px !important; /* save some space */
 }
 
 .activity-bar-graph {
@@ -1072,20 +1014,6 @@ overflow-menu .ui.label {
 
 .archived-icon {
   color: var(--color-secondary-dark-2) !important;
-}
-
-/* colors of colorful icons */
-svg.text.green,
-.text.green svg {
-  color: var(--color-icon-green) !important;
-}
-svg.text.red,
-.text.red svg {
-  color: var(--color-icon-red) !important;
-}
-svg.text.purple,
-.text.purple svg {
-  color: var(--color-icon-purple) !important;
 }
 
 .oauth2-authorize-application-box {
@@ -1126,7 +1054,7 @@ svg.text.purple,
 
 .lines-num {
   padding: 0 8px;
-  text-align: right !important;
+  text-align: end !important;
   color: var(--color-text-light-2);
   width: 1%;
   font-family: var(--fonts-monospace);
@@ -1173,42 +1101,7 @@ svg.text.purple,
 .lines-code ol li {
   display: block;
   width: calc(100% - 1ch);
-  padding-left: 1ch;
-}
-
-.lines-escape {
-  width: 0;
-}
-
-.lines-code {
-  padding-left: 5px;
-}
-
-.file-view tr.active {
-  color: inherit !important;
-  background: inherit !important;
-}
-
-.file-view tr.active .lines-num,
-.file-view tr.active .lines-code {
-  background: var(--color-highlight-bg) !important;
-}
-
-.file-view tr.active:last-of-type .lines-code {
-  border-bottom-right-radius: var(--border-radius);
-}
-
-.file-view tr.active .lines-num {
-  position: relative;
-}
-
-.file-view tr.active .lines-num::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  width: 2px;
-  height: 100%;
-  background: var(--color-highlight-fg);
+  padding-inline-start: 1ch;
 }
 
 .code-inner {
@@ -1259,7 +1152,7 @@ svg.text.purple,
 .blame-avatar {
   display: flex;
   align-items: center;
-  margin-right: 4px;
+  margin-inline-end: 4px;
 }
 
 .top-line-blame {
@@ -1284,10 +1177,6 @@ svg.text.purple,
   width: 100%;
 }
 
-.migrate .svg.gitea-git {
-  color: var(--color-git);
-}
-
 .color-icon {
   display: inline-block;
   border-radius: var(--border-radius-full);
@@ -1308,7 +1197,7 @@ table th[data-sortt-desc]:hover {
 
 table th[data-sortt-asc] .svg,
 table th[data-sortt-desc] .svg {
-  margin-left: 0.25rem;
+  margin-inline-start: 0.25rem;
 }
 
 .ui.dropdown .menu .item {
@@ -1398,7 +1287,7 @@ table th[data-sortt-desc] .svg {
 .flash-error details code,
 .flash-warning details code {
   display: block;
-  text-align: left;
+  text-align: start;
 }
 
 .truncated-item-container {
@@ -1427,7 +1316,7 @@ table th[data-sortt-desc] .svg {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  margin-left: 1em;
+  margin-inline-start: 1em;
 }
 
 .precolors .color {
@@ -1448,13 +1337,13 @@ table th[data-sortt-desc] .svg {
 
 .ui.dropdown.mini.button,
 .ui.dropdown.tiny.button {
-  padding-right: 20px;
+  padding-inline-end: 20px;
 }
 .ui.dropdown.button {
-  padding-right: 22px;
+  padding-inline-end: 22px;
 }
 .ui.dropdown.large.button {
-  padding-right: 24px;
+  padding-inline-end: 24px;
 }
 
 /* Gitea uses SVG images instead of Fomantic builtin "<i>" font icons, so we need to reset the icon styles */
@@ -1477,11 +1366,11 @@ table th[data-sortt-desc] .svg {
 }
 
 .ui.ui.dropdown > .dropdown.icon {
-  right: 0.5em;
+  inset-inline-end: 0.5em;
 }
 
 .ui.ui.dropdown > .remove.icon {
-  right: 2em;
+  inset-inline-end: 2em;
 }
 
 .btn,
@@ -1516,31 +1405,3 @@ table th[data-sortt-desc] .svg {
   gap: .25rem;
   min-width: 0;
 }
-
-
-/*
->>> @@@ STACKIT CODE @@@
-*/
-
-.alert-container .alert-item {
-  padding: 12px 25px;
-  color: var(--color-black-light);
-}
-
-.alert-container .alert-item a {
-  text-decoration-line: underline;
-  color: var(--color-black-light);
-}
-
-.alert-container .alert-item.critical {
-  background: var(--color-alert-critical);
-
-}
-
-.alert-container .alert-item.warning {
-  background: var(--color-yellow-light);
-}
-
-/*
->>> @@@ STACKIT CODE @@@
-*/

@@ -363,6 +363,12 @@ var ignoredErrorMessage = []string{
 
 	// TestDatabaseCollation
 	`[E] [Error SQL Query] INSERT INTO test_collation_tbl (txt) VALUES ('main') []`,
+
+	// Test_CmdForgejo_Actions
+	`DB: No dedicated replica host defined; falling back to primary DSN for replica connections`,
+
+	// TestDemoErrorPages
+	`ErrorPage() [E] Example error: Example error`,
 }
 
 func (w *testLoggerWriterCloser) recordError(msg string) {
@@ -495,7 +501,7 @@ func PrintCurrentTest(t testing.TB, skip ...int) func() {
 // Printf takes a format and args and prints the string to os.Stdout
 func Printf(format string, args ...any) {
 	if log.CanColorStdout {
-		for i := 0; i < len(args); i++ {
+		for i := range args {
 			args[i] = log.NewColoredValue(args[i])
 		}
 	}

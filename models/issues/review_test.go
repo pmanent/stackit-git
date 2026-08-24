@@ -8,6 +8,7 @@ import (
 
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
+	org_model "forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -318,4 +319,157 @@ func TestAddReviewRequest(t *testing.T) {
 	_, err = issues_model.AddReviewRequest(db.DefaultContext, issue, reviewer, &user_model.User{})
 	require.Error(t, err)
 	assert.True(t, issues_model.IsErrReviewRequestOnClosedPR(err))
+}
+
+func TestSubmitPendingReviewDeletesReviewRequest(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
+	require.NoError(t, pull.LoadIssue(db.DefaultContext))
+	issue := pull.Issue
+	require.NoError(t, issue.LoadRepo(db.DefaultContext))
+	reviewer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	reviewRequest, err := issues_model.CreateReview(db.DefaultContext, issues_model.CreateReviewOptions{
+		Issue:    issue,
+		Reviewer: reviewer,
+		Type:     issues_model.ReviewTypeRequest,
+	})
+	require.NoError(t, err)
+
+	// creating a pending review should NOT remove review requests
+	reviewPending, err := issues_model.CreateReview(db.DefaultContext, issues_model.CreateReviewOptions{
+		Issue:    issue,
+		Reviewer: reviewer,
+		Type:     issues_model.ReviewTypePending,
+	})
+	require.NoError(t, err)
+	unittest.AssertExistsIf(t, true, &issues_model.Review{ID: reviewRequest.ID})
+	// submitting a pending review to finish it SHOULD remove review requests
+	_, _, err = issues_model.SubmitReview(
+		db.DefaultContext,
+		reviewer,
+		issue,
+		issues_model.ReviewTypeReject,
+		"test content",
+		reviewPending.CommitID,
+		false,
+		[]string{},
+	)
+	require.NoError(t, err)
+	unittest.AssertNotExistsBean(t, &issues_model.Review{ID: reviewRequest.ID})
+}
+
+// this test is for handling a state correctly that should never exist, but is representable and was
+// achievable thanks to #12243
+func TestReviewRequestDeletesReviewRequestsBeforeRejectedReviews(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	sess := db.GetEngine(db.DefaultContext)
+
+	pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
+	require.NoError(t, pull.LoadIssue(db.DefaultContext))
+	issue := pull.Issue
+	require.NoError(t, issue.LoadRepo(db.DefaultContext))
+	reviewer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+
+	// this one will end up being a ReviewTypeRequest. We are initially creating it as
+	// ReviewTypeReject to avoid it being deleted on making the actual rejected review
+	reviewRequest, err := issues_model.CreateReview(db.DefaultContext, issues_model.CreateReviewOptions{
+		Issue:    issue,
+		Reviewer: reviewer,
+		Type:     issues_model.ReviewTypeReject,
+	})
+	require.NoError(t, err)
+	// this review is an actual rejected review that somehow managed to be saved without deleting
+	// reviewRequest. This is a state that is representable and is/was achievable thanks to #12243
+	_, err = issues_model.CreateReview(db.DefaultContext, issues_model.CreateReviewOptions{
+		Issue:    issue,
+		Reviewer: reviewer,
+		Type:     issues_model.ReviewTypeReject,
+	})
+	require.NoError(t, err)
+	reviewRequest.Type = issues_model.ReviewTypeRequest
+	_, err = sess.ID(reviewRequest.ID).Cols("type").Update(reviewRequest)
+	require.NoError(t, err)
+
+	_, err = issues_model.RemoveReviewRequest(db.DefaultContext, issue, reviewer, doer)
+	require.NoError(t, err)
+	unittest.AssertNotExistsBean(t, &issues_model.Review{ID: reviewRequest.ID})
+}
+
+func TestAddTeamReviewRequest(t *testing.T) {
+	defer unittest.OverrideFixtures("models/fixtures/TestAddTeamReviewRequest")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	setupForProtectedBranch := func() (*issues_model.Issue, *user_model.User) {
+		// From override models/fixtures/TestAddTeamReviewRequest/issue.yml; issue #23 is a PR into a protected branch
+		issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: 23})
+		require.NoError(t, issue.LoadRepo(db.DefaultContext))
+		doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+		return issue, doer
+	}
+
+	t.Run("Protected branch, not official team", func(t *testing.T) {
+		issue, doer := setupForProtectedBranch()
+		// Team 2 is not part of the whitelist for this protected branch
+		team := unittest.AssertExistsAndLoadBean(t, &org_model.Team{ID: 2})
+
+		comment, err := issues_model.AddTeamReviewRequest(db.DefaultContext, issue, team, doer)
+		require.NoError(t, err)
+		require.NotNil(t, comment)
+
+		review, err := issues_model.GetTeamReviewerByIssueIDAndTeamID(db.DefaultContext, issue.ID, team.ID)
+		require.NoError(t, err)
+		require.NotNil(t, review)
+		assert.Equal(t, issues_model.ReviewTypeRequest, review.Type)
+		assert.Equal(t, team.ID, review.ReviewerTeamID)
+		// This review request should not be marked official because it is not a request for a team in the branch
+		// protection rule's whitelist...
+		assert.False(t, review.Official)
+	})
+
+	t.Run("Protected branch, official team", func(t *testing.T) {
+		issue, doer := setupForProtectedBranch()
+		// Team 1 is part of the whitelist for this protected branch
+		team := unittest.AssertExistsAndLoadBean(t, &org_model.Team{ID: 1})
+
+		comment, err := issues_model.AddTeamReviewRequest(db.DefaultContext, issue, team, doer)
+		require.NoError(t, err)
+		require.NotNil(t, comment)
+
+		review, err := issues_model.GetTeamReviewerByIssueIDAndTeamID(db.DefaultContext, issue.ID, team.ID)
+		require.NoError(t, err)
+		require.NotNil(t, review)
+		assert.Equal(t, issues_model.ReviewTypeRequest, review.Type)
+		assert.Equal(t, team.ID, review.ReviewerTeamID)
+		// Expected to be considered official because team 1 is in the review whitelist for this protected branch
+		assert.True(t, review.Official)
+	})
+
+	t.Run("Unprotected branch, official team", func(t *testing.T) {
+		// Working on a PR into a branch that is not protected, issue #2
+		issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: 2})
+		require.NoError(t, issue.LoadRepo(db.DefaultContext))
+		doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+		// team is a team that has write perms against the repo
+		team := unittest.AssertExistsAndLoadBean(t, &org_model.Team{ID: 1})
+
+		comment, err := issues_model.AddTeamReviewRequest(db.DefaultContext, issue, team, doer)
+		require.NoError(t, err)
+		require.NotNil(t, comment)
+
+		review, err := issues_model.GetTeamReviewerByIssueIDAndTeamID(db.DefaultContext, issue.ID, team.ID)
+		require.NoError(t, err)
+		require.NotNil(t, review)
+		assert.Equal(t, issues_model.ReviewTypeRequest, review.Type)
+		assert.Equal(t, team.ID, review.ReviewerTeamID)
+		// Will not be marked as official because PR #2 there's no branch protection rule that enables whitelist
+		// approvals (verifying logic in `IsOfficialReviewerTeam` indirectly)
+		assert.False(t, review.Official)
+
+		// Adding the same team review request again should be a noop
+		comment, err = issues_model.AddTeamReviewRequest(db.DefaultContext, issue, team, doer)
+		require.NoError(t, err)
+		require.Nil(t, comment)
+	})
 }

@@ -5,7 +5,7 @@
 package setting
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 
 	asymkey_model "forgejo.org/models/asymkey"
@@ -80,7 +80,7 @@ func KeysPost(ctx *context.Context) {
 		ctx.Redirect(setting.AppSubURL + "/user/settings/keys")
 	case "gpg":
 		if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageGPGKeys) {
-			ctx.NotFound("Not Found", fmt.Errorf("gpg keys setting is not allowed to be visited"))
+			ctx.NotFound("Not Found", errors.New("gpg keys setting is not allowed to be visited"))
 			return
 		}
 
@@ -156,12 +156,13 @@ func KeysPost(ctx *context.Context) {
 			default:
 				ctx.ServerError("VerifyGPG", err)
 			}
+			return
 		}
 		ctx.Flash.Success(ctx.Tr("settings.verify_gpg_key_success", keyID))
 		ctx.Redirect(setting.AppSubURL + "/user/settings/keys")
 	case "ssh":
 		if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageSSHKeys) {
-			ctx.NotFound("Not Found", fmt.Errorf("ssh keys setting is not allowed to be visited"))
+			ctx.NotFound("Not Found", errors.New("ssh keys setting is not allowed to be visited"))
 			return
 		}
 
@@ -205,7 +206,7 @@ func KeysPost(ctx *context.Context) {
 		ctx.Redirect(setting.AppSubURL + "/user/settings/keys")
 	case "verify_ssh":
 		if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageSSHKeys) {
-			ctx.NotFound("Not Found", fmt.Errorf("ssh keys setting is not allowed to be visited"))
+			ctx.NotFound("Not Found", errors.New("ssh keys setting is not allowed to be visited"))
 			return
 		}
 
@@ -227,6 +228,7 @@ func KeysPost(ctx *context.Context) {
 			default:
 				ctx.ServerError("VerifySSH", err)
 			}
+			return
 		}
 		ctx.Flash.Success(ctx.Tr("settings.verify_ssh_key_success", fingerprint))
 		ctx.Redirect(setting.AppSubURL + "/user/settings/keys")
@@ -242,7 +244,7 @@ func DeleteKey(ctx *context.Context) {
 	switch ctx.FormString("type") {
 	case "gpg":
 		if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageGPGKeys) {
-			ctx.NotFound("Not Found", fmt.Errorf("gpg keys setting is not allowed to be visited"))
+			ctx.NotFound("Not Found", errors.New("gpg keys setting is not allowed to be visited"))
 			return
 		}
 		if err := asymkey_model.DeleteGPGKey(ctx, ctx.Doer, ctx.FormInt64("id")); err != nil {
@@ -252,7 +254,7 @@ func DeleteKey(ctx *context.Context) {
 		}
 	case "ssh":
 		if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageSSHKeys) {
-			ctx.NotFound("Not Found", fmt.Errorf("ssh keys setting is not allowed to be visited"))
+			ctx.NotFound("Not Found", errors.New("ssh keys setting is not allowed to be visited"))
 			return
 		}
 
@@ -281,6 +283,7 @@ func DeleteKey(ctx *context.Context) {
 	default:
 		ctx.Flash.Warning("Function not implemented")
 		ctx.Redirect(setting.AppSubURL + "/user/settings/keys")
+		return
 	}
 	ctx.JSONRedirect(setting.AppSubURL + "/user/settings/keys")
 }

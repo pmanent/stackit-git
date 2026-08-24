@@ -35,7 +35,7 @@ func TestIterateRepositoryIDsWithLFSMetaObjects(t *testing.T) {
 			return nil
 		})
 		require.NoError(t, err)
-		assert.EqualValues(t, expected, cases)
+		assert.Equal(t, expected, cases)
 	})
 
 	t.Run("Low batch size", func(t *testing.T) {
@@ -47,7 +47,7 @@ func TestIterateRepositoryIDsWithLFSMetaObjects(t *testing.T) {
 			return nil
 		})
 		require.NoError(t, err)
-		assert.EqualValues(t, expected, cases)
+		assert.Equal(t, expected, cases)
 	})
 }
 
@@ -65,7 +65,7 @@ func TestIterateLFSMetaObjectsForRepo(t *testing.T) {
 			return nil
 		}, &IterateLFSMetaObjectsForRepoOptions{})
 		require.NoError(t, err)
-		assert.EqualValues(t, expectedIDs, actualIDs)
+		assert.Equal(t, expectedIDs, actualIDs)
 	})
 
 	t.Run("Low batch size", func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestIterateLFSMetaObjectsForRepo(t *testing.T) {
 			return nil
 		}, &IterateLFSMetaObjectsForRepoOptions{})
 		require.NoError(t, err)
-		assert.EqualValues(t, expectedIDs, actualIDs)
+		assert.Equal(t, expectedIDs, actualIDs)
 
 		t.Run("Batch handles updates", func(t *testing.T) {
 			actualIDs := []int64{}
@@ -89,7 +89,7 @@ func TestIterateLFSMetaObjectsForRepo(t *testing.T) {
 				return nil
 			}, &IterateLFSMetaObjectsForRepoOptions{})
 			require.NoError(t, err)
-			assert.EqualValues(t, expectedIDs, actualIDs)
+			assert.Equal(t, expectedIDs, actualIDs)
 		})
 	})
 }

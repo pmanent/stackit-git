@@ -6,6 +6,7 @@ package actions
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,7 +18,7 @@ import (
 	"forgejo.org/modules/storage"
 	"forgejo.org/modules/zstd"
 
-	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
+	runnerv1 "code.forgejo.org/forgejo/actions-proto/runner/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -28,6 +29,19 @@ const (
 	timeFormat     = "2006-01-02T15:04:05.0000000Z07:00"
 	defaultBufSize = MaxLineSize
 )
+
+func ExistsLogs(ctx context.Context, filename string) (bool, error) {
+	name := DBFSPrefix + filename
+	f, err := dbfs.Open(ctx, name)
+	if err == nil {
+		f.Close()
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
 
 // WriteLogs appends logs to DBFS file for temporary storage.
 // It doesn't respect the file format in the filename like ".zst", since it's difficult to reopen a closed compressed file and append new content.
@@ -47,7 +61,7 @@ func WriteLogs(ctx context.Context, filename string, offset int64, rows []*runne
 
 	stat, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("dbfs Stat %q: %w", name, err)
+		return nil, fmt.Errorf("WriteLogs(name=%q, offset=%d, len(rows)=%d): dbfs Stat: %w", name, offset, len(rows), err)
 	}
 	if stat.Size() < offset {
 		// If the size is less than offset, refuse to write, or it could result in content holes.
@@ -159,11 +173,19 @@ func TransferLogs(ctx context.Context, filename string) (func(), error) {
 	return remove, nil
 }
 
+// RemoveLogs deletes the log file with the given filename. Returns an error if filename is empty.
 func RemoveLogs(ctx context.Context, inStorage bool, filename string) error {
+	if filename == "" {
+		return errors.New("cannot remove logs because filename is empty")
+	}
+
 	if !inStorage {
 		name := DBFSPrefix + filename
 		err := dbfs.Remove(ctx, name)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return fmt.Errorf("dbfs remove %q: %w", name, err)
 		}
 		return nil

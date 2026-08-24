@@ -22,7 +22,7 @@ func TestRepoEdit(t *testing.T) {
 	ctx, _ := contexttest.MockAPIContext(t, "user2/repo1")
 	contexttest.LoadRepo(t, ctx, 1)
 	contexttest.LoadUser(t, ctx, 2)
-	ctx.Repo.Owner = ctx.Doer
+	ctx.Repo().Owner = ctx.Doer()
 	description := "new description"
 	website := "http://wwww.newwebsite.com"
 	private := true
@@ -38,7 +38,7 @@ func TestRepoEdit(t *testing.T) {
 	allowFastForwardOnlyMerge := false
 	archived := true
 	opts := api.EditRepoOption{
-		Name:                      &ctx.Repo.Repository.Name,
+		Name:                      &ctx.Repo().Repository.Name,
 		Description:               &description,
 		Website:                   &website,
 		Private:                   &private,
@@ -58,10 +58,10 @@ func TestRepoEdit(t *testing.T) {
 	web.SetForm(ctx, &opts)
 	Edit(ctx)
 
-	assert.EqualValues(t, http.StatusOK, ctx.Resp.Status())
+	assert.Equal(t, http.StatusOK, ctx.Resp.Status())
 	unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{
 		ID: 1,
-	}, unittest.Cond("name = ? AND is_archived = 1", *opts.Name))
+	}, unittest.Cond("name = ? AND is_archived = ?", *opts.Name, true))
 }
 
 func TestRepoEditNameChange(t *testing.T) {
@@ -70,7 +70,7 @@ func TestRepoEditNameChange(t *testing.T) {
 	ctx, _ := contexttest.MockAPIContext(t, "user2/repo1")
 	contexttest.LoadRepo(t, ctx, 1)
 	contexttest.LoadUser(t, ctx, 2)
-	ctx.Repo.Owner = ctx.Doer
+	ctx.Repo().Owner = ctx.Doer()
 	name := "newname"
 	opts := api.EditRepoOption{
 		Name: &name,
@@ -78,9 +78,23 @@ func TestRepoEditNameChange(t *testing.T) {
 
 	web.SetForm(ctx, &opts)
 	Edit(ctx)
-	assert.EqualValues(t, http.StatusOK, ctx.Resp.Status())
+	assert.Equal(t, http.StatusOK, ctx.Resp.Status())
 
 	unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{
 		ID: 1,
 	}, unittest.Cond("name = ?", opts.Name))
+}
+
+func TestRepoConvertToNormalRepo(t *testing.T) {
+	unittest.PrepareTestEnv(t)
+
+	ctx, _ := contexttest.MockAPIContext(t, "user3/repo5")
+	contexttest.LoadRepo(t, ctx, 5)
+	contexttest.LoadUser(t, ctx, 3)
+	ctx.Repo().Owner = ctx.Doer()
+	assert.True(t, ctx.Repo().Repository.IsMirror)
+
+	Convert(ctx)
+	assert.Equal(t, http.StatusOK, ctx.Resp.Status())
+	assert.False(t, ctx.Repo().Repository.IsMirror)
 }

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"forgejo.org/models"
+	"forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
@@ -84,7 +85,7 @@ func (r *Repository) CanEnableEditor(ctx context.Context, user *user_model.User)
 
 // CanCreateBranch returns true if repository is editable and user has proper access level.
 func (r *Repository) CanCreateBranch() bool {
-	return r.Permission.CanWrite(unit_model.TypeCode) && r.Repository.CanCreateBranch()
+	return r.CanWrite(unit_model.TypeCode) && r.Repository.CanCreateBranch()
 }
 
 func (r *Repository) GetObjectFormat() git.ObjectFormat {
@@ -161,12 +162,12 @@ func (r *Repository) CanUseTimetracker(ctx context.Context, issue *issues_model.
 	// 2. Is the user a contributor, admin, poster or assignee and do the repository policies require this?
 	isAssigned, _ := issues_model.IsUserAssignedToIssue(ctx, issue, user)
 	return r.Repository.IsTimetrackerEnabled(ctx) && (!r.Repository.AllowOnlyContributorsToTrackTime(ctx) ||
-		r.Permission.CanWriteIssuesOrPulls(issue.IsPull) || issue.IsPoster(user.ID) || isAssigned)
+		r.CanWriteIssuesOrPulls(issue.IsPull) || issue.IsPoster(user.ID) || isAssigned)
 }
 
 // CanCreateIssueDependencies returns whether or not a user can create dependencies.
 func (r *Repository) CanCreateIssueDependencies(ctx context.Context, user *user_model.User, isPull bool) bool {
-	return r.Repository.IsDependenciesEnabled(ctx) && r.Permission.CanWriteIssuesOrPulls(isPull)
+	return r.Repository.IsDependenciesEnabled(ctx) && r.CanWriteIssuesOrPulls(isPull)
 }
 
 // GetCommitsCount returns cached commit count for current view
@@ -362,7 +363,9 @@ func RedirectToRepo(ctx *Base, redirectRepoID int64) {
 	if ctx.Req.URL.RawQuery != "" {
 		redirectPath += "?" + ctx.Req.URL.RawQuery
 	}
-	ctx.Redirect(path.Join(setting.AppSubURL, redirectPath), http.StatusTemporaryRedirect)
+	// Git client needs a 301 redirect by default to follow the new location
+	// It's not documentated in git documentation, but it's the behavior of git client
+	ctx.Redirect(path.Join(setting.AppSubURL, redirectPath), http.StatusMovedPermanently)
 }
 
 func repoAssignment(ctx *Context, repo *repo_model.Repository) {
@@ -372,14 +375,22 @@ func repoAssignment(ctx *Context, repo *repo_model.Repository) {
 		return
 	}
 
-	ctx.Repo.Permission, err = access_model.GetUserRepoPermission(ctx, repo, ctx.Doer)
+	// Typically checks for authorization reducers won't be relevant for non-API requests where this middleware is used;
+	// but, some paths like `/user/repo/raw/...` can be accessed with API authentication mechanisms.  In those edge
+	// cases, initialize `ctx.Repo.Permission` based upon the reduced permission set available.
+	authorizationReducer := ctx.Authentication.Reducer()
+	if authorizationReducer == nil {
+		ctx.Repo.Permission, err = access_model.GetUserRepoPermission(ctx, repo, ctx.Doer)
+	} else {
+		ctx.Repo.Permission, err = access_model.GetUserRepoPermissionWithReducer(ctx, repo, ctx.Doer, authorizationReducer)
+	}
 	if err != nil {
 		ctx.ServerError("GetUserRepoPermission", err)
 		return
 	}
 
 	// Check access.
-	if !ctx.Repo.Permission.HasAccess() {
+	if !ctx.Repo.HasAccess() {
 		if ctx.FormString("go-get") == "1" {
 			EarlyResponseForGoGetMeta(ctx)
 			return
@@ -399,14 +410,14 @@ func repoAssignment(ctx *Context, repo *repo_model.Repository) {
 
 	followingRepoList, err := repo_model.FindFollowingReposByRepoID(ctx, repo.ID)
 	if err == nil {
-		followingRepoString := ""
+		var followingRepoString strings.Builder
 		for idx, followingRepo := range followingRepoList {
 			if idx > 0 {
-				followingRepoString += ";"
+				followingRepoString.WriteString(";")
 			}
-			followingRepoString += followingRepo.URI
+			followingRepoString.WriteString(followingRepo.URI)
 		}
-		ctx.Data["FollowingRepos"] = followingRepoString
+		ctx.Data["FollowingRepos"] = followingRepoString.String()
 	} else if err != repo_model.ErrMirrorNotExist {
 		ctx.ServerError("FindFollowingRepoByRepoID", err)
 		return
@@ -587,6 +598,7 @@ func RepoAssignment(ctx *Context) context.CancelFunc {
 		ctx.ServerError("GetPackageCountByRepoID", err)
 		return nil
 	}
+	ctx.Data["NumOpenActionRuns"] = actions.RepoNumOpenActions(ctx, ctx.Repo.Repository.ID)
 
 	ctx.Data["Title"] = owner.Name + "/" + repo.Name
 	ctx.Data["Repository"] = repo
@@ -599,6 +611,7 @@ func RepoAssignment(ctx *Context) context.CancelFunc {
 	ctx.Data["CanWriteIssues"] = ctx.Repo.CanWrite(unit_model.TypeIssues)
 	ctx.Data["CanWritePulls"] = ctx.Repo.CanWrite(unit_model.TypePullRequests)
 	ctx.Data["CanWriteActions"] = ctx.Repo.CanWrite(unit_model.TypeActions)
+	ctx.Data["IsModerationEnabled"] = setting.Moderation.Enabled
 
 	canSignedUserFork, err := repo_module.CanUserForkRepo(ctx, ctx.Doer, ctx.Repo.Repository)
 	if err != nil {
@@ -637,7 +650,7 @@ func RepoAssignment(ctx *Context) context.CancelFunc {
 	}
 
 	if ctx.IsSigned {
-		ctx.Data["IsWatchingRepo"] = repo_model.IsWatching(ctx, ctx.Doer.ID, repo.ID)
+		ctx.Data["RepoWatchSelection"] = repo_model.GetWatchSelection(ctx, ctx.Doer.ID, repo.ID)
 		ctx.Data["IsStaringRepo"] = repo_model.IsStaring(ctx, ctx.Doer.ID, repo.ID)
 	}
 
@@ -649,7 +662,11 @@ func RepoAssignment(ctx *Context) context.CancelFunc {
 	ctx.Data["OpenGraphImageURL"] = repo.SummaryCardURL()
 	ctx.Data["OpenGraphImageWidth"] = cardWidth
 	ctx.Data["OpenGraphImageHeight"] = cardHeight
-	ctx.Data["OpenGraphImageAltText"] = ctx.Tr("repo.summary_card_alt", repo.FullName())
+	if util.IsEmptyString(repo.Description) {
+		ctx.Data["OpenGraphImageAltText"] = ctx.Tr("repo.summary_card_alt", repo.FullName())
+	} else {
+		ctx.Data["OpenGraphImageAltText"] = ctx.Tr("og.repo.summary_card.alt_description", repo.FullName(), repo.Description)
+	}
 
 	if repo.IsFork {
 		RetrieveBaseRepo(ctx, repo)
@@ -750,7 +767,7 @@ func RepoAssignment(ctx *Context) context.CancelFunc {
 
 	// People who have push access or have forked repository can propose a new pull request.
 	canPush := ctx.Repo.CanWrite(unit_model.TypeCode) ||
-		(ctx.IsSigned && repo_model.HasForkedRepo(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID))
+		(ctx.IsSigned && repo_model.HasForkedRepoLax(ctx, ctx.Doer.ID, ctx.Repo.Repository))
 	canCompare := false
 
 	// Pull request is allowed if this is a fork repository

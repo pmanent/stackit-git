@@ -1,5 +1,6 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
-// Copyright 2020 The Gitea Authors.
+// Copyright 2020 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package context
@@ -63,6 +64,32 @@ func GetOrganizationByParams(ctx *Context) {
 	}
 }
 
+func ensureIsOrg(ctx *Context) bool {
+	switch {
+	// Getting Organization from params
+	case ctx.ContextUser == nil:
+		if ctx.Org.Organization == nil {
+			GetOrganizationByParams(ctx)
+		}
+		return !ctx.Written()
+	// Getting Organization from ContextUser
+	case ctx.ContextUser.IsOrganization():
+		if ctx.Org == nil {
+			ctx.Org = &Organization{}
+		}
+		ctx.Org.Organization = (*organization.Organization)(ctx.ContextUser)
+		return true
+	}
+	// ContextUser is an individual User
+	return false
+}
+
+func EnsureOrg() func(*Context) {
+	return func(ctx *Context) {
+		ensureIsOrg(ctx)
+	}
+}
+
 // HandleOrgAssignment handles organization assignment
 func HandleOrgAssignment(ctx *Context, args ...bool) {
 	var (
@@ -86,29 +113,13 @@ func HandleOrgAssignment(ctx *Context, args ...bool) {
 
 	var err error
 
-	if ctx.ContextUser == nil {
-		// if Organization is not defined, get it from params
-		if ctx.Org.Organization == nil {
-			GetOrganizationByParams(ctx)
-			if ctx.Written() {
-				return
-			}
-		}
-	} else if ctx.ContextUser.IsOrganization() {
-		if ctx.Org == nil {
-			ctx.Org = &Organization{}
-		}
-		ctx.Org.Organization = (*organization.Organization)(ctx.ContextUser)
-	} else {
-		// ContextUser is an individual User
+	if !ensureIsOrg(ctx) {
 		return
 	}
-
 	org := ctx.Org.Organization
 
 	// Handle Visibility
 	if org.Visibility != structs.VisibleTypePublic && !ctx.IsSigned {
-
 		// @@@ STACKIT
 		// We must be signed in to see limited or private organizations
 		// ctx.NotFound("OrgAssignment", err)
@@ -116,7 +127,6 @@ func HandleOrgAssignment(ctx *Context, args ...bool) {
 		ctx.RedirectToLogin(ctx.Req.URL.RequestURI())
 		return
 		// @@@ STACKIT
-
 	}
 
 	if org.Visibility == structs.VisibleTypePrivate {
@@ -172,6 +182,7 @@ func HandleOrgAssignment(ctx *Context, args ...bool) {
 	ctx.Data["IsOrganizationMember"] = ctx.Org.IsMember
 	ctx.Data["IsPackageEnabled"] = setting.Packages.Enabled
 	ctx.Data["IsRepoIndexerEnabled"] = setting.Indexer.RepoIndexerEnabled
+	ctx.Data["IsModerationEnabled"] = setting.Moderation.Enabled
 	ctx.Data["IsPublicMember"] = func(uid int64) bool {
 		is, _ := organization.IsPublicMembership(ctx, ctx.Org.Organization.ID, uid)
 		return is

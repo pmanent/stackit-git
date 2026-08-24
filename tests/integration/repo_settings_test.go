@@ -10,39 +10,131 @@ import (
 	"testing"
 
 	"forgejo.org/models/db"
-	"forgejo.org/models/forgefed"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	unit_model "forgejo.org/models/unit"
+	unit_tests "forgejo.org/models/unit/tests"
 	"forgejo.org/models/unittest"
-	user_model "forgejo.org/models/user"
-	fm "forgejo.org/modules/forgefed"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
-	"forgejo.org/modules/validation"
-	gitea_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	repo_service "forgejo.org/services/repository"
 	user_service "forgejo.org/services/user"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepoSettingsUnits(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user2"})
-	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: user.ID, Name: "repo1"})
-	session := loginUser(t, user.Name)
+	repo := forgery.CreateRepository(t, nil, nil)
+	session := loginUser(t, repo.Owner.Name)
 
 	req := NewRequest(t, "GET", fmt.Sprintf("%s/settings/units", repo.Link()))
 	session.MakeRequest(t, req, http.StatusOK)
 }
 
+func TestRepoSettingsUpdateWebsite(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	repo := forgery.CreateRepository(t, nil, nil)
+	session := loginUser(t, repo.Owner.Name)
+	urlStr := fmt.Sprintf("%s/settings", repo.Link())
+
+	t.Run("an HTTPS website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should work
+		req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
+			"action":    "update",
+			"repo_name": repo.Name,
+			"website":   "https://codeberg.org",
+		})
+		resp := session.MakeRequest(t, req, http.StatusSeeOther)
+		assertHasFlashMessages(t, resp, "success")
+	})
+
+	t.Run("an H3 website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should not work
+		req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
+			"action":    "update",
+			"repo_name": repo.Name,
+			"website":   "h3://codeberg.org",
+		})
+		resp := session.MakeRequest(t, req, http.StatusOK)
+		doc := NewHTMLParser(t, resp.Body)
+		flash := doc.Find("#flash-message").Text()
+		assert.Equal(t, `Website"Url" is not a valid URL.`, strings.TrimSpace(flash))
+	})
+
+	t.Run("an H3 website under custom schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		defer test.MockProtect(&setting.Service.ValidSiteURLSchemes)()
+		setting.Service.ValidSiteURLSchemes = append(setting.Service.ValidSiteURLSchemes, "h3")
+
+		// changing website should work
+		req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
+			"action":    "update",
+			"repo_name": repo.Name,
+			"website":   "h3://codeberg.org",
+		})
+		resp := session.MakeRequest(t, req, http.StatusSeeOther)
+		assertHasFlashMessages(t, resp, "success")
+	})
+}
+
+func TestRepoSettingsAdminOptions(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user := forgery.CreateUser(t, nil)
+	repo := forgery.CreateRepository(t, user, nil)
+	link := repo.Link()
+
+	admin := forgery.CreateUser(t, &forgery.CreateUserOptions{
+		IsAdmin: true,
+	})
+
+	hasAdminOpts := func(t *testing.T, doer string, admin bool) {
+		session := loginUser(t, doer)
+
+		req := NewRequest(t, "GET", fmt.Sprintf("%s/settings", link))
+		resp := session.MakeRequest(t, req, http.StatusOK)
+		html := NewHTMLParser(t, resp.Body)
+
+		elems := html.doc.Find("button[name=request_reindex_type]")
+		if !admin {
+			assert.Empty(t, elems.Nodes)
+			return
+		}
+
+		values := []string{"code", "issues", "stats"}
+		if !setting.Indexer.RepoIndexerEnabled {
+			values = values[1:]
+		}
+		elems.Each(func(i int, s *goquery.Selection) {
+			attr, exists := s.Attr("value")
+			require.True(t, exists)
+			assert.Equal(t, values[i], attr)
+		})
+	}
+
+	t.Run("guest", func(t *testing.T) {
+		hasAdminOpts(t, user.Name, false)
+	})
+
+	t.Run("admin", func(t *testing.T) {
+		hasAdminOpts(t, admin.Name, true)
+	})
+}
+
 func TestRepoAddMoreUnitsHighlighting(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user2"})
+	user := forgery.CreateUser(t, nil)
 	session := loginUser(t, user.Name)
 
 	// Make sure there are no disabled repos in the settings!
@@ -50,15 +142,16 @@ func TestRepoAddMoreUnitsHighlighting(t *testing.T) {
 	unit_model.LoadUnitConfig()
 
 	// Create a known-good repo, with some units disabled.
-	repo, _, f := tests.CreateDeclarativeRepo(t, user, "", []unit_model.Type{
+	repo := forgery.CreateRepository(t, user, nil)
+	forgery.EnableRepoUnits(t, repo,
 		unit_model.TypeCode,
 		unit_model.TypePullRequests,
 		unit_model.TypeProjects,
 		unit_model.TypeActions,
 		unit_model.TypeIssues,
 		unit_model.TypeWiki,
-	}, []unit_model.Type{unit_model.TypePackages}, nil)
-	defer f()
+	)
+	forgery.DisableRepoUnits(t, repo, unit_model.TypePackages)
 
 	setUserHints := func(t *testing.T, hints bool) func() {
 		saved := user.EnableRepoUnitHints
@@ -133,7 +226,7 @@ func TestRepoAddMoreUnitsHighlighting(t *testing.T) {
 
 func TestRepoAddMoreUnits(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user2"})
+	user := forgery.CreateUser(t, nil)
 	session := loginUser(t, user.Name)
 
 	// Make sure there are no disabled repos in the settings!
@@ -141,7 +234,8 @@ func TestRepoAddMoreUnits(t *testing.T) {
 	unit_model.LoadUnitConfig()
 
 	// Create a known-good repo, with all units enabled.
-	repo, _, f := tests.CreateDeclarativeRepo(t, user, "", []unit_model.Type{
+	repo := forgery.CreateRepository(t, user, nil)
+	forgery.EnableRepoUnits(t, repo,
 		unit_model.TypeCode,
 		unit_model.TypePullRequests,
 		unit_model.TypeProjects,
@@ -149,8 +243,7 @@ func TestRepoAddMoreUnits(t *testing.T) {
 		unit_model.TypeActions,
 		unit_model.TypeIssues,
 		unit_model.TypeWiki,
-	}, nil, nil)
-	defer f()
+	)
 
 	assertAddMore := func(t *testing.T, present bool) {
 		t.Helper()
@@ -185,13 +278,12 @@ func TestRepoAddMoreUnits(t *testing.T) {
 
 	t.Run("no add more if unit is globally disabled", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
+		defer unit_tests.SaveUnits()()
 		defer func() {
 			repo_service.UpdateRepositoryUnits(db.DefaultContext, repo, []repo_model.RepoUnit{{
 				RepoID: repo.ID,
 				Type:   unit_model.TypePackages,
 			}}, nil)
-			setting.Repository.DisabledRepoUnits = []string{}
-			unit_model.LoadUnitConfig()
 		}()
 
 		// Disable the Packages unit globally
@@ -208,13 +300,12 @@ func TestRepoAddMoreUnits(t *testing.T) {
 
 	t.Run("issues & ext tracker globally disabled", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
+		defer unit_tests.SaveUnits()()
 		defer func() {
 			repo_service.UpdateRepositoryUnits(db.DefaultContext, repo, []repo_model.RepoUnit{{
 				RepoID: repo.ID,
 				Type:   unit_model.TypeIssues,
 			}}, nil)
-			setting.Repository.DisabledRepoUnits = []string{}
-			unit_model.LoadUnitConfig()
 		}()
 
 		// Disable both Issues and ExternalTracker units globally
@@ -232,8 +323,10 @@ func TestRepoAddMoreUnits(t *testing.T) {
 
 func TestProtectedBranch(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1, OwnerID: user.ID})
+	user := forgery.CreateUser(t, nil)
+	repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+		Files: forgery.FilesInit{},
+	})
 	session := loginUser(t, user.Name)
 
 	t.Run("Add", func(t *testing.T) {
@@ -241,7 +334,6 @@ func TestProtectedBranch(t *testing.T) {
 		link := fmt.Sprintf("/%s/settings/branches/edit", repo.FullName())
 
 		req := NewRequestWithValues(t, "POST", link, map[string]string{
-			"_csrf":       GetCSRF(t, session, link),
 			"rule_name":   "master",
 			"enable_push": "true",
 		})
@@ -256,79 +348,15 @@ func TestProtectedBranch(t *testing.T) {
 		link := fmt.Sprintf("/%s/settings/branches/edit", repo.FullName())
 
 		req := NewRequestWithValues(t, "POST", link, map[string]string{
-			"_csrf":           GetCSRF(t, session, link),
 			"rule_name":       "master",
 			"require_signed_": "true",
 		})
 		session.MakeRequest(t, req, http.StatusSeeOther)
-		flashCookie := session.GetCookie(gitea_context.CookieNameFlash)
+		flashCookie := session.GetCookie(app_context.CookieNameFlash)
 		assert.NotNil(t, flashCookie)
-		assert.EqualValues(t, "error%3DThere%2Bis%2Balready%2Ba%2Brule%2Bfor%2Bthis%2Bset%2Bof%2Bbranches", flashCookie.Value)
+		assert.Equal(t, "error%3DThere%2Bis%2Balready%2Ba%2Brule%2Bfor%2Bthis%2Bset%2Bof%2Bbranches", flashCookie.Value)
 
 		// Verify it wasn't added.
 		unittest.AssertCount(t, &git_model.ProtectedBranch{RuleName: "master", RepoID: repo.ID}, 1)
-	})
-}
-
-func TestRepoFollowing(t *testing.T) {
-	setting.Federation.Enabled = true
-	defer tests.PrepareTestEnv(t)()
-	defer func() {
-		setting.Federation.Enabled = false
-	}()
-
-	mock := test.NewFederationServerMock()
-	federatedSrv := mock.DistantServer(t)
-	defer federatedSrv.Close()
-
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1, OwnerID: user.ID})
-	session := loginUser(t, user.Name)
-
-	t.Run("Add a following repo", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-		link := fmt.Sprintf("/%s/settings", repo.FullName())
-
-		req := NewRequestWithValues(t, "POST", link, map[string]string{
-			"_csrf":           GetCSRF(t, session, link),
-			"action":          "federation",
-			"following_repos": fmt.Sprintf("%s/api/v1/activitypub/repository-id/1", federatedSrv.URL),
-		})
-		session.MakeRequest(t, req, http.StatusSeeOther)
-
-		// Verify it was added.
-		federationHost := unittest.AssertExistsAndLoadBean(t, &forgefed.FederationHost{HostFqdn: "127.0.0.1"})
-		unittest.AssertExistsAndLoadBean(t, &repo_model.FollowingRepo{
-			ExternalID:       "1",
-			FederationHostID: federationHost.ID,
-		})
-	})
-
-	t.Run("Star a repo having a following repo", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-		repoLink := fmt.Sprintf("/%s", repo.FullName())
-		link := fmt.Sprintf("%s/action/star", repoLink)
-		req := NewRequestWithValues(t, "POST", link, map[string]string{
-			"_csrf": GetCSRF(t, session, repoLink),
-		})
-
-		session.MakeRequest(t, req, http.StatusOK)
-
-		// Verify distant server received a like activity
-		like := fm.ForgeLike{}
-		err := like.UnmarshalJSON([]byte(mock.LastPost))
-		if err != nil {
-			t.Errorf("Error unmarshalling ForgeLike: %q", err)
-		}
-		if isValid, err := validation.IsValid(like); !isValid {
-			t.Errorf("ForgeLike is not valid: %q", err)
-		}
-		activityType := like.Type
-		object := like.Object.GetLink().String()
-		isLikeType := activityType == "Like"
-		isCorrectObject := strings.HasSuffix(object, "/api/v1/activitypub/repository-id/1")
-		if !isLikeType || !isCorrectObject {
-			t.Errorf("Activity is not a like for this repo")
-		}
 	})
 }

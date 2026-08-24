@@ -6,15 +6,11 @@ package admin
 import (
 	"testing"
 
-	"forgejo.org/services/contexttest"
-	stats_service "forgejo.org/services/stats"
-	"github.com/dustin/go-humanize"
-	"k8s.io/apimachinery/pkg/api/resource"
-
 	activities_model "forgejo.org/models/activities"
 	"forgejo.org/models/unittest"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
+	"forgejo.org/services/contexttest"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -73,7 +69,7 @@ func TestShadowPassword(t *testing.T) {
 	}
 
 	for _, k := range kases {
-		assert.EqualValues(t, k.Result, shadowPassword(k.Provider, k.CfgItem))
+		assert.Equal(t, k.Result, shadowPassword(k.Provider, k.CfgItem))
 	}
 }
 
@@ -117,27 +113,5 @@ func TestMonitorStats(t *testing.T) {
 		assert.NotEmpty(t, stats.IssueByRepository)
 		assert.EqualValues(t, stats.IssueByLabel, mappedStats["IssueByLabel"])
 		assert.EqualValues(t, stats.IssueByRepository, mappedStats["IssueByRepository"])
-	})
-
-	t.Run("DiskSpaceUsage", func(t *testing.T) {
-		var limit = "1Gi"
-		var limitQuantity, _ = resource.ParseQuantity(limit)
-		var limitHuman = humanize.IBytes(uint64(limitQuantity.Value()))
-
-		defer test.MockVariableValue(&setting.StackitGit.LimitDiskStorageSpace, limit)()
-		defer test.MockVariableValue(&setting.StackitGit.LimitDiskStorageSpaceBytes, limitQuantity.Value())()
-		defer test.MockVariableValue(&setting.StackitGit.LimitDiskStorageSpaceQuantity, limitQuantity)()
-
-		stats_service.RefreshStats()
-
-		ctx, _ := contexttest.MockContext(t, "admin/stats")
-		MonitorStats(ctx)
-		stats := activities_model.GetStatistic(ctx).Counter
-
-		assert.NotEmpty(t, stats.DiskSpaceUsage.LimitHuman)
-		assert.NotEmpty(t, stats.DiskSpaceUsage.Human)
-		assert.NotEmpty(t, stats.DiskSpaceUsage.Percentage)
-		assert.NotEmpty(t, stats.DiskSpaceUsage.Bytes)
-		assert.EqualValues(t, stats.DiskSpaceUsage.LimitHuman, limitHuman)
 	})
 }

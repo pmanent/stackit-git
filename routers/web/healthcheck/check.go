@@ -73,7 +73,7 @@ func Check(w http.ResponseWriter, r *http.Request) {
 
 	statuses := make([]status, 0)
 	if setting.InstallLock {
-		// statuses = append(statuses, checkDatabase(r.Context(), rsp.Checks))
+		statuses = append(statuses, checkDatabase(r.Context(), rsp.Checks))
 		statuses = append(statuses, checkCache(rsp.Checks))
 	}
 	for _, s := range statuses {

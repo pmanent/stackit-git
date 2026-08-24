@@ -1,10 +1,12 @@
 // Copyright 2023 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package issues
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,6 +24,7 @@ import (
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/stats"
 
 	"xorm.io/builder"
 )
@@ -99,22 +102,16 @@ func doChangeIssueStatus(ctx context.Context, issue *Issue, doer *user_model.Use
 	if err := issue.LoadLabels(ctx); err != nil {
 		return nil, err
 	}
-	for idx := range issue.Labels {
-		if err := updateLabelCols(ctx, issue.Labels[idx], "num_issues", "num_closed_issue"); err != nil {
-			return nil, err
-		}
+	for _, label := range issue.Labels {
+		stats.QueueRecalcLabelByID(ctx, label.ID)
 	}
 
 	// Update issue count of milestone
 	if issue.MilestoneID > 0 {
 		if issue.NoAutoTime {
-			if err := UpdateMilestoneCountersWithDate(ctx, issue.MilestoneID, issue.UpdatedUnix); err != nil {
-				return nil, err
-			}
+			stats.QueueRecalcMilestoneByIDWithDate(ctx, issue.MilestoneID, issue.UpdatedUnix)
 		} else {
-			if err := UpdateMilestoneCounters(ctx, issue.MilestoneID); err != nil {
-				return nil, err
-			}
+			stats.QueueRecalcMilestoneByID(ctx, issue.MilestoneID)
 		}
 	}
 
@@ -237,18 +234,18 @@ func AddDeletePRBranchComment(ctx context.Context, doer *user_model.User, repo *
 }
 
 // UpdateIssueAttachments update attachments by UUIDs for the issue
-func UpdateIssueAttachments(ctx context.Context, issueID int64, uuids []string) (err error) {
+func UpdateIssueAttachments(ctx context.Context, issue *Issue, uuids []string) (err error) {
 	ctx, committer, err := db.TxContext(ctx)
 	if err != nil {
 		return err
 	}
 	defer committer.Close()
-	attachments, err := repo_model.GetAttachmentsByUUIDs(ctx, uuids)
+	attachments, err := repo_model.FindRepoAttachmentsByUUID(ctx, issue.RepoID, uuids, repo_model.FindAttachmentOptions{})
 	if err != nil {
-		return fmt.Errorf("getAttachmentsByUUIDs [uuids: %v]: %w", uuids, err)
+		return fmt.Errorf("FindRepoAttachmentsByUUID[uuids=%q,repoID=%d]: %w", uuids, issue.RepoID, err)
 	}
-	for i := 0; i < len(attachments); i++ {
-		attachments[i].IssueID = issueID
+	for i := range attachments {
+		attachments[i].IssueID = issue.ID
 		if err := repo_model.UpdateAttachment(ctx, attachments[i]); err != nil {
 			return fmt.Errorf("update attachment [id: %d]: %w", attachments[i].ID, err)
 		}
@@ -273,6 +270,11 @@ func ChangeIssueContent(ctx context.Context, issue *Issue, doer *user_model.User
 			issue.CreatedUnix, issue.Content, true); err != nil {
 			return fmt.Errorf("SaveIssueContentHistory: %w", err)
 		}
+	}
+
+	// If the issue was reported as abusive, a shadow copy should be created before first update.
+	if err := IfNeededCreateShadowCopyForIssue(ctx, issue); err != nil {
+		return err
 	}
 
 	issue.Content = content
@@ -332,10 +334,10 @@ func NewIssueWithIndex(ctx context.Context, doer *user_model.User, opts NewIssue
 	}
 
 	if opts.Issue.Index <= 0 {
-		return fmt.Errorf("no issue index provided")
+		return errors.New("no issue index provided")
 	}
 	if opts.Issue.ID > 0 {
-		return fmt.Errorf("issue exist")
+		return errors.New("issue exist")
 	}
 
 	opts.Issue.Created = timeutil.TimeStampNanoNow()
@@ -345,9 +347,7 @@ func NewIssueWithIndex(ctx context.Context, doer *user_model.User, opts NewIssue
 	}
 
 	if opts.Issue.MilestoneID > 0 {
-		if err := UpdateMilestoneCounters(ctx, opts.Issue.MilestoneID); err != nil {
-			return err
-		}
+		stats.QueueRecalcMilestoneByID(ctx, opts.Issue.MilestoneID)
 
 		opts := &CreateCommentOptions{
 			Type:           CommentTypeMilestone,
@@ -394,18 +394,8 @@ func NewIssueWithIndex(ctx context.Context, doer *user_model.User, opts NewIssue
 		return err
 	}
 
-	if len(opts.Attachments) > 0 {
-		attachments, err := repo_model.GetAttachmentsByUUIDs(ctx, opts.Attachments)
-		if err != nil {
-			return fmt.Errorf("getAttachmentsByUUIDs [uuids: %v]: %w", opts.Attachments, err)
-		}
-
-		for i := 0; i < len(attachments); i++ {
-			attachments[i].IssueID = opts.Issue.ID
-			if _, err = e.ID(attachments[i].ID).Update(attachments[i]); err != nil {
-				return fmt.Errorf("update attachment [id: %d]: %w", attachments[i].ID, err)
-			}
-		}
+	if err := UpdateIssueAttachments(ctx, opts.Issue, opts.Attachments); err != nil {
+		return fmt.Errorf("UpdateIssueAttachments: %w", err)
 	}
 	if err = opts.Issue.LoadAttributes(ctx); err != nil {
 		return err

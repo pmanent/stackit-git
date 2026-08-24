@@ -74,7 +74,7 @@ func ForgotPasswdPost(ctx *context.Context) {
 		return
 	}
 
-	if !u.IsLocal() && !u.IsOAuth2() {
+	if !u.IsLocal() && !(u.IsOAuth2() && u.IsPasswordSet()) {
 		ctx.Data["Err_Email"] = true
 		ctx.RenderWithErr(ctx.Tr("auth.non_local_account"), tplForgotPassword, nil)
 		return
@@ -116,7 +116,7 @@ func commonResetPassword(ctx *context.Context, shouldDeleteToken bool) (*user_mo
 	}
 
 	// Fail early, don't frustrate the user
-	u, deleteToken, err := user_model.VerifyUserAuthorizationToken(ctx, code, auth.PasswordReset)
+	u, _, deleteToken, err := user_model.VerifyUserAuthorizationToken(ctx, code, auth.PasswordReset)
 	if err != nil {
 		ctx.ServerError("VerifyUserAuthorizationToken", err)
 		return nil, nil
@@ -132,6 +132,11 @@ func commonResetPassword(ctx *context.Context, shouldDeleteToken bool) (*user_mo
 			ctx.ServerError("deleteToken", err)
 			return nil, nil
 		}
+	}
+
+	if !u.IsLocal() && !(u.IsOAuth2() && u.IsPasswordSet()) {
+		ctx.Flash.Error(ctx.Tr("auth.non_local_account"), true)
+		return nil, nil
 	}
 
 	twofa, err := auth.GetTwoFactorByUID(ctx, u.ID)
@@ -242,12 +247,8 @@ func ResetPasswdPost(ctx *context.Context) {
 
 	if regenerateScratchToken {
 		// Invalidate the scratch token.
-		_, err := twofa.GenerateScratchToken()
-		if err != nil {
-			ctx.ServerError("UserSignIn", err)
-			return
-		}
-		if err = auth.UpdateTwoFactor(ctx, twofa); err != nil {
+		twofa.GenerateScratchToken()
+		if err := auth.UpdateTwoFactor(ctx, twofa); err != nil {
 			ctx.ServerError("UserSignIn", err)
 			return
 		}
@@ -268,7 +269,7 @@ func ResetPasswdPost(ctx *context.Context) {
 func MustChangePassword(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("auth.must_change_password")
 	ctx.Data["ChangePasscodeLink"] = setting.AppSubURL + "/user/settings/change_password"
-	ctx.Data["MustChangePassword"] = true
+	ctx.Data["HideNavbarLinks"] = true
 	ctx.HTML(http.StatusOK, tplMustChangePassword)
 }
 

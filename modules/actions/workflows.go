@@ -5,25 +5,38 @@ package actions
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
 
+	actions_model "forgejo.org/models/actions"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/log"
 	api "forgejo.org/modules/structs"
 	webhook_module "forgejo.org/modules/webhook"
 
+	"code.forgejo.org/forgejo/runner/v12/act/jobparser"
+	"code.forgejo.org/forgejo/runner/v12/act/model"
+	"code.forgejo.org/forgejo/runner/v12/act/workflowpattern"
 	"github.com/gobwas/glob"
-	"github.com/nektos/act/pkg/jobparser"
-	"github.com/nektos/act/pkg/model"
-	"github.com/nektos/act/pkg/workflowpattern"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type DetectedWorkflow struct {
-	EntryName    string
-	TriggerEvent *jobparser.Event
-	Content      []byte
+	EntryName           string // file name of the workflow, for example, test.yaml
+	EntryDirectory      string // folder where the workflow was found, for example, .forgejo/workflows
+	TriggerEvent        *jobparser.Event
+	Content             []byte
+	EventDetectionError error
+	NeedApproval        actions_model.ApprovalType
+	SourceCommit        *git.Commit
+}
+
+// GetWorkflowPath returns the full path to the workflow from the repository root, for example,
+// .forgejo/workflows/test.yaml.
+func (wf *DetectedWorkflow) GetWorkflowPath() string {
+	return fmt.Sprintf("%s/%s", wf.EntryDirectory, wf.EntryName)
 }
 
 func init() {
@@ -43,24 +56,41 @@ func IsWorkflow(path string) bool {
 	return strings.HasPrefix(path, ".forgejo/workflows") || strings.HasPrefix(path, ".gitea/workflows") || strings.HasPrefix(path, ".github/workflows")
 }
 
-func ListWorkflows(commit *git.Commit) (git.Entries, error) {
-	tree, err := commit.SubTree(".forgejo/workflows")
-	if _, ok := err.(git.ErrNotExist); ok {
-		tree, err = commit.SubTree(".gitea/workflows")
+// ListWorkflows looks for one of the standard workflow directories .forgejo/workflows, .gitea/workflows, and
+// .github/workflows in the given Git tree and returns the name of the first one it encounters including all the
+// workflow files it contains, if any.
+func ListWorkflows(commit *git.Commit) (string, git.Entries, error) {
+	workflowSources := []string{
+		".forgejo/workflows",
+		".gitea/workflows",
+		".github/workflows",
 	}
-	if _, ok := err.(git.ErrNotExist); ok {
-		tree, err = commit.SubTree(".github/workflows")
+	var workflowSource string
+	var tree *git.Tree
+	for _, workflowSource = range workflowSources {
+		var err error
+		tree, err = commit.SubTree(workflowSource)
+
+		// If the source does not exist, we try the next one.
+		if _, ok := err.(git.ErrNotExist); ok {
+			continue
+		}
+
+		// Other errors are reported immediately.
+		if err != nil {
+			return "", nil, err
+		}
+
+		// We have found a valid source that we will use, no matter whether it contains workflows or not.
+		break
 	}
-	if _, ok := err.(git.ErrNotExist); ok {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
+	if tree == nil {
+		return "", nil, nil
 	}
 
 	entries, err := tree.ListEntriesRecursiveFast()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
 	ret := make(git.Entries, 0, len(entries))
@@ -69,7 +99,7 @@ func ListWorkflows(commit *git.Commit) (git.Entries, error) {
 			ret = append(ret, entry)
 		}
 	}
-	return ret, nil
+	return workflowSource, ret, nil
 }
 
 func GetContentFromEntry(entry *git.TreeEntry) ([]byte, error) {
@@ -86,7 +116,7 @@ func GetContentFromEntry(entry *git.TreeEntry) ([]byte, error) {
 }
 
 func GetEventsFromContent(content []byte) ([]*jobparser.Event, error) {
-	workflow, err := model.ReadWorkflow(bytes.NewReader(content))
+	workflow, err := model.ReadWorkflow(bytes.NewReader(content), false)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +135,7 @@ func DetectWorkflows(
 	payload api.Payloader,
 	detectSchedule bool,
 ) ([]*DetectedWorkflow, []*DetectedWorkflow, error) {
-	entries, err := ListWorkflows(commit)
+	directory, entries, err := ListWorkflows(commit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -122,6 +152,16 @@ func DetectWorkflows(
 		events, err := GetEventsFromContent(content)
 		if err != nil {
 			log.Warn("ignore invalid workflow %q: %v", entry.Name(), err)
+			dwf := &DetectedWorkflow{
+				EntryName:      entry.Name(),
+				EntryDirectory: directory,
+				TriggerEvent: &jobparser.Event{
+					Name: triggedEvent.Event(),
+				},
+				Content:             content,
+				EventDetectionError: err,
+			}
+			workflows = append(workflows, dwf)
 			continue
 		}
 		for _, evt := range events {
@@ -129,17 +169,20 @@ func DetectWorkflows(
 			if evt.IsSchedule() {
 				if detectSchedule {
 					dwf := &DetectedWorkflow{
-						EntryName:    entry.Name(),
-						TriggerEvent: evt,
-						Content:      content,
+						EntryName:      entry.Name(),
+						EntryDirectory: directory,
+						TriggerEvent:   evt,
+						Content:        content,
 					}
 					schedules = append(schedules, dwf)
 				}
 			} else if detectMatched(gitRepo, commit, triggedEvent, payload, evt) {
 				dwf := &DetectedWorkflow{
-					EntryName:    entry.Name(),
-					TriggerEvent: evt,
-					Content:      content,
+					EntryName:      entry.Name(),
+					EntryDirectory: directory,
+					TriggerEvent:   evt,
+					Content:        content,
+					SourceCommit:   commit, // to support pull_request_target, maintain a reference to the commit the workflow was read from
 				}
 				workflows = append(workflows, dwf)
 			}
@@ -150,7 +193,7 @@ func DetectWorkflows(
 }
 
 func DetectScheduledWorkflows(gitRepo *git.Repository, commit *git.Commit) ([]*DetectedWorkflow, error) {
-	entries, err := ListWorkflows(commit)
+	directory, entries, err := ListWorkflows(commit)
 	if err != nil {
 		return nil, err
 	}
@@ -172,9 +215,10 @@ func DetectScheduledWorkflows(gitRepo *git.Repository, commit *git.Commit) ([]*D
 			if evt.IsSchedule() {
 				log.Trace("detect scheduled workflow: %q", entry.Name())
 				dwf := &DetectedWorkflow{
-					EntryName:    entry.Name(),
-					TriggerEvent: evt,
-					Content:      content,
+					EntryName:      entry.Name(),
+					EntryDirectory: directory,
+					TriggerEvent:   evt,
+					Content:        content,
 				}
 				wfs = append(wfs, dwf)
 			}
@@ -315,6 +359,10 @@ func matchPushEvent(commit *git.Commit, pushPayload *api.PushPayload, evt *jobpa
 				matchTimes++
 			}
 		case "paths":
+			if refName.IsTag() {
+				matchTimes++
+				break
+			}
 			filesChanged, err := commit.GetFilesChangedSinceCommit(pushPayload.Before)
 			if err != nil {
 				log.Error("GetFilesChangedSinceCommit [commit_sha1: %s]: %v", commit.ID.String(), err)
@@ -328,6 +376,10 @@ func matchPushEvent(commit *git.Commit, pushPayload *api.PushPayload, evt *jobpa
 				}
 			}
 		case "paths-ignore":
+			if refName.IsTag() {
+				matchTimes++
+				break
+			}
 			filesChanged, err := commit.GetFilesChangedSinceCommit(pushPayload.Before)
 			if err != nil {
 				log.Error("GetFilesChangedSinceCommit [commit_sha1: %s]: %v", commit.ID.String(), err)
@@ -467,7 +519,7 @@ func matchPullRequestEvent(gitRepo *git.Repository, commit *git.Commit, prPayloa
 				matchTimes++
 			}
 		case "paths":
-			filesChanged, err := headCommit.GetFilesChangedSinceCommit(prPayload.PullRequest.Base.Ref)
+			filesChanged, err := headCommit.GetFilesChangedSinceCommit(prPayload.PullRequest.MergeBase)
 			if err != nil {
 				log.Error("GetFilesChangedSinceCommit [commit_sha1: %s]: %v", headCommit.ID.String(), err)
 			} else {
@@ -480,7 +532,7 @@ func matchPullRequestEvent(gitRepo *git.Repository, commit *git.Commit, prPayloa
 				}
 			}
 		case "paths-ignore":
-			filesChanged, err := headCommit.GetFilesChangedSinceCommit(prPayload.PullRequest.Base.Ref)
+			filesChanged, err := headCommit.GetFilesChangedSinceCommit(prPayload.PullRequest.MergeBase)
 			if err != nil {
 				log.Error("GetFilesChangedSinceCommit [commit_sha1: %s]: %v", headCommit.ID.String(), err)
 			} else {
@@ -560,11 +612,8 @@ func matchPullRequestReviewEvent(prPayload *api.PullRequestPayload, evt *jobpars
 
 			matched := false
 			for _, val := range vals {
-				for _, action := range actions {
-					if glob.MustCompile(val, '/').Match(action) {
-						matched = true
-						break
-					}
+				if slices.ContainsFunc(actions, glob.MustCompile(val, '/').Match) {
+					matched = true
 				}
 				if matched {
 					break
@@ -609,11 +658,8 @@ func matchPullRequestReviewCommentEvent(prPayload *api.PullRequestPayload, evt *
 
 			matched := false
 			for _, val := range vals {
-				for _, action := range actions {
-					if glob.MustCompile(val, '/').Match(action) {
-						matched = true
-						break
-					}
+				if slices.ContainsFunc(actions, glob.MustCompile(val, '/').Match) {
+					matched = true
 				}
 				if matched {
 					break

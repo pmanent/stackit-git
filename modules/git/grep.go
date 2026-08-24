@@ -36,7 +36,12 @@ const (
 	RegExpGrepMode
 )
 
+// llu:TrKeysSuffix search.
 var GrepSearchOptions = [3]string{"exact", "union", "regexp"}
+
+func (mode GrepMode) String() string {
+	return GrepSearchOptions[mode]
+}
 
 type GrepOptions struct {
 	RefName           string
@@ -98,8 +103,7 @@ func GrepSearch(ctx context.Context, repo *Repository, search string, opts GrepO
 
 	cmd.AddOptionValues("--context", fmt.Sprint(opts.ContextLineNumber))
 
-	// --max-count requires at least git 2.38
-	if CheckGitVersionAtLeast("2.38.0") == nil {
+	if SupportGrepMaxCount {
 		cmd.AddOptionValues("--max-count", fmt.Sprint(opts.MatchesPerFile))
 	} else {
 		log.Warn("git-grep: --max-count requires at least git 2.38")

@@ -80,12 +80,13 @@ services:
       - "19001:9001"
 
   app:
+    platform: linux/arm64/v8
     build:
       context: .
       dockerfile: ./Dockerfile
     # Source - https://stackoverflow.com/a
-# Posted by RustyShackleford, modified by community. See post 'Timeline' for change history
-# Retrieved 2025-11-26, License - CC BY-SA 4.0
+    # Posted by RustyShackleford, modified by community. See post 'Timeline' for change history
+    # Retrieved 2025-11-26, License - CC BY-SA 4.0
 
     command: bash -c "rm -rf /workspace/data/* && cp -rf /workspace/.devcontainer/data/* /workspace/data && cp -rf /workspace/.devcontainer/init/config/app.ini /workspace/custom/conf/app.ini && sleep infinity"
     volumes:

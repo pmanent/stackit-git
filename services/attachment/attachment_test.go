@@ -13,9 +13,6 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 
-	_ "forgejo.org/models/actions"
-	_ "forgejo.org/models/forgefed"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,6 +40,6 @@ func TestUploadAttachment(t *testing.T) {
 
 	attachment, err := repo_model.GetAttachmentByUUID(db.DefaultContext, attach.UUID)
 	require.NoError(t, err)
-	assert.EqualValues(t, user.ID, attachment.UploaderID)
+	assert.Equal(t, user.ID, attachment.UploaderID)
 	assert.Equal(t, int64(0), attachment.DownloadCount)
 }

@@ -15,22 +15,21 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
-	"forgejo.org/services/migrations"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepoMigrateWithCredentials(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		defer test.MockVariableValue(&setting.Migrations.AllowLocalNetworks, true)()
-		require.NoError(t, migrations.Init())
+		require.NoError(t, migrations_allowlist.Init())
 
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 		session := loginUser(t, "user2")
 
 		t.Run("Incorrect credentials", func(t *testing.T) {
 			session.MakeRequest(t, NewRequestWithValues(t, "POST", "/repo/migrate", map[string]string{
-				"_csrf":         GetCSRF(t, session, "/repo/migrate?service_type=1"),
 				"clone_addr":    u.JoinPath("/user2/repo2").String(),
 				"auth_username": "user2",
 				"auth_password": userPassword + "1",
@@ -49,7 +48,6 @@ func TestRepoMigrateWithCredentials(t *testing.T) {
 
 		t.Run("Normal", func(t *testing.T) {
 			session.MakeRequest(t, NewRequestWithValues(t, "POST", "/repo/migrate", map[string]string{
-				"_csrf":         GetCSRF(t, session, "/repo/migrate?service_type=1"),
 				"clone_addr":    u.JoinPath("/user2/repo2").String(),
 				"auth_username": "user2",
 				"auth_password": userPassword,
@@ -67,7 +65,7 @@ func TestRepoMigrateWithCredentials(t *testing.T) {
 		})
 
 		t.Run("Dangerous credential", func(t *testing.T) {
-			// Temporaily change the password
+			// Temporarily change the password
 			dangerousPassword := "some`echo foo`thing"
 			require.NoError(t, user2.SetPassword(dangerousPassword))
 			require.NoError(t, user_model.UpdateUserCols(t.Context(), user2, "passwd", "passwd_hash_algo", "salt"))
@@ -75,7 +73,6 @@ func TestRepoMigrateWithCredentials(t *testing.T) {
 			session = loginUserWithPassword(t, "user2", dangerousPassword)
 
 			session.MakeRequest(t, NewRequestWithValues(t, "POST", "/repo/migrate", map[string]string{
-				"_csrf":         GetCSRF(t, session, "/repo/migrate?service_type=1"),
 				"clone_addr":    u.JoinPath("/user2/repo2").String(),
 				"auth_username": "user2",
 				"auth_password": dangerousPassword,

@@ -9,8 +9,7 @@ import (
 	"runtime"
 
 	"forgejo.org/models"
-	asymkey_model "forgejo.org/models/asymkey"
-	authmodel "forgejo.org/models/auth"
+	auth_model "forgejo.org/models/auth"
 	"forgejo.org/modules/cache"
 	"forgejo.org/modules/eventsource"
 	"forgejo.org/modules/git"
@@ -34,21 +33,23 @@ import (
 	"forgejo.org/routers/private"
 	web_routers "forgejo.org/routers/web"
 	actions_service "forgejo.org/services/actions"
-	"forgejo.org/services/auth"
+	auth_method "forgejo.org/services/auth/method"
 	"forgejo.org/services/auth/source/oauth2"
 	"forgejo.org/services/automerge"
 	"forgejo.org/services/cron"
+	federation_service "forgejo.org/services/federation"
 	feed_service "forgejo.org/services/feed"
 	indexer_service "forgejo.org/services/indexer"
 	"forgejo.org/services/mailer"
 	mailer_incoming "forgejo.org/services/mailer/incoming"
 	markup_service "forgejo.org/services/markup"
-	repo_migrations "forgejo.org/services/migrations"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 	mirror_service "forgejo.org/services/mirror"
 	pull_service "forgejo.org/services/pull"
 	release_service "forgejo.org/services/release"
 	repo_service "forgejo.org/services/repository"
 	"forgejo.org/services/repository/archiver"
+	"forgejo.org/services/stats"
 	"forgejo.org/services/task"
 	"forgejo.org/services/uinotification"
 	"forgejo.org/services/webhook"
@@ -91,12 +92,6 @@ func syncAppConfForGit(ctx context.Context) error {
 	}
 
 	if updated {
-		log.Info("re-sync repository hooks ...")
-		mustInitCtx(ctx, repo_service.SyncRepositoryHooks)
-
-		log.Info("re-write ssh public keys ...")
-		mustInitCtx(ctx, asymkey_model.RewriteAllPublicKeys)
-
 		return system.AppState.Set(ctx, runtimeState)
 	}
 	return nil
@@ -122,6 +117,7 @@ func InitWebInstalled(ctx context.Context) {
 	mailer.NewContext(ctx)
 	mustInit(cache.Init)
 	mustInit(feed_service.Init)
+	mustInit(federation_service.Init)
 	mustInit(uinotification.Init)
 	mustInitCtx(ctx, archiver.Init)
 
@@ -143,7 +139,7 @@ func InitWebInstalled(ctx context.Context) {
 	mustInit(release_service.Init)
 
 	mustInitCtx(ctx, models.Init)
-	mustInitCtx(ctx, authmodel.Init)
+	mustInitCtx(ctx, auth_model.Init)
 	mustInitCtx(ctx, repo_service.Init)
 
 	// Booting long running goroutines.
@@ -154,18 +150,21 @@ func InitWebInstalled(ctx context.Context) {
 	mustInit(pull_service.Init)
 	mustInit(automerge.Init)
 	mustInit(task.Init)
-	mustInit(repo_migrations.Init)
+	mustInit(migrations_allowlist.Init)
 	eventsource.GetManager().Init()
 	mustInitCtx(ctx, mailer_incoming.Init)
 
 	mustInitCtx(ctx, syncAppConfForGit)
 
-	mustInit(ssh.Init)
+	mustInitCtx(ctx, ssh.Init)
 
-	auth.Init()
+	auth_method.Init()
 	mustInit(svg.Init)
 
 	actions_service.Init()
+	mustInit(stats.Init)
+
+	mustInit(actions_router.InitOIDC)
 
 	// Finally start up the cron
 	cron.NewContext(ctx)

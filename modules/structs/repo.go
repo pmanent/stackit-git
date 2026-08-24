@@ -80,40 +80,45 @@ type Repository struct {
 	// swagger:strfmt date-time
 	Created time.Time `json:"created_at"`
 	// swagger:strfmt date-time
-	Updated                       time.Time        `json:"updated_at"`
-	ArchivedAt                    time.Time        `json:"archived_at"`
-	Permissions                   *Permission      `json:"permissions,omitempty"`
-	HasIssues                     bool             `json:"has_issues"`
-	InternalTracker               *InternalTracker `json:"internal_tracker,omitempty"`
-	ExternalTracker               *ExternalTracker `json:"external_tracker,omitempty"`
-	HasWiki                       bool             `json:"has_wiki"`
-	ExternalWiki                  *ExternalWiki    `json:"external_wiki,omitempty"`
-	WikiBranch                    string           `json:"wiki_branch,omitempty"`
-	GloballyEditableWiki          bool             `json:"globally_editable_wiki"`
-	HasPullRequests               bool             `json:"has_pull_requests"`
-	HasProjects                   bool             `json:"has_projects"`
-	HasReleases                   bool             `json:"has_releases"`
-	HasPackages                   bool             `json:"has_packages"`
-	HasActions                    bool             `json:"has_actions"`
-	IgnoreWhitespaceConflicts     bool             `json:"ignore_whitespace_conflicts"`
-	AllowMerge                    bool             `json:"allow_merge_commits"`
-	AllowRebase                   bool             `json:"allow_rebase"`
-	AllowRebaseMerge              bool             `json:"allow_rebase_explicit"`
-	AllowSquash                   bool             `json:"allow_squash_merge"`
-	AllowFastForwardOnly          bool             `json:"allow_fast_forward_only_merge"`
-	AllowRebaseUpdate             bool             `json:"allow_rebase_update"`
-	DefaultDeleteBranchAfterMerge bool             `json:"default_delete_branch_after_merge"`
-	DefaultMergeStyle             string           `json:"default_merge_style"`
-	DefaultAllowMaintainerEdit    bool             `json:"default_allow_maintainer_edit"`
-	DefaultUpdateStyle            string           `json:"default_update_style"`
-	AvatarURL                     string           `json:"avatar_url"`
-	Internal                      bool             `json:"internal"`
-	MirrorInterval                string           `json:"mirror_interval"`
+	Updated         time.Time        `json:"updated_at"`
+	ArchivedAt      time.Time        `json:"archived_at"`
+	Permissions     *Permission      `json:"permissions,omitempty"`
+	HasIssues       bool             `json:"has_issues"`
+	InternalTracker *InternalTracker `json:"internal_tracker,omitempty"`
+	ExternalTracker *ExternalTracker `json:"external_tracker,omitempty"`
+	// is the wiki enabled
+	HasWiki bool `json:"has_wiki"`
+	// have wiki pages ever been created
+	HasWikiContents               bool          `json:"has_wiki_contents"`
+	ExternalWiki                  *ExternalWiki `json:"external_wiki,omitempty"`
+	WikiBranch                    string        `json:"wiki_branch,omitempty"`
+	WikiSSHURL                    string        `json:"wiki_ssh_url"`
+	WikiCloneURL                  string        `json:"wiki_clone_url"`
+	GloballyEditableWiki          bool          `json:"globally_editable_wiki"`
+	HasPullRequests               bool          `json:"has_pull_requests"`
+	HasProjects                   bool          `json:"has_projects"`
+	HasReleases                   bool          `json:"has_releases"`
+	HasPackages                   bool          `json:"has_packages"`
+	HasActions                    bool          `json:"has_actions"`
+	IgnoreWhitespaceConflicts     bool          `json:"ignore_whitespace_conflicts"`
+	AllowMerge                    bool          `json:"allow_merge_commits"`
+	AllowRebase                   bool          `json:"allow_rebase"`
+	AllowRebaseMerge              bool          `json:"allow_rebase_explicit"`
+	AllowSquash                   bool          `json:"allow_squash_merge"`
+	AllowFastForwardOnly          bool          `json:"allow_fast_forward_only_merge"`
+	AllowRebaseUpdate             bool          `json:"allow_rebase_update"`
+	DefaultDeleteBranchAfterMerge bool          `json:"default_delete_branch_after_merge"`
+	DefaultMergeStyle             string        `json:"default_merge_style"`
+	DefaultAllowMaintainerEdit    bool          `json:"default_allow_maintainer_edit"`
+	DefaultUpdateStyle            string        `json:"default_update_style"`
+	AvatarURL                     string        `json:"avatar_url"`
+	Internal                      bool          `json:"internal"`
+	MirrorInterval                string        `json:"mirror_interval"`
 	// ObjectFormatName of the underlying git repository
 	// enum: ["sha1", "sha256"]
 	ObjectFormatName string `json:"object_format_name"`
 	// swagger:strfmt date-time
-	MirrorUpdated time.Time     `json:"mirror_updated,omitempty"`
+	MirrorUpdated time.Time     `json:"mirror_updated"`
 	RepoTransfer  *RepoTransfer `json:"repo_transfer"`
 	Topics        []string      `json:"topics"`
 }
@@ -146,7 +151,7 @@ type CreateRepoOption struct {
 	AutoInit bool `json:"auto_init"`
 	// Whether the repository is template
 	Template bool `json:"template"`
-	// Gitignores to use
+	// Gitignores to use, separated by commas
 	Gitignores string `json:"gitignores"`
 	// License to use
 	License string `json:"license"`
@@ -327,6 +332,7 @@ const (
 	GitBucketService                       // 7 gitbucket service
 	CodebaseService                        // 8 codebase service
 	ForgejoService                         // 9 forgejo service
+	PagureService                          // 10 pagure service
 )
 
 // Name represents the service type's name
@@ -354,6 +360,8 @@ func (gt GitServiceType) Title() string {
 		return "Codebase"
 	case ForgejoService:
 		return "Forgejo"
+	case PagureService:
+		return "Pagure"
 	case PlainGitService:
 		return "Git"
 	}
@@ -372,7 +380,7 @@ type MigrateRepoOptions struct {
 	// required: true
 	RepoName string `json:"repo_name" binding:"Required;AlphaDashDot;MaxSize(100)"`
 
-	// enum: ["git", "github", "gitea", "gitlab", "gogs", "onedev", "gitbucket", "codebase"]
+	// enum: ["git", "github", "gitea", "gitlab", "gogs", "onedev", "gitbucket", "codebase", "forgejo", "pagure"]
 	Service      string `json:"service"`
 	AuthUsername string `json:"auth_username"`
 	AuthPassword string `json:"auth_password"`
@@ -412,6 +420,7 @@ var SupportedFullGitService = []GitServiceType{
 	OneDevService,
 	GitBucketService,
 	CodebaseService,
+	PagureService,
 }
 
 // RepoTransfer represents a pending repo transfer
@@ -431,4 +440,13 @@ type NewIssuePinsAllowed struct {
 type UpdateRepoAvatarOption struct {
 	// image must be base64 encoded
 	Image string `json:"image" binding:"Required"`
+}
+
+type RepoTargetOption struct {
+	// Name of user or organisation that owns the repository
+	// required: true
+	Owner string `json:"owner"`
+	// Name of repository
+	// required: true
+	Name string `json:"name"`
 }

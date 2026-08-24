@@ -6,8 +6,11 @@ package mailer
 import (
 	"bytes"
 	"context"
+	"slices"
 
+	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
+	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/log"
@@ -28,7 +31,7 @@ func MailNewRelease(ctx context.Context, rel *repo_model.Release) {
 		return
 	}
 
-	watcherIDList, err := repo_model.GetRepoWatchersIDs(ctx, rel.RepoID)
+	watcherIDList, err := repo_model.GetSelectWatcherIDs(ctx, rel.RepoID, repo_model.WatchSelection{Issues: false, PullRequests: false, Releases: true})
 	if err != nil {
 		log.Error("GetRepoWatchersIDs(%d): %v", rel.RepoID, err)
 		return
@@ -40,11 +43,31 @@ func MailNewRelease(ctx context.Context, rel *repo_model.Release) {
 		return
 	}
 
+	// Users are not eligible to receive this mail if they are not active or
+	// they don't have permissions to read releases.
+	recipients = slices.DeleteFunc(recipients, func(u *user_model.User) bool {
+		return !u.IsActive || !access_model.CheckRepoUnitUser(ctx, rel.Repo, u, unit.TypeReleases)
+	})
+
 	langMap := make(map[string][]*user_model.User)
 	for _, user := range recipients {
-		if user.ID != rel.PublisherID {
-			langMap[user.Language] = append(langMap[user.Language], user)
+		if user.ID == rel.PublisherID {
+			continue
 		}
+		// >>> @@@ STACKIT CODE @@@ release-permission filter
+		// Skip watchers that don't have read access on the Releases unit
+		// (e.g. the unit is disabled on the repo, or the user lost access
+		// after watching). Without this filter v12 would mail every watcher.
+		perm, err := access_model.GetUserRepoPermission(ctx, rel.Repo, user)
+		if err != nil {
+			log.Error("GetUserRepoPermission(repo=%d, user=%d): %v", rel.RepoID, user.ID, err)
+			continue
+		}
+		if !perm.CanRead(unit.TypeReleases) {
+			continue
+		}
+		// <<< @@@ STACKIT CODE @@@ release-permission filter
+		langMap[user.Language] = append(langMap[user.Language], user)
 	}
 
 	for lang, tos := range langMap {

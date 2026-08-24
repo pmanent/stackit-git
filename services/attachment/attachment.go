@@ -24,6 +24,9 @@ func NewAttachment(ctx context.Context, attach *repo_model.Attachment, file io.R
 	if attach.RepoID == 0 {
 		return nil, fmt.Errorf("attachment %s should belong to a repository", attach.Name)
 	}
+	if attach.UploaderID == 0 {
+		return nil, fmt.Errorf("attachment %s should have a uploader", attach.Name)
+	}
 
 	err := db.WithTx(ctx, func(ctx context.Context) error {
 		attach.UUID = uuid.New().String()
@@ -48,10 +51,13 @@ func NewExternalAttachment(ctx context.Context, attach *repo_model.Attachment) (
 	if attach.RepoID == 0 {
 		return nil, fmt.Errorf("attachment %s should belong to a repository", attach.Name)
 	}
+	if attach.UploaderID == 0 {
+		return nil, fmt.Errorf("attachment %s should have a uploader", attach.Name)
+	}
 	if attach.ExternalURL == "" {
 		return nil, fmt.Errorf("attachment %s should have a external url", attach.Name)
 	}
-	if !validation.IsValidExternalURL(attach.ExternalURL) {
+	if !validation.IsValidReleaseAssetURL(attach.ExternalURL) {
 		return nil, repo_model.ErrInvalidExternalURL{ExternalURL: attach.ExternalURL}
 	}
 

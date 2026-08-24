@@ -3,13 +3,19 @@
 
 package swagger
 
-import api "forgejo.org/modules/structs"
+import (
+	api "forgejo.org/modules/structs"
+	shared "forgejo.org/routers/api/v1/shared"
+)
 
 // SecretList
 // swagger:response SecretList
 type swaggerResponseSecretList struct {
 	// in:body
 	Body []api.Secret `json:"body"`
+
+	// The total number of secrets
+	TotalCount int64 `json:"X-Total-Count"`
 }
 
 // Secret
@@ -31,6 +37,9 @@ type swaggerResponseActionVariable struct {
 type swaggerResponseVariableList struct {
 	// in:body
 	Body []api.ActionVariable `json:"body"`
+
+	// The total number of variables
+	TotalCount int64 `json:"X-Total-Count"`
 }
 
 // RunJobList is a list of action run jobs
@@ -52,4 +61,38 @@ type swaggerRunnerConsumption struct {
 type swaggerDispatchWorkflowRun struct {
 	// in:body
 	Body *api.DispatchWorkflowRun `json:"body"`
+}
+
+// RegistrationToken is a string used to register a runner with a server
+// swagger:response RegistrationToken
+type swaggerRegistrationToken struct {
+	// in: body
+	Body shared.RegistrationToken `json:"body"`
+}
+
+// ActionRunner represents a runner
+// swagger:response ActionRunner
+type swaggerActionRunner struct {
+	// in: body
+	Body api.ActionRunner `json:"body"`
+}
+
+// ActionRunnerList is a list of Forgejo Action runners
+// swagger:response ActionRunnerList
+type swaggerActionRunnerListResponse struct {
+	// in:body
+	Body []api.ActionRunner `json:"body"`
+
+	// Total number of runners matching the search criteria (excluding page and limit)
+	TotalCount int64 `json:"X-Total-Count"`
+
+	// Links to other pages, if any
+	Link string `json:"Link"`
+}
+
+// RegisterRunnerResponse contains the details of the just registered runner.
+// swagger:response RegisterRunnerResponse
+type swaggerRegisterRunnerResponse struct {
+	// in: body
+	Body api.RegisterRunnerResponse `json:"body"`
 }

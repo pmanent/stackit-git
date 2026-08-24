@@ -26,9 +26,9 @@ func TestAdd_SingleItem(t *testing.T) {
 	// ASSERT: Check if the stats are correct for a single item.
 	stats := GetStatisticsAndReset()
 	assert.Equal(t, int64(1), stats.Count, "Count should be 1")
-	assert.Equal(t, 10.5, stats.Min, "Min should be the value itself")
-	assert.Equal(t, 10.5, stats.Max, "Max should be the value itself")
-	assert.Equal(t, 10.5, stats.Avg, "Average should be the value itself")
+	assert.InEpsilon(t, 10.5, stats.Min, 1e-9, "Min should be the value itself")
+	assert.InEpsilon(t, 10.5, stats.Max, 1e-9, "Max should be the value itself")
+	assert.InEpsilon(t, 10.5, stats.Avg, 1e-9, "Average should be the value itself")
 	assert.Equal(t, int64(1), stats.Status2xx, "Status2xx count should be 1")
 	assert.Zero(t, stats.Status1xx, "Other status counts should be zero")
 	assert.Zero(t, stats.Status3xx, "Other status counts should be zero")
@@ -53,8 +53,8 @@ func TestAdd_MultipleItems(t *testing.T) {
 	// ASSERT
 	stats := GetStatisticsAndReset()
 	assert.Equal(t, int64(3), stats.Count)
-	assert.Equal(t, 10.0, stats.Min)
-	assert.Equal(t, 60.0, stats.Max)
+	assert.InEpsilon(t, 10.0, stats.Min, 1e-9)
+	assert.InEpsilon(t, 60.0, stats.Max, 1e-9)
 	// Use InDelta for floating point comparisons to avoid precision issues.
 	assert.InDelta(t, 30.0, stats.Avg, 0.001)
 	assert.Equal(t, int64(1), stats.Status2xx)
@@ -75,7 +75,7 @@ func TestGetStatisticsAndReset(t *testing.T) {
 
 	// ASSERT (Part 1): Check if the returned stats are correct.
 	assert.Equal(t, int64(1), stats.Count)
-	assert.Equal(t, 100.0, stats.Avg)
+	assert.InEpsilon(t, 100.0, stats.Avg, 1e-9)
 
 	// ASSERT (Part 2): Call the function again and check if it's now empty.
 	emptyStats := GetStatisticsAndReset()
@@ -99,16 +99,14 @@ func TestAdd_Concurrency(t *testing.T) {
 	totalOps := int64(goroutines * iterations)
 
 	// ACT: Start many goroutines that all call Add concurrently.
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+	for range goroutines {
+		wg.Go(func() {
+			for range iterations {
 				// We add a consistent value to make the average predictable.
 				// We also add a consistent status code.
 				Add(10.0, 200)
 			}
-		}()
+		})
 	}
 
 	// Wait for all goroutines to finish.
@@ -117,8 +115,8 @@ func TestAdd_Concurrency(t *testing.T) {
 	// ASSERT: Check the final state.
 	stats := GetStatisticsAndReset()
 	assert.Equal(t, totalOps, stats.Count, "Count should be the total number of operations")
-	assert.Equal(t, 10.0, stats.Min, "Min should be 10")
-	assert.Equal(t, 10.0, stats.Max, "Max should be 10")
+	assert.InEpsilon(t, 10.0, stats.Min, 1e-9, "Min should be 10")
+	assert.InEpsilon(t, 10.0, stats.Max, 1e-9, "Max should be 10")
 	assert.InDelta(t, 10.0, stats.Avg, 0.001, "Average should be 10")
 	assert.Equal(t, totalOps, stats.Status2xx, "Status2xx count should match total operations")
 }

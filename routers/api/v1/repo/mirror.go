@@ -22,7 +22,7 @@ import (
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
 	"forgejo.org/services/forms"
-	"forgejo.org/services/migrations"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 	mirror_service "forgejo.org/services/mirror"
 )
 
@@ -54,10 +54,11 @@ func MirrorSync(ctx *context.APIContext) {
 	//   "413":
 	//     "$ref": "#/responses/quotaExceeded"
 
-	repo := ctx.Repo.Repository
+	repo := ctx.Repo().Repository
 
-	if !ctx.Repo.CanWrite(unit.TypeCode) {
+	if !ctx.Repo().CanWrite(unit.TypeCode) {
 		ctx.Error(http.StatusForbidden, "MirrorSync", "Must have write access")
+		return
 	}
 
 	if !setting.Mirror.Enabled {
@@ -114,7 +115,7 @@ func PushMirrorSync(ctx *context.APIContext) {
 		return
 	}
 	// Get All push mirrors of a specific repo
-	pushMirrors, _, err := repo_model.GetPushMirrorsByRepoID(ctx, ctx.Repo.Repository.ID, db.ListOptions{})
+	pushMirrors, _, err := repo_model.GetPushMirrorsByRepoID(ctx, ctx.Repo().Repository.ID, db.ListOptions{})
 	if err != nil {
 		ctx.Error(http.StatusNotFound, "PushMirrorSync", err)
 		return
@@ -171,7 +172,7 @@ func ListPushMirrors(ctx *context.APIContext) {
 		return
 	}
 
-	repo := ctx.Repo.Repository
+	repo := ctx.Repo().Repository
 	// Get all push mirrors for the specified repository.
 	pushMirrors, count, err := repo_model.GetPushMirrorsByRepoID(ctx, repo.ID, utils.GetListOptions(ctx))
 	if err != nil {
@@ -232,7 +233,7 @@ func GetPushMirrorByName(ctx *context.APIContext) {
 	mirrorName := ctx.Params(":name")
 	// Get push mirror of a specific repo by remoteName
 	pushMirror, exist, err := db.Get[repo_model.PushMirror](ctx, repo_model.PushMirrorOptions{
-		RepoID:     ctx.Repo.Repository.ID,
+		RepoID:     ctx.Repo().Repository.ID,
 		RemoteName: mirrorName,
 	}.ToConds())
 	if err != nil {
@@ -251,11 +252,11 @@ func GetPushMirrorByName(ctx *context.APIContext) {
 	ctx.JSON(http.StatusOK, m)
 }
 
-// AddPushMirror adds a push mirror to a repository
+// AddPushMirror sets up a new push mirror in a repository
 func AddPushMirror(ctx *context.APIContext) {
 	// swagger:operation POST /repos/{owner}/{repo}/push_mirrors repository repoAddPushMirror
 	// ---
-	// summary: add a push mirror to the repository
+	// summary: Set up a new push mirror in a repository
 	// consumes:
 	// - application/json
 	// produces:
@@ -296,11 +297,11 @@ func AddPushMirror(ctx *context.APIContext) {
 	CreatePushMirror(ctx, pushMirror)
 }
 
-// DeletePushMirrorByRemoteName deletes a push mirror from a repository by remoteName
+// DeletePushMirrorByRemoteName removes a push mirror from a repository by remoteName
 func DeletePushMirrorByRemoteName(ctx *context.APIContext) {
 	// swagger:operation DELETE /repos/{owner}/{repo}/push_mirrors/{name} repository repoDeletePushMirror
 	// ---
-	// summary: deletes a push mirror from a repository by remoteName
+	// summary: Remove a push mirror from a repository by remoteName
 	// produces:
 	// - application/json
 	// parameters:
@@ -334,7 +335,7 @@ func DeletePushMirrorByRemoteName(ctx *context.APIContext) {
 
 	remoteName := ctx.Params(":name")
 	// Delete push mirror on repo by name.
-	err := repo_model.DeletePushMirrors(ctx, repo_model.PushMirrorOptions{RepoID: ctx.Repo.Repository.ID, RemoteName: remoteName})
+	err := repo_model.DeletePushMirrors(ctx, repo_model.PushMirrorOptions{RepoID: ctx.Repo().Repository.ID, RemoteName: remoteName})
 	if err != nil {
 		ctx.Error(http.StatusNotFound, "DeletePushMirrors", err)
 		return
@@ -343,7 +344,7 @@ func DeletePushMirrorByRemoteName(ctx *context.APIContext) {
 }
 
 func CreatePushMirror(ctx *context.APIContext, mirrorOption *api.CreatePushMirrorOption) {
-	repo := ctx.Repo.Repository
+	repo := ctx.Repo().Repository
 
 	interval, err := time.ParseDuration(mirrorOption.Interval)
 	if err != nil || (interval != 0 && interval < setting.Mirror.MinInterval) {
@@ -357,24 +358,20 @@ func CreatePushMirror(ctx *context.APIContext, mirrorOption *api.CreatePushMirro
 	}
 
 	if mirrorOption.UseSSH && (mirrorOption.RemoteUsername != "" || mirrorOption.RemotePassword != "") {
-		ctx.Error(http.StatusBadRequest, "CreatePushMirror", "'use_ssh' is mutually exclusive with 'remote_username' and 'remote_passoword'")
+		ctx.Error(http.StatusBadRequest, "CreatePushMirror", "'use_ssh' is mutually exclusive with 'remote_username' and 'remote_password'")
 		return
 	}
 
 	address, err := forms.ParseRemoteAddr(mirrorOption.RemoteAddress, mirrorOption.RemoteUsername, mirrorOption.RemotePassword)
 	if err == nil {
-		err = migrations.IsPushMirrorURLAllowed(address, ctx.ContextUser)
+		err = migrations_allowlist.IsPushMirrorURLAllowed(address, ctx.User())
 	}
 	if err != nil {
 		HandleRemoteAddressError(ctx, err)
 		return
 	}
 
-	remoteSuffix, err := util.CryptoRandomString(10)
-	if err != nil {
-		ctx.ServerError("CryptoRandomString", err)
-		return
-	}
+	remoteSuffix := util.CryptoRandomString(util.RandomStringLow)
 
 	remoteAddress, err := util.SanitizeURL(address)
 	if err != nil {
@@ -389,6 +386,7 @@ func CreatePushMirror(ctx *context.APIContext, mirrorOption *api.CreatePushMirro
 		Interval:      interval,
 		SyncOnCommit:  mirrorOption.SyncOnCommit,
 		RemoteAddress: remoteAddress,
+		BranchFilter:  mirrorOption.BranchFilter,
 	}
 
 	var plainPrivateKey []byte

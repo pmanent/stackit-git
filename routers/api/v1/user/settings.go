@@ -14,11 +14,11 @@ import (
 	user_service "forgejo.org/services/user"
 )
 
-// GetUserSettings returns user settings
+// GetUserSettings returns doer's account settings
 func GetUserSettings(ctx *context.APIContext) {
 	// swagger:operation GET /user/settings user getUserSettings
 	// ---
-	// summary: Get user settings
+	// summary: Get current user's account settings
 	// produces:
 	// - application/json
 	// responses:
@@ -28,14 +28,14 @@ func GetUserSettings(ctx *context.APIContext) {
 	//     "$ref": "#/responses/unauthorized"
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
-	ctx.JSON(http.StatusOK, convert.User2UserSettings(ctx.Doer))
+	ctx.JSON(http.StatusOK, convert.User2UserSettings(ctx.Doer()))
 }
 
-// UpdateUserSettings returns user settings
+// UpdateUserSettings updates settings in doer's account
 func UpdateUserSettings(ctx *context.APIContext) {
 	// swagger:operation PATCH /user/settings user updateUserSettings
 	// ---
-	// summary: Update user settings
+	// summary: Update settings in current user's account
 	// parameters:
 	// - name: body
 	//   in: body
@@ -67,10 +67,10 @@ func UpdateUserSettings(ctx *context.APIContext) {
 		KeepActivityPrivate: optional.FromPtr(form.HideActivity),
 		EnableRepoUnitHints: optional.FromPtr(form.EnableRepoUnitHints),
 	}
-	if err := user_service.UpdateUser(ctx, ctx.Doer, opts); err != nil {
+	if err := user_service.UpdateUser(ctx, ctx.Doer(), opts); err != nil {
 		ctx.InternalServerError(err)
 		return
 	}
 
-	ctx.JSON(http.StatusOK, convert.User2UserSettings(ctx.Doer))
+	ctx.JSON(http.StatusOK, convert.User2UserSettings(ctx.Doer()))
 }

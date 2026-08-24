@@ -13,7 +13,7 @@ import (
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/models/perm"
 	project_model "forgejo.org/models/project"
-	attachment_model "forgejo.org/models/repo"
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/json"
@@ -57,10 +57,7 @@ func Projects(ctx *context.Context) {
 	isShowClosed := strings.ToLower(ctx.FormTrim("state")) == "closed"
 	keyword := ctx.FormTrim("q")
 	repo := ctx.Repo.Repository
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 
 	ctx.Data["OpenCount"] = repo.NumOpenProjects
 	ctx.Data["ClosedCount"] = repo.NumClosedProjects
@@ -120,7 +117,7 @@ func Projects(ctx *context.Context) {
 	pager.AddParam(ctx, "state", "State")
 	ctx.Data["Page"] = pager
 
-	ctx.Data["CanWriteProjects"] = ctx.Repo.Permission.CanWrite(unit.TypeProjects)
+	ctx.Data["CanWriteProjects"] = ctx.Repo.CanWrite(unit.TypeProjects)
 	ctx.Data["IsShowClosed"] = isShowClosed
 	ctx.Data["IsProjectsPage"] = true
 	ctx.Data["SortType"] = sortType
@@ -146,7 +143,7 @@ func RenderNewProject(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.projects.new")
 	ctx.Data["TemplateConfigs"] = project_model.GetTemplateConfigs()
 	ctx.Data["CardTypes"] = project_model.GetCardConfig()
-	ctx.Data["CanWriteProjects"] = ctx.Repo.Permission.CanWrite(unit.TypeProjects)
+	ctx.Data["CanWriteProjects"] = ctx.Repo.CanWrite(unit.TypeProjects)
 	ctx.Data["CancelLink"] = ctx.Repo.Repository.Link() + "/projects"
 	ctx.HTML(http.StatusOK, tplProjectsNew)
 }
@@ -192,8 +189,13 @@ func ChangeProjectStatus(ctx *context.Context) {
 	}
 	id := ctx.ParamsInt64(":id")
 
-	if err := project_model.ChangeProjectStatusByRepoIDAndID(ctx, ctx.Repo.Repository.ID, id, toClose); err != nil {
-		ctx.NotFoundOrServerError("ChangeProjectStatusByRepoIDAndID", project_model.IsErrProjectNotExist, err)
+	project, err := project_model.GetProjectForRepoByID(ctx, ctx.Repo.Repository.ID, id)
+	if err != nil {
+		ctx.NotFoundOrServerError("GetProjectForRepoByID", project_model.IsErrProjectNotExist, err)
+		return
+	}
+	if err := project_model.ChangeProjectStatus(ctx, project, toClose); err != nil {
+		ctx.ServerError("ChangeProjectStatus", err)
 		return
 	}
 	ctx.JSONRedirect(project_model.ProjectLinkForRepo(ctx.Repo.Repository, id))
@@ -228,7 +230,7 @@ func DeleteProject(ctx *context.Context) {
 func RenderEditProject(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.projects.edit")
 	ctx.Data["PageIsEditProjects"] = true
-	ctx.Data["CanWriteProjects"] = ctx.Repo.Permission.CanWrite(unit.TypeProjects)
+	ctx.Data["CanWriteProjects"] = ctx.Repo.CanWrite(unit.TypeProjects)
 	ctx.Data["CardTypes"] = project_model.GetCardConfig()
 
 	p, err := project_model.GetProjectByID(ctx, ctx.ParamsInt64(":id"))
@@ -262,7 +264,7 @@ func EditProjectPost(ctx *context.Context) {
 
 	ctx.Data["Title"] = ctx.Tr("repo.projects.edit")
 	ctx.Data["PageIsEditProjects"] = true
-	ctx.Data["CanWriteProjects"] = ctx.Repo.Permission.CanWrite(unit.TypeProjects)
+	ctx.Data["CanWriteProjects"] = ctx.Repo.CanWrite(unit.TypeProjects)
 	ctx.Data["CardTypes"] = project_model.GetCardConfig()
 	ctx.Data["CancelLink"] = project_model.ProjectLinkForRepo(ctx.Repo.Repository, projectID)
 
@@ -330,10 +332,10 @@ func ViewProject(ctx *context.Context) {
 	}
 
 	if project.CardType != project_model.CardTypeTextOnly {
-		issuesAttachmentMap := make(map[int64][]*attachment_model.Attachment)
+		issuesAttachmentMap := make(map[int64][]*repo_model.Attachment)
 		for _, issuesList := range issuesMap {
 			for _, issue := range issuesList {
-				if issueAttachment, err := attachment_model.GetAttachmentsByIssueIDImagesLatest(ctx, issue.ID); err == nil {
+				if issueAttachment, err := repo_model.GetAttachmentsByIssueIDImagesLatest(ctx, issue.ID); err == nil {
 					issuesAttachmentMap[issue.ID] = issueAttachment
 				}
 			}
@@ -353,8 +355,10 @@ func ViewProject(ctx *context.Context) {
 
 			if len(referencedIDs) > 0 {
 				if linkedPrs, err := issues_model.Issues(ctx, &issues_model.IssuesOptions{
-					IssueIDs: referencedIDs,
-					IsPull:   optional.Some(true),
+					IssueIDs:  referencedIDs,
+					IsPull:    optional.Some(true),
+					User:      ctx.Doer,
+					AllPublic: !ctx.IsSigned,
 				}); err == nil {
 					linkedPrsMap[issue.ID] = linkedPrs
 				}
@@ -378,7 +382,7 @@ func ViewProject(ctx *context.Context) {
 
 	ctx.Data["Title"] = project.Title
 	ctx.Data["IsProjectsPage"] = true
-	ctx.Data["CanWriteProjects"] = ctx.Repo.Permission.CanWrite(unit.TypeProjects)
+	ctx.Data["CanWriteProjects"] = ctx.Repo.CanWrite(unit.TypeProjects)
 	ctx.Data["Project"] = project
 	ctx.Data["IssuesMap"] = issuesMap
 	ctx.Data["Columns"] = columns
@@ -398,7 +402,7 @@ func UpdateIssueProject(ctx *context.Context) {
 		return
 	}
 	if _, err := issues.LoadRepositories(ctx); err != nil {
-		ctx.ServerError("LoadProjects", err)
+		ctx.ServerError("LoadRepositories", err)
 		return
 	}
 
@@ -645,6 +649,7 @@ func MoveIssues(ctx *context.Context) {
 	form := &movedIssuesForm{}
 	if err = json.NewDecoder(ctx.Req.Body).Decode(&form); err != nil {
 		ctx.ServerError("DecodeMovedIssuesForm", err)
+		return
 	}
 
 	issueIDs := make([]int64, 0, len(form.Issues))

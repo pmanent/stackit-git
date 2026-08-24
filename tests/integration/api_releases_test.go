@@ -6,8 +6,6 @@ package integration
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -99,7 +97,7 @@ func createNewReleaseUsingAPI(t *testing.T, token string, owner *user_model.User
 		Title:   newRelease.Title,
 	}
 	unittest.AssertExistsAndLoadBean(t, rel)
-	assert.EqualValues(t, newRelease.Note, rel.Note)
+	assert.Equal(t, newRelease.Note, rel.Note)
 
 	return &newRelease
 }
@@ -157,7 +155,7 @@ func TestAPIReleaseCreateAndUpdate(t *testing.T) {
 		Title:   newRelease.Title,
 	}
 	unittest.AssertExistsAndLoadBean(t, rel)
-	assert.EqualValues(t, rel.Note, newRelease.Note)
+	assert.Equal(t, rel.Note, newRelease.Note)
 	assert.True(t, newRelease.HideArchiveLinks)
 }
 
@@ -290,6 +288,106 @@ func TestAPIReleaseGetDraftByTag(t *testing.T) {
 	assert.NotEmpty(t, err.Message)
 }
 
+func TestAPIReleaseGet(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+
+	session := loginUser(t, "user2")
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeReadRepository)
+
+	t.Run("draft release, no permission", func(t *testing.T) {
+		rel := unittest.AssertExistsAndLoadBean(t, &repo_model.Release{
+			RepoID:  repo.ID,
+			TagName: "draft-release",
+		})
+		assert.True(t, rel.IsDraft)
+		assert.False(t, rel.IsTag) // wouldn't test the CanWrite(TypeReleases) check for the draft, if this were the case
+
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d", repo.OwnerName, repo.Name, rel.ID))
+		resp := MakeRequest(t, req, http.StatusNotFound)
+		var err *api.APIError
+		DecodeJSON(t, resp, &err)
+		assert.NotEmpty(t, err.Message)
+	})
+
+	t.Run("draft release, w/ permission", func(t *testing.T) {
+		rel := unittest.AssertExistsAndLoadBean(t, &repo_model.Release{
+			RepoID:  repo.ID,
+			TagName: "draft-release",
+		})
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d", repo.OwnerName, repo.Name, rel.ID)).
+			AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+		var apiRelease *api.Release
+		DecodeJSON(t, resp, &apiRelease)
+		assert.Equal(t, rel.TagName, apiRelease.TagName)
+	})
+
+	t.Run("published release", func(t *testing.T) {
+		rel := unittest.AssertExistsAndLoadBean(t, &repo_model.Release{
+			RepoID:  repo.ID,
+			TagName: "v1.1",
+		})
+		assert.False(t, rel.IsDraft)
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d", repo.OwnerName, repo.Name, rel.ID))
+		resp := MakeRequest(t, req, http.StatusOK)
+		var apiRelease *api.Release
+		DecodeJSON(t, resp, &apiRelease)
+		assert.Equal(t, rel.TagName, apiRelease.TagName)
+	})
+}
+
+func TestAPIReleaseGetAssets(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+
+	session := loginUser(t, "user2")
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeReadRepository)
+
+	t.Run("draft release, no permission", func(t *testing.T) {
+		rel := unittest.AssertExistsAndLoadBean(t, &repo_model.Release{
+			RepoID:  repo.ID,
+			TagName: "draft-release",
+		})
+		assert.True(t, rel.IsDraft)
+		assert.False(t, rel.IsTag) // wouldn't test the CanWrite(TypeReleases) check for the draft, if this were the case
+
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d/assets", repo.OwnerName, repo.Name, rel.ID))
+		resp := MakeRequest(t, req, http.StatusNotFound)
+		var err *api.APIError
+		DecodeJSON(t, resp, &err)
+		assert.NotEmpty(t, err.Message)
+	})
+
+	t.Run("draft release, w/ permission", func(t *testing.T) {
+		rel := unittest.AssertExistsAndLoadBean(t, &repo_model.Release{
+			RepoID:  repo.ID,
+			TagName: "draft-release",
+		})
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d/assets", repo.OwnerName, repo.Name, rel.ID)).
+			AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+		var attach []*api.Attachment
+		DecodeJSON(t, resp, &attach)
+		assert.Empty(t, attach)
+	})
+
+	t.Run("published release", func(t *testing.T) {
+		rel := unittest.AssertExistsAndLoadBean(t, &repo_model.Release{
+			RepoID:  repo.ID,
+			TagName: "v1.1",
+		})
+		assert.False(t, rel.IsDraft)
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d/assets", repo.OwnerName, repo.Name, rel.ID))
+		resp := MakeRequest(t, req, http.StatusOK)
+		var attach []*api.Attachment
+		DecodeJSON(t, resp, &attach)
+		assert.Len(t, attach, 1)
+	})
+}
+
 func TestAPIReleaseDeleteByTagName(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
@@ -335,35 +433,28 @@ func TestAPIReleaseUploadAsset(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 
 		body := &bytes.Buffer{}
-
-		writer := multipart.NewWriter(body)
-		part, err := writer.CreateFormFile("attachment", filename)
-		require.NoError(t, err)
-		_, err = io.Copy(part, bytes.NewReader(buff.Bytes()))
-		require.NoError(t, err)
-		err = writer.Close()
-		require.NoError(t, err)
+		contentType := tests.WriteImageBody(t, buff, filename, body)
 
 		req := NewRequestWithBody(t, http.MethodPost, assetURL, bytes.NewReader(body.Bytes())).
 			AddTokenAuth(token).
-			SetHeader("Content-Type", writer.FormDataContentType())
+			SetHeader("Content-Type", contentType)
 		resp := MakeRequest(t, req, http.StatusCreated)
 
 		var attachment *api.Attachment
 		DecodeJSON(t, resp, &attachment)
 
-		assert.EqualValues(t, filename, attachment.Name)
+		assert.Equal(t, filename, attachment.Name)
 		assert.EqualValues(t, 104, attachment.Size)
 
 		req = NewRequestWithBody(t, http.MethodPost, assetURL+"?name=test-asset", bytes.NewReader(body.Bytes())).
 			AddTokenAuth(token).
-			SetHeader("Content-Type", writer.FormDataContentType())
+			SetHeader("Content-Type", contentType)
 		resp = MakeRequest(t, req, http.StatusCreated)
 
 		var attachment2 *api.Attachment
 		DecodeJSON(t, resp, &attachment2)
 
-		assert.EqualValues(t, "test-asset", attachment2.Name)
+		assert.Equal(t, "test-asset", attachment2.Name)
 		assert.EqualValues(t, 104, attachment2.Size)
 	})
 
@@ -381,9 +472,9 @@ func TestAPIReleaseUploadAsset(t *testing.T) {
 		var attachment *api.Attachment
 		DecodeJSON(t, resp, &attachment)
 
-		assert.EqualValues(t, "stream.bin", attachment.Name)
+		assert.Equal(t, "stream.bin", attachment.Name)
 		assert.EqualValues(t, 104, attachment.Size)
-		assert.EqualValues(t, "attachment", attachment.Type)
+		assert.Equal(t, "attachment", attachment.Type)
 	})
 }
 
@@ -446,6 +537,30 @@ func TestAPIReleaseExternalAsset(t *testing.T) {
 	assert.Equal(t, "external", attachment.Type)
 }
 
+func TestAPIReleaseAllowedAPIURL(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
+	session := loginUser(t, owner.LowerName)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+
+	r := createNewReleaseUsingAPI(t, token, owner, repo, "release-tag", "", "Release Tag", "test")
+	internalURL := "https://localhost:3003/api/packages/owner/generic/test/1.0.0/test.txt"
+
+	req := NewRequest(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d/assets?name=test-asset&external_url=%s", owner.Name, repo.Name, r.ID, url.QueryEscape(internalURL))).
+		AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusCreated)
+
+	var attachment *api.Attachment
+	DecodeJSON(t, resp, &attachment)
+
+	assert.Equal(t, "test-asset", attachment.Name)
+	assert.EqualValues(t, 0, attachment.Size)
+	assert.Equal(t, internalURL, attachment.DownloadURL)
+	assert.Equal(t, "external", attachment.Type)
+}
+
 func TestAPIReleaseDuplicateAsset(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
@@ -459,18 +574,11 @@ func TestAPIReleaseDuplicateAsset(t *testing.T) {
 	filename := "image.png"
 	buff := generateImg()
 	body := &bytes.Buffer{}
-
-	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile("attachment", filename)
-	require.NoError(t, err)
-	_, err = io.Copy(part, &buff)
-	require.NoError(t, err)
-	err = writer.Close()
-	require.NoError(t, err)
+	contentType := tests.WriteImageBody(t, buff, filename, body)
 
 	req := NewRequestWithBody(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d/assets?name=test-asset&external_url=https%%3A%%2F%%2Fforgejo.org%%2F", owner.Name, repo.Name, r.ID), body).
 		AddTokenAuth(token)
-	req.Header.Add("Content-Type", writer.FormDataContentType())
+	req.Header.Add("Content-Type", contentType)
 	MakeRequest(t, req, http.StatusBadRequest)
 }
 
@@ -487,4 +595,43 @@ func TestAPIReleaseMissingAsset(t *testing.T) {
 	req := NewRequest(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/releases/%d/assets?name=test-asset", owner.Name, repo.Name, r.ID)).
 		AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusBadRequest)
+}
+
+func TestAPIReleaseMissingTitle(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
+	session := loginUser(t, owner.LowerName)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+
+	gitRepo, err := gitrepo.OpenRepository(git.DefaultContext, repo)
+	require.NoError(t, err)
+	defer gitRepo.Close()
+
+	err = gitRepo.CreateTag("v0.0.1", "master")
+	require.NoError(t, err)
+
+	target, err := gitRepo.GetTagCommitID("v0.0.1")
+	require.NoError(t, err)
+
+	r := createNewReleaseUsingAPI(t, token, owner, repo, target, "", "", "")
+	assert.Equal(t, r.Title, target)
+}
+
+func TestAPIReleaseGithubFormat(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	token := getUserToken(t, user2.LowerName, auth_model.AccessTokenScopeReadRepository)
+
+	req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/%s/%s/releases/1", user2.Name, repo.Name)).AddTokenAuth(token)
+	req.Header.Add("Accept", "application/vnd.github+json")
+	resp := MakeRequest(t, req, http.StatusOK)
+
+	var apiRelease *api.Release
+	DecodeJSON(t, resp, &apiRelease)
+
+	assert.True(t, strings.HasSuffix(apiRelease.UploadURL, "/api/v1/repos/user2/repo1/releases/1/assets{?name,label}"), apiRelease.UploadURL)
 }

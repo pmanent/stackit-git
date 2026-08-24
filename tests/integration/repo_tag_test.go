@@ -32,32 +32,61 @@ func TestTagViewWithoutRelease(t *testing.T) {
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
 
+	session := loginUser(t, owner.Name)
+
 	err := release.CreateNewTag(git.DefaultContext, owner, repo, "master", "no-release", "release-less tag")
 	require.NoError(t, err)
 
 	// Test that the page loads
 	req := NewRequestf(t, "GET", "/%s/releases/tag/no-release", repo.FullName())
-	resp := MakeRequest(t, req, http.StatusOK)
+	resp := session.MakeRequest(t, req, http.StatusOK)
 
 	// Test that the tags sub-menu is active and has a counter
 	htmlDoc := NewHTMLParser(t, resp.Body)
-	tagsTab := htmlDoc.Find(".small-menu-items .active.item[href$='/tags']")
+	tagsTab := htmlDoc.Find(".switch .active.item[href$='/tags']")
 	assert.Contains(t, tagsTab.Text(), "4 tags")
 
 	// Test that the release sub-menu isn't active
-	releaseLink := htmlDoc.Find(".small-menu-items .item[href$='/releases']")
+	releaseLink := htmlDoc.Find(".switch .item[href$='/releases']")
 	assert.False(t, releaseLink.HasClass("active"))
 
 	// Test that the title is displayed
-	releaseTitle := strings.TrimSpace(htmlDoc.Find("h4.release-list-title > a").Text())
+	releaseTitle := strings.TrimSpace(htmlDoc.Find(".release-title-wrap h4 > a").Text())
 	assert.Equal(t, "no-release", releaseTitle)
 
 	// Test that there is no "Stable" link
-	htmlDoc.AssertElement(t, "h4.release-list-title > span.ui.green.label", false)
+	htmlDoc.AssertElement(t, ".release-title-wrap h4 > span.ui.green.label", false)
+
+	// Ensure that there is no "Edit" button
+	htmlDoc.AssertElement(t, ".detail a.muted > svg.octicon-pencil", false)
+
+	// Test that the correct user is linked
+	ownerLinkHref, _ := htmlDoc.Find("a.author").Attr("href")
+	assert.Equal(t, "/user2", ownerLinkHref)
+
+	t.Run("Ghost owner", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		ghost := user_model.NewGhostUser()
+		err = release.CreateNewTag(git.DefaultContext, ghost, repo, "master", "ghost-tag", "a spooky tag")
+		require.NoError(t, err)
+
+		req := NewRequestf(t, "GET", "/%s/releases/tag/ghost-tag", repo.FullName())
+		resp := session.MakeRequest(t, req, http.StatusOK)
+
+		htmlDoc := NewHTMLParser(t, resp.Body)
+
+		// Test that the Ghost user does not link anywhere
+		ownerLink := htmlDoc.Find("a.author")
+		_, ok := ownerLink.Attr("href")
+		assert.Equal(t, 1, ownerLink.Length())
+		assert.False(t, ok)
+		assert.Equal(t, "Ghost", ownerLink.Text())
+	})
 }
 
 func TestCreateNewTagProtected(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 		owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
 
@@ -78,7 +107,7 @@ func TestCreateNewTagProtected(t *testing.T) {
 		t.Run("Git", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
-			httpContext := NewAPITestContext(t, owner.Name, repo.Name)
+			httpContext := NewAPITestContext(t, owner.Name, repo.Name, auth_model.AccessTokenScopeReadRepository)
 
 			dstPath := t.TempDir()
 
@@ -98,7 +127,7 @@ func TestCreateNewTagProtected(t *testing.T) {
 		t.Run("GitTagForce", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
-			httpContext := NewAPITestContext(t, owner.Name, repo.Name)
+			httpContext := NewAPITestContext(t, owner.Name, repo.Name, auth_model.AccessTokenScopeReadRepository)
 
 			dstPath := t.TempDir()
 
@@ -119,19 +148,19 @@ func TestCreateNewTagProtected(t *testing.T) {
 			req := NewRequestf(t, "GET", "/%s/releases/tag/v-1.1", repo.FullName())
 			resp := MakeRequest(t, req, http.StatusOK)
 			htmlDoc := NewHTMLParser(t, resp.Body)
-			tagsTab := htmlDoc.Find(".release-list-title")
+			tagsTab := htmlDoc.Find(".release-title-wrap h4")
 			assert.Contains(t, tagsTab.Text(), "force update v2")
 		})
 	})
 }
 
 func TestSyncRepoTags(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 		owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
 
 		t.Run("Git", func(t *testing.T) {
-			httpContext := NewAPITestContext(t, owner.Name, repo.Name)
+			httpContext := NewAPITestContext(t, owner.Name, repo.Name, auth_model.AccessTokenScopeReadRepository)
 
 			dstPath := t.TempDir()
 
@@ -151,7 +180,7 @@ func TestSyncRepoTags(t *testing.T) {
 				req := NewRequestf(t, "GET", "/%s/releases/tag/v2", repo.FullName())
 				resp := MakeRequest(t, req, http.StatusOK)
 				htmlDoc := NewHTMLParser(t, resp.Body)
-				tagsTab := htmlDoc.Find(".release-list-title")
+				tagsTab := htmlDoc.Find(".release-title-wrap h4")
 				assert.Contains(t, tagsTab.Text(), "this is an annotated tag")
 			}
 
@@ -164,13 +193,13 @@ func TestSyncRepoTags(t *testing.T) {
 }
 
 func TestRepushTag(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 		owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
 		session := loginUser(t, owner.LowerName)
 		token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
 
-		httpContext := NewAPITestContext(t, owner.Name, repo.Name)
+		httpContext := NewAPITestContext(t, owner.Name, repo.Name, auth_model.AccessTokenScopeReadRepository)
 
 		dstPath := t.TempDir()
 

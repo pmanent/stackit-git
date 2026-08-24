@@ -11,13 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"forgejo.org/models/asymkey"
 	"forgejo.org/models/db"
 	db_install "forgejo.org/models/db/install"
-	"forgejo.org/models/migrations"
+	"forgejo.org/models/gitea_migrations"
 	system_model "forgejo.org/models/system"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/auth/password/hash"
@@ -102,11 +104,8 @@ func Install(ctx *context.Context) {
 
 	curDBType := setting.Database.Type.String()
 	var isCurDBTypeSupported bool
-	for _, dbType := range setting.SupportedDatabaseTypes {
-		if dbType == curDBType {
-			isCurDBTypeSupported = true
-			break
-		}
+	if slices.Contains(setting.SupportedDatabaseTypes, curDBType) {
+		isCurDBTypeSupported = true
 	}
 	if !isCurDBTypeSupported {
 		curDBType = "mysql"
@@ -361,7 +360,8 @@ func SubmitInstall(ctx *context.Context) {
 	}
 
 	// Init the engine with migration
-	if err = db.InitEngineWithMigration(ctx, migrations.Migrate); err != nil {
+	// Wrap migrations.Migrate into a function of type func(db.Engine) error to fix diagnostics.
+	if err = db.InitEngineWithMigration(ctx, gitea_migrations.WrapperMigrate); err != nil {
 		db.UnsetDefaultEngine()
 		ctx.Data["Err_DbSetting"] = true
 		ctx.RenderWithErr(ctx.Tr("install.invalid_db_setting", err), tplInstall, &form)
@@ -404,16 +404,31 @@ func SubmitInstall(ctx *context.Context) {
 	} else {
 		cfg.Section("server").Key("DISABLE_SSH").SetValue("false")
 		cfg.Section("server").Key("SSH_PORT").SetValue(fmt.Sprint(form.SSHPort))
+
+		sshKeyErrors, err := asymkey.InspectPublicKeys(ctx)
+		if err != nil {
+			ctx.RenderWithErr(ctx.Tr("install.ssh_authorized_keys_inspection_error", err), tplInstall, &form)
+			return
+		}
+
+		var authorizedKeysWillCauseFatalError bool
+		for _, finding := range sshKeyErrors {
+			if finding.Type == asymkey.InspectionResultUnexpectedKey {
+				// Any single finding of this type would cause `ssh.Init` to have a fatal error on Forgejo startup, so
+				// let's note it here while the install page is still usable and allow users to deal with it.
+				authorizedKeysWillCauseFatalError = true
+			}
+		}
+		if authorizedKeysWillCauseFatalError {
+			ctx.RenderWithErr(ctx.Tr("install.ssh_authorized_keys_unexpected_key", filepath.Join(setting.SSH.RootPath, "authorized_keys")), tplInstall, &form)
+			return
+		}
 	}
 
 	if form.LFSRootPath != "" {
 		cfg.Section("server").Key("LFS_START_SERVER").SetValue("true")
 		cfg.Section("lfs").Key("PATH").SetValue(form.LFSRootPath)
-		var lfsJwtSecret string
-		if _, lfsJwtSecret, err = generate.NewJwtSecret(); err != nil {
-			ctx.RenderWithErr(ctx.Tr("install.lfs_jwt_secret_failed", err), tplInstall, &form)
-			return
-		}
+		_, lfsJwtSecret := generate.NewJwtSecret()
 		cfg.Section("server").Key("LFS_JWT_SECRET").SetValue(lfsJwtSecret)
 	} else {
 		cfg.Section("server").Key("LFS_START_SERVER").SetValue("false")
@@ -474,11 +489,11 @@ func SubmitInstall(ctx *context.Context) {
 	// User Story 52176
 	cfg.Section("stackitgitsettings").Key("ENABLE_USER_PASS_SIGNIN").SetValue("true")
 	// User Story 44186
-	cfg.Section("stackitgitsettings").Key("ORGANIZATIONID").SetValue(setting.StackitGit.OrganizationId)
+	cfg.Section("stackitgitsettings").Key("ORGANIZATIONID").SetValue(setting.StackitGit.OrganizationID)
 	cfg.Section("stackitgitsettings").Key("ADMIN_PERMISSIONS").SetValue(setting.StackitGit.AdminPermissions)
-	cfg.Section("stackitgitsettings").Key("INSTANCEID").SetValue(setting.StackitGit.InstanceId)
+	cfg.Section("stackitgitsettings").Key("INSTANCEID").SetValue(setting.StackitGit.InstanceID)
 	// User Story 51702
-	cfg.Section("stackitgitsettings").Key("PROJECTID").SetValue(setting.StackitGit.ProjectId)
+	cfg.Section("stackitgitsettings").Key("PROJECTID").SetValue(setting.StackitGit.ProjectID)
 	// User Story [STACKITGIT-390].
 	// [STACKITGIT-390]: https://jira.schwarz/browse/STACKITGIT-390
 	cfg.Section("stackitgitsettings").Key("LIMIT_DISK_STORAGE_SPACE").SetValue(setting.StackitGit.LimitDiskStorageSpace)
@@ -499,21 +514,13 @@ func SubmitInstall(ctx *context.Context) {
 	// FIXME: at the moment, no matter oauth2 is enabled or not, it must generate a "oauth2 JWT_SECRET"
 	// see the "loadOAuth2From" in "setting/oauth2.go"
 	if !cfg.Section("oauth2").HasKey("JWT_SECRET") && !cfg.Section("oauth2").HasKey("JWT_SECRET_URI") {
-		_, jwtSecretBase64, err := generate.NewJwtSecret()
-		if err != nil {
-			ctx.RenderWithErr(ctx.Tr("install.secret_key_failed", err), tplInstall, &form)
-			return
-		}
+		_, jwtSecretBase64 := generate.NewJwtSecret()
 		cfg.Section("oauth2").Key("JWT_SECRET").SetValue(jwtSecretBase64)
 	}
 
 	// if there is already a SECRET_KEY, we should not overwrite it, otherwise the encrypted data will not be able to be decrypted
 	if setting.SecretKey == "" {
-		var secretKey string
-		if secretKey, err = generate.NewSecretKey(); err != nil {
-			ctx.RenderWithErr(ctx.Tr("install.secret_key_failed", err), tplInstall, &form)
-			return
-		}
+		secretKey := generate.NewSecretKey()
 		cfg.Section("security").Key("SECRET_KEY").SetValue(secretKey)
 	}
 
@@ -604,7 +611,7 @@ func SubmitInstall(ctx *context.Context) {
 
 	go func() {
 		// Sleep for a while to make sure the user's browser has loaded the post-install page and its assets (images, css, js)
-		// What if this duration is not long enough? That's impossible -- if the user can't load the simple page in time, how could they install or use Gitea in the future ....
+		// What if this duration is not long enough? That's impossible -- if the user can't load the simple page in time, how could they install or use Forgejo in the future ....
 		time.Sleep(3 * time.Second)
 
 		// Now get the http.Server from this request and shut it down

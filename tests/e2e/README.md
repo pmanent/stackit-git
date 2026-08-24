@@ -215,7 +215,7 @@ screenshots are automatically created at the end of each test.
 If your test visits different relevant screens or pages during the test,
 or creates a custom `page` from context
 (e.g. for tests that require a signed-in user)
-calling `await save_visual(page);` explicitly in relevant positions is encouraged.
+calling `await screenshot(page);` explicitly in relevant positions is encouraged.
 
 Please confirm locally that your screenshots are stable by performing several runs of your test.
 When screenshots are available and reproducible,
@@ -224,7 +224,7 @@ check in your test without the screenshots.
 When your screenshots differ between runs,
 for example because dynamic elements (e.g. timestamps, commit hashes etc)
 change between runs,
-mask these elements in the `save_visual` function in `utils_e2e.ts`.
+mask these elements in the `masks` function in `shared/screenshots.ts`.
 
 #### Working with screenshots
 
@@ -233,7 +233,7 @@ The following environment variables control visual testing:
 `VISUAL_TEST=1` will create screenshots in tests/e2e/test-snapshots.
   The test will fail the first time,
   because the screenshots are not included with Forgejo.
-  Subsequent runs will comopare against your local copy of the screenshots.
+  Subsequent runs will compare against your local copy of the screenshots.
 
 `ACCEPT_VISUAL=1` will overwrite the snapshot images with new images.
 
@@ -268,17 +268,6 @@ Browser testing can take some time.
 If you want to iterate fast,
 save your time and only run very selected tests.
 Use only one browser.
-
-### Skip Safari if it doesn't work
-
-Many contributors have issues getting Safari (webkit)
-and especially Safari Mobile to work.
-
-At the top of your test function, you can use:
-
-~~~javascript
-test.skip(workerInfo.project.name === 'Mobile Safari', 'Unable to get tests working on Safari Mobile.');
-~~~
 
 ### Don't forget the formatting.
 
@@ -364,7 +353,7 @@ the click will succeed,
 but the depending interaction won't,
 although playwright repeatedly tries to find the content.
 
-You can [group statements using toPass]()https://playwright.dev/docs/test-assertions#expecttopass).
+You can [group statements using toPass](https://playwright.dev/docs/test-assertions#expecttopass).
 This code retries the dropdown click until the second item is found.
 
 ~~~js

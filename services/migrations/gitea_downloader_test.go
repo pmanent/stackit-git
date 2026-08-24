@@ -6,24 +6,39 @@ package migrations
 import (
 	"os"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
 	"forgejo.org/models/unittest"
 	base "forgejo.org/modules/migration"
+	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
+	"forgejo.org/services/migrations/allowlist"
 
+	gitea_sdk "code.gitea.io/sdk/gitea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGiteaDownloadRepo(t *testing.T) {
+	defer test.MockVariableValueWithReset(&setting.Migrations.AllowLocalNetworks, true, func() { require.NoError(t, allowlist.Init()) })()
+
 	giteaToken := os.Getenv("GITEA_TOKEN")
 
 	fixturePath := "./testdata/gitea/full_download"
 	server := unittest.NewMockWebServer(t, "https://gitea.com", fixturePath, giteaToken != "")
 	defer server.Close()
 
-	downloader, err := NewGiteaDownloader(t.Context(), server.URL, "gitea/test_repo", "", "", giteaToken)
+	giteaClient, err := gitea_sdk.NewClient(
+		server.URL,
+		gitea_sdk.SetToken(giteaToken),
+		gitea_sdk.SetBasicAuth("", ""),
+		gitea_sdk.SetContext(t.Context()),
+		gitea_sdk.SetHTTPClient(allowlist.NewMigrationHTTPClient()),
+	)
+	require.NoError(t, err, "Clould not create Client")
+	downloader, err := NewGiteaDownloader(t.Context(), giteaClient, server.URL, "gitea/test_repo")
 	if downloader == nil {
 		t.Fatal("NewGitlabDownloader is nil")
 	}
@@ -45,7 +60,7 @@ func TestGiteaDownloadRepo(t *testing.T) {
 	topics, err := downloader.GetTopics()
 	require.NoError(t, err)
 	sort.Strings(topics)
-	assert.EqualValues(t, []string{"ci", "gitea", "migration", "test"}, topics)
+	assert.Equal(t, []string{"ci", "gitea", "migration", "test"}, topics)
 
 	labels, err := downloader.GetLabels()
 	require.NoError(t, err)
@@ -83,16 +98,16 @@ func TestGiteaDownloadRepo(t *testing.T) {
 		{
 			Title:    "V2 Finalize",
 			Created:  time.Unix(0, 0),
-			Deadline: timePtr(time.Unix(1599263999, 0)),
-			Updated:  timePtr(time.Date(2022, 11, 13, 5, 29, 15, 0, time.UTC)),
+			Deadline: new(time.Unix(1599263999, 0)),
+			Updated:  new(time.Date(2022, 11, 13, 5, 29, 15, 0, time.UTC)),
 			State:    "open",
 		},
 		{
 			Title:       "V1",
 			Description: "Generate Content",
 			Created:     time.Unix(0, 0),
-			Updated:     timePtr(time.Unix(0, 0)),
-			Closed:      timePtr(time.Unix(1598985406, 0)),
+			Updated:     new(time.Unix(0, 0)),
+			Closed:      new(time.Unix(1598985406, 0)),
 			State:       "closed",
 		},
 	}, milestones)
@@ -132,7 +147,7 @@ func TestGiteaDownloadRepo(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, isEnd)
 	assert.Len(t, issues, 7)
-	assert.EqualValues(t, "open", issues[0].State)
+	assert.Equal(t, "open", issues[0].State)
 
 	issues, isEnd, err = downloader.GetIssues(3, 2)
 	require.NoError(t, err)
@@ -168,7 +183,7 @@ func TestGiteaDownloadRepo(t *testing.T) {
 					Content:  "laugh",
 				},
 			},
-			Closed: timePtr(time.Date(2020, 9, 1, 15, 49, 34, 0, time.UTC)),
+			Closed: new(time.Date(2020, 9, 1, 15, 49, 34, 0, time.UTC)),
 		},
 		{
 			Number:      2,
@@ -187,7 +202,7 @@ func TestGiteaDownloadRepo(t *testing.T) {
 				Color:       "d4c5f9",
 				Description: "",
 			}},
-			Closed: timePtr(time.Unix(1598969497, 0)),
+			Closed: new(time.Unix(1598969497, 0)),
 		},
 	}, issues)
 
@@ -234,7 +249,7 @@ func TestGiteaDownloadRepo(t *testing.T) {
 		IsLocked:    false,
 		Created:     time.Unix(1598982759, 0),
 		Updated:     time.Unix(1599023425, 0),
-		Closed:      timePtr(time.Date(2020, 9, 1, 17, 55, 33, 0, time.UTC)),
+		Closed:      new(time.Date(2020, 9, 1, 17, 55, 33, 0, time.UTC)),
 		Assignees:   []string{"techknowlogick"},
 		Base: base.PullRequestBranch{
 			CloneURL:  "",
@@ -251,7 +266,7 @@ func TestGiteaDownloadRepo(t *testing.T) {
 			OwnerName: "6543-forks",
 		},
 		Merged:         true,
-		MergedTime:     timePtr(time.Unix(1598982934, 0)),
+		MergedTime:     new(time.Unix(1598982934, 0)),
 		MergeCommitSHA: "827aa28a907853e5ddfa40c8f9bc52471a2685fd",
 		PatchURL:       server.URL + "/gitea/test_repo/pulls/12.patch",
 	}, prs[1])
@@ -309,13 +324,22 @@ func TestGiteaDownloadRepo(t *testing.T) {
 }
 
 func TestForgejoDownloadRepo(t *testing.T) {
+	defer test.MockVariableValueWithReset(&setting.Migrations.AllowLocalNetworks, true, func() { require.NoError(t, allowlist.Init()) })()
 	token := os.Getenv("CODE_FORGEJO_TOKEN")
 
 	fixturePath := "./testdata/code-forgejo-org/full_download"
 	server := unittest.NewMockWebServer(t, "https://code.forgejo.org", fixturePath, token != "")
 	defer server.Close()
 
-	downloader, err := NewGiteaDownloader(t.Context(), server.URL, "Gusted/agit-test", "", "", token)
+	giteaClient, err := gitea_sdk.NewClient(
+		server.URL,
+		gitea_sdk.SetToken(token),
+		gitea_sdk.SetBasicAuth("", ""),
+		gitea_sdk.SetContext(t.Context()),
+		gitea_sdk.SetHTTPClient(allowlist.NewMigrationHTTPClient()),
+	)
+	require.NoError(t, err, "Clould not create Client")
+	downloader, err := NewGiteaDownloader(t.Context(), giteaClient, server.URL, "Gusted/agit-test")
 	require.NoError(t, err)
 	require.NotNil(t, downloader)
 
@@ -349,4 +373,91 @@ func TestForgejoDownloadRepo(t *testing.T) {
 		PatchURL: server.URL + "/Gusted/agit-test/pulls/1.patch",
 		Flow:     1,
 	}, prs[0])
+}
+
+func createGiteaIssueComments(number int) []*gitea_sdk.Comment {
+	giteaComments := make([]*gitea_sdk.Comment, 0, number)
+	giteaUser := &gitea_sdk.User{
+		ID:       1,
+		UserName: "rando",
+	}
+	for i := 1; i <= number; i++ {
+		giteaComment := gitea_sdk.Comment{
+			ID:      1,
+			Poster:  giteaUser,
+			Created: time.Date(2025, time.August, 7, 13, i, 25, 0, time.UTC),
+			Updated: time.Date(2025, time.August, 7, 13, i+2, 25, 0, time.UTC),
+			Body:    strconv.Itoa(i),
+		}
+		giteaComments = append(giteaComments, &giteaComment)
+	}
+	return giteaComments
+}
+
+func createForgejoIssueComments(comments []*gitea_sdk.Comment) []*base.Comment {
+	forgejoComments := make([]*base.Comment, 0, len(comments))
+	for _, comment := range comments {
+		forgejoComments = append(forgejoComments, &base.Comment{
+			IssueIndex:  1, // commentable.GetLocalIndex()
+			Index:       comment.ID,
+			PosterID:    comment.Poster.ID,
+			PosterName:  comment.Poster.UserName,
+			PosterEmail: comment.Poster.Email,
+			Content:     comment.Body,
+			Created:     comment.Created,
+			Updated:     comment.Updated,
+			Reactions:   []*base.Reaction{},
+		})
+	}
+	return forgejoComments
+}
+
+func TestBreakConditions(t *testing.T) {
+	defer test.MockVariableValueWithReset(&setting.Migrations.AllowLocalNetworks, true, func() { require.NoError(t, allowlist.Init()) })()
+	giteaToken := os.Getenv("GITEA_TOKEN")
+
+	fixturePath := "./testdata/gitea/breaking_conditions"
+	server := unittest.NewMockWebServer(t, "https://gitea.com", fixturePath, giteaToken != "")
+	defer server.Close()
+
+	// Client
+	giteaClient, err := gitea_sdk.NewClient(
+		server.URL,
+		gitea_sdk.SetToken(""),
+		gitea_sdk.SetBasicAuth("", ""),
+		gitea_sdk.SetContext(t.Context()),
+		gitea_sdk.SetHTTPClient(allowlist.NewMigrationHTTPClient()),
+	)
+	require.NoError(t, err, "Clould not create Client")
+
+	// Downloader
+	downloader, err := NewGiteaDownloader(t.Context(), giteaClient, server.URL, "gitea/test_repo")
+	if downloader == nil {
+		t.Fatal("NewGiteaDownloader is nil")
+	}
+	require.NoError(t, err, "Could not create Gitea Downloader")
+
+	pageSize := 20
+	buggyPageSize := 25
+	smallerPageSize := 15
+	downloader.maxPerPage = pageSize
+
+	bugResponse := createGiteaIssueComments(buggyPageSize)
+	commentsWithBug := createForgejoIssueComments(bugResponse)
+
+	shorterListResponse := createGiteaIssueComments(smallerPageSize)
+	commentsShortList := createForgejoIssueComments(shorterListResponse)
+
+	fullListResponse := createGiteaIssueComments(pageSize)
+	differentFullListResponse := createGiteaIssueComments(pageSize)
+	differentFullListResponse[0].Body = "Different String"
+	differentFullListResponse[len(differentFullListResponse)-1].Body = "Different String"
+	commentsFullList := createForgejoIssueComments(fullListResponse)
+
+	assert.True(t, downloader.isSinglePage(commentsWithBug))
+	assert.True(t, downloader.isSinglePage(commentsShortList))
+	assert.True(t, downloader.isLastPage(commentsShortList, shorterListResponse))
+	assert.True(t, downloader.isLastPage(commentsWithBug, bugResponse))
+	assert.False(t, downloader.isSinglePage(commentsFullList))
+	assert.False(t, downloader.isLastPage(commentsFullList, differentFullListResponse))
 }

@@ -5,13 +5,11 @@
 package util_test
 
 import (
-	"bytes"
 	"crypto/rand"
-	"regexp"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 
-	"forgejo.org/modules/optional"
 	"forgejo.org/modules/test"
 	"forgejo.org/modules/util"
 
@@ -126,72 +124,52 @@ func Test_NormalizeEOL(t *testing.T) {
 	assert.Equal(t, []byte("mix\nand\nmatch\n."), util.NormalizeEOL([]byte("mix\r\nand\rmatch\n.")))
 }
 
-func Test_RandomInt(t *testing.T) {
-	randInt, err := util.CryptoRandomInt(255)
-	assert.GreaterOrEqual(t, randInt, int64(0))
-	assert.LessOrEqual(t, randInt, int64(255))
-	require.NoError(t, err)
-}
-
 func Test_RandomString(t *testing.T) {
-	str1, err := util.CryptoRandomString(32)
-	require.NoError(t, err)
-	matches, err := regexp.MatchString(`^[a-zA-Z0-9]{32}$`, str1)
-	require.NoError(t, err)
-	assert.True(t, matches)
+	t.Run("Low", func(t *testing.T) {
+		str1 := util.CryptoRandomString(util.RandomStringLow)
+		assert.Regexp(t, "^[a-zA-Z0-9_-]{11}$", str1)
 
-	str2, err := util.CryptoRandomString(32)
-	require.NoError(t, err)
-	matches, err = regexp.MatchString(`^[a-zA-Z0-9]{32}$`, str1)
-	require.NoError(t, err)
-	assert.True(t, matches)
+		str2 := util.CryptoRandomString(util.RandomStringLow)
+		assert.Regexp(t, "^[a-zA-Z0-9_-]{11}$", str2)
 
-	assert.NotEqual(t, str1, str2)
+		assert.NotEqual(t, str1, str2)
+	})
 
-	str3, err := util.CryptoRandomString(256)
-	require.NoError(t, err)
-	matches, err = regexp.MatchString(`^[a-zA-Z0-9]{256}$`, str3)
-	require.NoError(t, err)
-	assert.True(t, matches)
+	t.Run("Medium", func(t *testing.T) {
+		str1 := util.CryptoRandomString(util.RandomStringMedium)
+		assert.Regexp(t, "^[a-zA-Z0-9_-]{22}$", str1)
 
-	str4, err := util.CryptoRandomString(256)
-	require.NoError(t, err)
-	matches, err = regexp.MatchString(`^[a-zA-Z0-9]{256}$`, str4)
-	require.NoError(t, err)
-	assert.True(t, matches)
+		str2 := util.CryptoRandomString(util.RandomStringMedium)
+		assert.Regexp(t, "^[a-zA-Z0-9_-]{22}$", str2)
 
-	assert.NotEqual(t, str3, str4)
+		assert.NotEqual(t, str1, str2)
+	})
+
+	t.Run("High", func(t *testing.T) {
+		str1 := util.CryptoRandomString(util.RandomStringHigh)
+		assert.Regexp(t, "^[a-zA-Z0-9_-]{43}$", str1)
+
+		str2 := util.CryptoRandomString(util.RandomStringHigh)
+		assert.Regexp(t, "^[a-zA-Z0-9_-]{43}$", str2)
+
+		assert.NotEqual(t, str1, str2)
+	})
 }
 
 func Test_RandomBytes(t *testing.T) {
-	bytes1, err := util.CryptoRandomBytes(32)
-	require.NoError(t, err)
+	bytes1 := util.CryptoRandomBytes(32)
+	bytes2 := util.CryptoRandomBytes(32)
 
-	bytes2, err := util.CryptoRandomBytes(32)
-	require.NoError(t, err)
-
+	assert.Len(t, bytes1, 32)
+	assert.Len(t, bytes2, 32)
 	assert.NotEqual(t, bytes1, bytes2)
 
-	bytes3, err := util.CryptoRandomBytes(256)
-	require.NoError(t, err)
+	bytes3 := util.CryptoRandomBytes(256)
+	bytes4 := util.CryptoRandomBytes(256)
 
-	bytes4, err := util.CryptoRandomBytes(256)
-	require.NoError(t, err)
-
+	assert.Len(t, bytes3, 256)
+	assert.Len(t, bytes4, 256)
 	assert.NotEqual(t, bytes3, bytes4)
-}
-
-func TestOptionalBoolParse(t *testing.T) {
-	assert.Equal(t, optional.None[bool](), util.OptionalBoolParse(""))
-	assert.Equal(t, optional.None[bool](), util.OptionalBoolParse("x"))
-
-	assert.Equal(t, optional.Some(false), util.OptionalBoolParse("0"))
-	assert.Equal(t, optional.Some(false), util.OptionalBoolParse("f"))
-	assert.Equal(t, optional.Some(false), util.OptionalBoolParse("False"))
-
-	assert.Equal(t, optional.Some(true), util.OptionalBoolParse("1"))
-	assert.Equal(t, optional.Some(true), util.OptionalBoolParse("t"))
-	assert.Equal(t, optional.Some(true), util.OptionalBoolParse("True"))
 }
 
 // Test case for any function which accepts and returns a single string.
@@ -233,47 +211,30 @@ func TestToTitleCase(t *testing.T) {
 	assert.Equal(t, `Foo Bar Baz`, util.ToTitleCase(`FOO BAR BAZ`))
 }
 
-func TestToPointer(t *testing.T) {
-	assert.Equal(t, "abc", *util.ToPointer("abc"))
-	assert.Equal(t, 123, *util.ToPointer(123))
-	abc := "abc"
-	assert.NotSame(t, &abc, util.ToPointer(abc))
-	val123 := 123
-	assert.NotSame(t, &val123, util.ToPointer(val123))
-}
-
 func TestReserveLineBreakForTextarea(t *testing.T) {
 	assert.Equal(t, "test\ndata", util.ReserveLineBreakForTextarea("test\r\ndata"))
 	assert.Equal(t, "test\ndata\n", util.ReserveLineBreakForTextarea("test\r\ndata\r\n"))
 }
 
 const (
-	testPublicKey  = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4\n"
+	testPublicKey  = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHX8yEKexoMqBPPwG4pGAhhjo5CyiHLiJZ7p3jg0aJZM\n"
 	testPrivateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz
-c2gtZWQyNTUxOQAAACADoQe/884Qvh1w3RjnS8CZZ+TWMJulDV8d3IZkElUxuAAA
-AIggISIjICEiIwAAAAtzc2gtZWQyNTUxOQAAACADoQe/884Qvh1w3RjnS8CZZ+TW
-MJulDV8d3IZkElUxuAAAAEAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0e
-HwOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4AAAAAAECAwQF
+c2gtZWQyNTUxOQAAACB1/MhCnsaDKgTz8BuKRgIYY6OQsohy4iWe6d44NGiWTAAA
+AIhNLlZvTS5WbwAAAAtzc2gtZWQyNTUxOQAAACB1/MhCnsaDKgTz8BuKRgIYY6OQ
+sohy4iWe6d44NGiWTAAAAEDZh37ObTaKrBpvQZ7GJ8drG/sfo3xBoR6kat1qSNiU
+dHX8yEKexoMqBPPwG4pGAhhjo5CyiHLiJZ7p3jg0aJZMAAAAAAECAwQF
 -----END OPENSSH PRIVATE KEY-----` + "\n"
 )
 
 func TestGeneratingEd25519Keypair(t *testing.T) {
 	defer test.MockProtect(&rand.Reader)()
-
-	// Only 32 bytes needs to be provided to generate a ed25519 keypair.
-	// And another 32 bytes are required, which is included as random value
-	// in the OpenSSH format.
-	b := make([]byte, 64)
-	for i := 0; i < 64; i++ {
-		b[i] = byte(i)
-	}
-	rand.Reader = bytes.NewReader(b)
+	cryptotest.SetGlobalRandom(t, 0)
 
 	publicKey, privateKey, err := util.GenerateSSHKeypair()
 	require.NoError(t, err)
-	assert.EqualValues(t, testPublicKey, string(publicKey))
-	assert.EqualValues(t, testPrivateKey, string(privateKey))
+	assert.Equal(t, testPublicKey, string(publicKey))
+	assert.Equal(t, testPrivateKey, string(privateKey))
 }
 
 func TestOptionalArg(t *testing.T) {

@@ -22,8 +22,8 @@ import (
 // repository, the members of the owners team are in this table.
 type Access struct {
 	ID     int64 `xorm:"pk autoincr"`
-	UserID int64 `xorm:"UNIQUE(s)"`
-	RepoID int64 `xorm:"UNIQUE(s)"`
+	UserID int64 `xorm:"UNIQUE(s) REFERENCES(user, id)"`
+	RepoID int64 `xorm:"UNIQUE(s) REFERENCES(repository, id)"`
 	Mode   perm.AccessMode
 }
 
@@ -133,7 +133,7 @@ func refreshCollaboratorAccesses(ctx context.Context, repoID int64, accessMap ma
 		return fmt.Errorf("getCollaborations: %w", err)
 	}
 	for _, c := range collaborators {
-		if c.User.IsGhost() {
+		if c.IsGhost() {
 			continue
 		}
 		updateUserAccess(accessMap, c.User, c.Collaboration.Mode)

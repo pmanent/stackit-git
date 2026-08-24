@@ -4,16 +4,17 @@
 package user
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"fmt"
 	"image/png"
-	"io"
 	"strings"
 
 	"forgejo.org/models/avatars"
 	"forgejo.org/models/db"
 	"forgejo.org/modules/avatar"
+	"forgejo.org/modules/avatarstore"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/storage"
@@ -38,19 +39,28 @@ func GenerateRandomAvatar(ctx context.Context, u *User) error {
 
 	u.Avatar = avatars.HashEmail(seed)
 
-	_, err = storage.Avatars.Stat(u.CustomAvatarRelativePath())
-	if err != nil {
+	// >>> @@@ STACKIT CODE @@@
+	// User Story 56494
+	// Random avatars are written through avatarstore so the object store always
+	// gets an explicit content length. storage.SaveFrom streams through an
+	// io.Pipe and passes size -1, which the S3/MinIO backend stores as an object
+	// that reads back empty or without a content length at all (Stat then
+	// reports size -1 and the object cannot even be seeked). An avatar that is
+	// present but has no usable size is one of those, so treat it as missing and
+	// write it again instead of keeping it broken forever.
+	fi, err := storage.Avatars.Stat(u.CustomAvatarRelativePath())
+	if err != nil || fi.Size() <= 0 {
 		// If unable to Stat the avatar file (usually it means non-existing), then try to save a new one
 		// Don't share the images so that we can delete them easily
-		if err := storage.SaveFrom(storage.Avatars, u.CustomAvatarRelativePath(), func(w io.Writer) error {
-			if err := png.Encode(w, img); err != nil {
-				log.Error("Encode: %v", err)
-			}
-			return nil
-		}); err != nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			return fmt.Errorf("Encode: %w", err)
+		}
+		if err := avatarstore.StoreAvatar(u.CustomAvatarRelativePath(), buf.Bytes(), img, storage.Avatars); err != nil {
 			return fmt.Errorf("failed to save avatar %s: %w", u.CustomAvatarRelativePath(), err)
 		}
 	}
+	// <<< @@@ STACKIT CODE @@@
 
 	if _, err := db.GetEngine(ctx).ID(u.ID).Cols("avatar").Update(u); err != nil {
 		return err
@@ -60,9 +70,10 @@ func GenerateRandomAvatar(ctx context.Context, u *User) error {
 	return nil
 }
 
-// AvatarLinkWithSize returns a link to the user's avatar with size. size <= 0 means default size
+// AvatarLinkWithSize returns a link to the user's avatar. It may be a relative
+// or absolute URL.
 func (u *User) AvatarLinkWithSize(ctx context.Context, size int) string {
-	if u.IsGhost() {
+	if u.IsGhost() || u.ID <= 0 {
 		return avatars.DefaultAvatarLink()
 	}
 
@@ -88,7 +99,7 @@ func (u *User) AvatarLinkWithSize(ctx context.Context, size int) string {
 		if u.Avatar == "" {
 			return avatars.DefaultAvatarLink()
 		}
-		return avatars.GenerateUserAvatarImageLink(u.Avatar, size)
+		return avatars.GenerateUserResizedAvatarLink(u.Avatar, size)
 	}
 	return avatars.GenerateEmailAvatarFastLink(ctx, u.AvatarEmail, size)
 }
@@ -107,7 +118,7 @@ func (u *User) IsUploadAvatarChanged(data []byte) bool {
 	if !u.UseCustomAvatar || len(u.Avatar) == 0 {
 		return true
 	}
-	avatarID := fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("%d-%x", u.ID, md5.Sum(data)))))
+	avatarID := fmt.Sprintf("%x", md5.Sum(fmt.Appendf(nil, "%d-%x", u.ID, md5.Sum(data))))
 	return u.Avatar != avatarID
 }
 

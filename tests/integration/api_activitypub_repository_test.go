@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"forgejo.org/models/db"
 	"forgejo.org/models/forgefed"
 	"forgejo.org/models/unittest"
 	"forgejo.org/models/user"
@@ -19,7 +18,7 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
 	"forgejo.org/routers"
-	"forgejo.org/tests"
+	"forgejo.org/services/contexttest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,60 +26,82 @@ import (
 
 func TestActivityPubRepository(t *testing.T) {
 	defer test.MockVariableValue(&setting.Federation.Enabled, true)()
-	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
-	defer tests.PrepareTestEnv(t)()
-
-	repositoryID := 2
-	req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/activitypub/repository-id/%v", repositoryID))
-	resp := MakeRequest(t, req, http.StatusOK)
-	assert.Contains(t, resp.Body.String(), "@context")
-
-	var repository forgefed_modules.Repository
-	err := repository.UnmarshalJSON(resp.Body.Bytes())
-	require.NoError(t, err)
-
-	assert.Regexp(t, fmt.Sprintf("activitypub/repository-id/%v$", repositoryID), repository.GetID().String())
-}
-
-func TestActivityPubMissingRepository(t *testing.T) {
-	defer test.MockVariableValue(&setting.Federation.Enabled, true)()
-	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
-	defer tests.PrepareTestEnv(t)()
-
-	repositoryID := 9999999
-	req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/activitypub/repository-id/%v", repositoryID))
-	resp := MakeRequest(t, req, http.StatusNotFound)
-	assert.Contains(t, resp.Body.String(), "repository does not exist")
-}
-
-func TestActivityPubRepositoryInboxValid(t *testing.T) {
-	defer test.MockVariableValue(&setting.Federation.Enabled, true)()
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, true)()
 	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
 
 	mock := test.NewFederationServerMock()
 	federatedSrv := mock.DistantServer(t)
 	defer federatedSrv.Close()
 
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
-		actionsUser := user.NewActionsUser()
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		repositoryID := 2
+
+		localRepository := fmt.Sprintf("%sapi/v1/activitypub/repository-id/%d", u, repositoryID)
+
+		ctx, _ := contexttest.MockAPIContext(t, localRepository)
+		cf, err := activitypub.NewClientFactoryWithTimeout(60 * time.Second)
+		require.NoError(t, err)
+
+		c, err := cf.WithKeysDirect(ctx, mock.Persons[0].PrivKey,
+			mock.Persons[0].KeyID(federatedSrv.URL), nil)
+		require.NoError(t, err)
+
+		resp, err := c.GetBody(localRepository)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp), "@context")
+
+		var repository forgefed_modules.Repository
+		err = repository.UnmarshalJSON(resp)
+		require.NoError(t, err)
+
+		assert.Regexp(t, fmt.Sprintf("activitypub/repository-id/%d$", repositoryID), repository.GetID().String())
+	})
+}
+
+func TestActivityPubMissingRepository(t *testing.T) {
+	defer test.MockVariableValue(&setting.Federation.Enabled, true)()
+	defer test.MockVariableValue(&setting.Federation.SignatureEnforced, false)()
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, true)()
+	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
+
+	repositoryID := 9999999
+	req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/activitypub/repository-id/%d", repositoryID))
+	resp := MakeRequest(t, req, http.StatusNotFound)
+	assert.Contains(t, resp.Body.String(), "repository does not exist")
+}
+
+func TestActivityPubRepositoryInboxValid(t *testing.T) {
+	defer test.MockVariableValue(&setting.Federation.Enabled, true)()
+	defer test.MockVariableValue(&setting.Federation.SignatureEnforced, true)()
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, true)()
+	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
+
+	mock := test.NewFederationServerMock()
+	federatedSrv := mock.DistantServer(t)
+	defer federatedSrv.Close()
+
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		repositoryID := 2
 		timeNow := time.Now().UTC()
+		localRepoInbox := u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d/inbox", repositoryID)).String()
 
-		cf, err := activitypub.GetClientFactory(db.DefaultContext)
+		ctx, _ := contexttest.MockAPIContext(t, localRepoInbox)
+		cf, err := activitypub.NewClientFactoryWithTimeout(60 * time.Second)
 		require.NoError(t, err)
-		c, err := cf.WithKeys(db.DefaultContext, actionsUser, "not used")
-		require.NoError(t, err)
-		repoInboxURL := u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d/inbox", repositoryID)).String()
 
-		activity1 := []byte(fmt.Sprintf(
+		c, err := cf.WithKeysDirect(ctx, mock.Persons[0].PrivKey,
+			mock.Persons[0].KeyID(federatedSrv.URL), nil)
+		require.NoError(t, err)
+
+		activity1 := fmt.Appendf(nil,
 			`{"type":"Like",`+
 				`"startTime":"%s",`+
 				`"actor":"%s/api/v1/activitypub/user-id/15",`+
 				`"object":"%s"}`,
 			timeNow.Format(time.RFC3339),
-			federatedSrv.URL, u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d", repositoryID)).String()))
+			federatedSrv.URL, u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d", repositoryID)).String())
 		t.Logf("activity: %s", activity1)
-		resp, err := c.Post(activity1, repoInboxURL)
+		resp, err := c.Post(activity1, localRepoInbox)
 
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
@@ -90,16 +111,16 @@ func TestActivityPubRepositoryInboxValid(t *testing.T) {
 		unittest.AssertExistsAndLoadBean(t, &user.User{ID: federatedUser.UserID})
 
 		// A like activity by a different user of the same federated host.
-		activity2 := []byte(fmt.Sprintf(
+		activity2 := fmt.Appendf(nil,
 			`{"type":"Like",`+
 				`"startTime":"%s",`+
 				`"actor":"%s/api/v1/activitypub/user-id/30",`+
 				`"object":"%s"}`,
 			// Make sure this activity happens later then the one before
 			timeNow.Add(time.Second).Format(time.RFC3339),
-			federatedSrv.URL, u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d", repositoryID)).String()))
+			federatedSrv.URL, u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d", repositoryID)).String())
 		t.Logf("activity: %s", activity2)
-		resp, err = c.Post(activity2, repoInboxURL)
+		resp, err = c.Post(activity2, localRepoInbox)
 
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
@@ -110,14 +131,14 @@ func TestActivityPubRepositoryInboxValid(t *testing.T) {
 		// The same user sends another like activity
 		otherRepositoryID := 3
 		otherRepoInboxURL := u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d/inbox", otherRepositoryID)).String()
-		activity3 := []byte(fmt.Sprintf(
+		activity3 := fmt.Appendf(nil,
 			`{"type":"Like",`+
 				`"startTime":"%s",`+
 				`"actor":"%s/api/v1/activitypub/user-id/30",`+
 				`"object":"%s"}`,
 			// Make sure this activity happens later then the ones before
 			timeNow.Add(time.Second*2).Format(time.RFC3339),
-			federatedSrv.URL, u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d", otherRepositoryID)).String()))
+			federatedSrv.URL, u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d", otherRepositoryID)).String())
 		t.Logf("activity: %s", activity3)
 		resp, err = c.Post(activity3, otherRepoInboxURL)
 
@@ -128,7 +149,7 @@ func TestActivityPubRepositoryInboxValid(t *testing.T) {
 		unittest.AssertExistsAndLoadBean(t, &user.User{ID: federatedUser.UserID})
 
 		// Replay activity2.
-		resp, err = c.Post(activity2, repoInboxURL)
+		resp, err = c.Post(activity2, localRepoInbox)
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusNotAcceptable, resp.StatusCode)
 	})
@@ -136,19 +157,24 @@ func TestActivityPubRepositoryInboxValid(t *testing.T) {
 
 func TestActivityPubRepositoryInboxInvalid(t *testing.T) {
 	defer test.MockVariableValue(&setting.Federation.Enabled, true)()
+	defer test.MockVariableValue(&setting.Federation.SignatureEnforced, false)()
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, true)()
 	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
 
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
-		actionsUser := user.NewActionsUser()
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		apServerActor := user.NewAPServerActor()
 		repositoryID := 2
-		cf, err := activitypub.GetClientFactory(db.DefaultContext)
-		require.NoError(t, err)
-		c, err := cf.WithKeys(db.DefaultContext, actionsUser, "not used")
+		localRepo2Inbox := u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%d/inbox", repositoryID)).String()
+
+		ctx, _ := contexttest.MockAPIContext(t, localRepo2Inbox)
+		cf, err := activitypub.NewClientFactoryWithTimeout(60 * time.Second)
 		require.NoError(t, err)
 
-		repoInboxURL := u.JoinPath(fmt.Sprintf("/api/v1/activitypub/repository-id/%v/inbox", repositoryID)).String()
+		c, err := cf.WithKeys(ctx, apServerActor, apServerActor.KeyID(), nil)
+		require.NoError(t, err)
+
 		activity := []byte(`{"type":"Wrong"}`)
-		resp, err := c.Post(activity, repoInboxURL)
+		resp, err := c.Post(activity, localRepo2Inbox)
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusNotAcceptable, resp.StatusCode)
 	})

@@ -80,7 +80,7 @@ func ListRepoNotifications(ctx *context.APIContext) {
 	//   collectionFormat: multi
 	//   items:
 	//     type: string
-	//     enum: [issue,pull,commit,repository]
+	//     enum: [issue,pull,repository]
 	// - name: since
 	//   in: query
 	//   description: Only show notifications updated after the given time. This is a timestamp in RFC 3339 format
@@ -106,7 +106,7 @@ func ListRepoNotifications(ctx *context.APIContext) {
 	if ctx.Written() {
 		return
 	}
-	opts.RepoID = ctx.Repo.Repository.ID
+	opts.RepoID = ctx.Repo().Repository.ID
 
 	totalCount, err := db.Count[activities_model.Notification](ctx, opts)
 	if err != nil {
@@ -153,7 +153,7 @@ func ReadRepoNotifications(ctx *context.APIContext) {
 	// - name: all
 	//   in: query
 	//   description: If true, mark all notifications on this repo. Default value is false
-	//   type: string
+	//   type: boolean
 	//   required: false
 	// - name: status-types
 	//   in: query
@@ -176,7 +176,7 @@ func ReadRepoNotifications(ctx *context.APIContext) {
 	//   required: false
 	// responses:
 	//   "205":
-	//     "$ref": "#/responses/NotificationThreadList"
+	//     "$ref": "#/responses/NotificationThreadListWithoutPagination"
 
 	lastRead := int64(0)
 	qLastRead := ctx.FormTrim("last_read_at")
@@ -192,8 +192,8 @@ func ReadRepoNotifications(ctx *context.APIContext) {
 	}
 
 	opts := &activities_model.FindNotificationOptions{
-		UserID:            ctx.Doer.ID,
-		RepoID:            ctx.Repo.Repository.ID,
+		UserID:            ctx.Doer().ID,
+		RepoID:            ctx.Repo().Repository.ID,
 		UpdatedBeforeUnix: lastRead,
 	}
 
@@ -215,7 +215,7 @@ func ReadRepoNotifications(ctx *context.APIContext) {
 	changed := make([]*structs.NotificationThread, 0, len(nl))
 
 	for _, n := range nl {
-		notif, err := activities_model.SetNotificationStatus(ctx, n.ID, ctx.Doer, targetStatus)
+		notif, err := activities_model.SetNotificationStatus(ctx, n.ID, ctx.Doer(), targetStatus)
 		if err != nil {
 			ctx.InternalServerError(err)
 			return

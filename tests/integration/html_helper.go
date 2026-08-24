@@ -6,6 +6,7 @@ package integration
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/PuerkitoBio/goquery"
@@ -24,6 +25,56 @@ func NewHTMLParser(t testing.TB, body *bytes.Buffer) *HTMLDoc {
 	doc, err := goquery.NewDocumentFromReader(body)
 	require.NoError(t, err)
 	return &HTMLDoc{doc: doc}
+}
+
+// Fetch selector and pass it into the provided function which should perform test assert/require checks on the element.
+func (doc *HTMLDoc) AssertElementPredicate(t testing.TB, selector string, predicate func(element *goquery.Selection)) {
+	t.Helper()
+	selection := doc.doc.Find(selector)
+	require.NotEmpty(t, selection, selector)
+	predicate(selection)
+}
+
+// Verify that a single element exists with the given selector, and it has the attribute `checked`.
+func (doc *HTMLDoc) AssertElementChecked(t testing.TB, selector string) {
+	doc.AssertElementPredicate(t, selector, func(element *goquery.Selection) {
+		if assert.Equal(t, 1, element.Length(), 1) {
+			val, exists := element.Attr("checked")
+			assert.True(t, exists)
+			assert.Empty(t, val)
+		}
+	})
+}
+
+// Verify that a single element exists with the given selector, and it has the attribute `selected`.
+func (doc *HTMLDoc) AssertElementSelected(t testing.TB, selector string) {
+	doc.AssertElementPredicate(t, selector, func(element *goquery.Selection) {
+		if assert.Equal(t, 1, element.Length(), 1) {
+			val, exists := element.Attr("selected")
+			assert.True(t, exists)
+			assert.Empty(t, val)
+		}
+	})
+}
+
+// Fetch attr from selector, which must exist, and pass it into the provided function which should perform test
+// assert/require checks on the attribute value.
+func (doc *HTMLDoc) AssertAttrPredicate(t testing.TB, selector, attr string, predicate func(attrValue string)) {
+	t.Helper()
+	selection := doc.doc.Find(selector)
+	require.NotEmpty(t, selection, selector)
+
+	actual, exists := selection.Attr(attr)
+	require.True(t, exists, "%s not found in %s", attr, selection.Text())
+
+	predicate(actual)
+}
+
+func (doc *HTMLDoc) AssertAttrEqual(t testing.TB, selector, attr, expected string) {
+	t.Helper()
+	doc.AssertAttrPredicate(t, selector, attr, func(actual string) {
+		assert.Equal(t, expected, actual)
+	})
 }
 
 // GetInputValueByID for get input value by id
@@ -51,7 +102,7 @@ func (doc *HTMLDoc) AssertDropdownHasOptions(t testing.TB, dropdownName string) 
 	t.Helper()
 
 	options := doc.AssertDropdown(t, dropdownName).Find(".menu [data-value]:not([data-value=''])")
-	assert.Positive(t, options.Length(), 0, fmt.Sprintf("%s dropdown has no options", dropdownName))
+	assert.Positive(t, options.Length(), "%s dropdown has no options", dropdownName)
 }
 
 func (doc *HTMLDoc) AssertDropdownHasSelectedOption(t testing.TB, dropdownName, expectedValue string) {
@@ -83,9 +134,11 @@ func (doc *HTMLDoc) FindByText(selector, text string) *goquery.Selection {
 	})
 }
 
-// GetCSRF for getting CSRF token value from input
-func (doc *HTMLDoc) GetCSRF() string {
-	return doc.GetInputValueByName("_csrf")
+// FindByText gets all elements by selector that also has the given text, w/ leading & trailing whitespace trimmed
+func (doc *HTMLDoc) FindByTextTrim(selector, text string) *goquery.Selection {
+	return doc.doc.Find(selector).FilterFunction(func(i int, s *goquery.Selection) bool {
+		return strings.TrimSpace(s.Text()) == text
+	})
 }
 
 // AssertSelection check if selection exists or does not exist depending on checkExists
@@ -99,10 +152,5 @@ func (doc *HTMLDoc) AssertSelection(t testing.TB, selection *goquery.Selection, 
 
 // AssertElement check if element by selector exists or does not exist depending on checkExists
 func (doc *HTMLDoc) AssertElement(t testing.TB, selector string, checkExists bool) {
-	sel := doc.doc.Find(selector)
-	if checkExists {
-		assert.Equal(t, 1, sel.Length())
-	} else {
-		assert.Equal(t, 0, sel.Length())
-	}
+	doc.AssertSelection(t, doc.doc.Find(selector), checkExists)
 }

@@ -140,7 +140,16 @@ func TestAddOrgUser(t *testing.T) {
 		unittest.AssertExistsAndLoadBean(t, ou)
 		assert.Equal(t, isPublic, ou.IsPublic)
 		org = unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: orgID})
-		assert.EqualValues(t, expectedNumMembers, org.NumMembers)
+		assert.Equal(t, expectedNumMembers, org.NumMembers)
+	}
+	testFailure := func(orgID, userID int64, isPublic bool) {
+		org := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: orgID})
+		expectedNumMembers := org.NumMembers
+		require.ErrorIs(t, organization.AddOrgUser(db.DefaultContext, orgID, userID), user_model.ErrUserWrongType{UID: userID})
+		ou := &organization.OrgUser{OrgID: orgID, UID: userID}
+		unittest.AssertNotExistsBean(t, ou)
+		org = unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: orgID})
+		assert.Equal(t, expectedNumMembers, org.NumMembers)
 	}
 
 	setting.Service.DefaultOrgMemberVisible = false
@@ -149,7 +158,45 @@ func TestAddOrgUser(t *testing.T) {
 	testSuccess(6, 2, false)
 
 	setting.Service.DefaultOrgMemberVisible = true
-	testSuccess(6, 3, true)
+	testFailure(6, 3, true)
 
 	unittest.CheckConsistencyFor(t, &user_model.User{}, &organization.Team{})
+}
+
+func TestIsAnEligibleTeamMemberByID(t *testing.T) {
+	defer unittest.OverrideFixtures("models/user/fixtures/")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	for _, testCase := range []struct {
+		name     string
+		id       int64
+		eligible bool
+	}{
+		{
+			name:     "Regular user",
+			id:       1,
+			eligible: true,
+		},
+		{
+			name:     "Bot user",
+			id:       1042,
+			eligible: true,
+		},
+		{
+			name:     "Organization",
+			id:       3,
+			eligible: false,
+		},
+		{
+			name:     "F3 Remote user",
+			id:       1041,
+			eligible: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			eligible, err := organization.IsAnEligibleTeamMemberByID(t.Context(), testCase.id)
+			require.NoError(t, err)
+			assert.Equal(t, testCase.eligible, eligible)
+		})
+	}
 }

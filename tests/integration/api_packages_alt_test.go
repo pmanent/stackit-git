@@ -34,40 +34,31 @@ import (
 func TestPackageAlt(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
-	packageName := "gitea-test"
+	packageName := "test.package-name"
 	packageVersion := "1.0.2-1"
 	packageArchitecture := "x86_64"
 
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
-	base64RpmPackageContent := `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`
+	base64RpmPackageContent := `H4sICAE4+2gAA3Rlc3QucGFja2FnZS1uYW1lLTEuMC4yLTEueDg2XzY0LnJwbQCtld9rHFUUx+/+
+0KZp1gapNhahVwIlhc7u7I/uj2KTlEhtaGJDs2qUqr0zc3dncHZnmJm1iQ/aqg9aJYL/gIIoRGkp
+fShStAmlT/4AEVGCEZ8qUZvEWGxLG13v7v2uxNSCSA+cvfuZc+45Z+49c+/Ch4vfRYiQUMD9IO4y
+/VlW5kqVVbiSjKvxlJIk/1lC5I61jyZPzIfwNyp0RGiv0HVC+4V2ikkxMd75dwQSmYfvDvAl+KsN
+f6OQzWhqcmdK03TWGFguo6ZUI5kraUzPFVQtm8uzVEqGW/fKXacPfd33+Q/VSfPRw/aIP9fKX6/X
+ZxrxVtWXF7mOirFP5ou4sj5iCG1bU1+j3jD4J/Am8M/gLavqXy/0fvACWAUv4n33gZcwfwi8DLsJ
+/g12G3wZ7IKvgF8EXwW/DL6G/K+DV2B/C/wH+F3wn+ApyY1SmnwKHJYcgn80KusNfQRu+IoWC30M
+Xg8+B26H/wx4g1zv0AVwB/giOAb/efBG2C+BO8HL4E2o7wr4Hjk/3AW+F4z9iW6W88NU7nG0C/Yh
+WXf0PtjHwFvAL4B7ZL7wMcTLY/6r4AL83wDvAr8H3o35Z8G94PPgfvCn4L3gr8API9818D7wCnhQ
+5ougn6Nj0h6J4n2fgL0DfAj21vo8BTsFPw3eBtZkPRH0d9QAG2AOtsAlcLXBA+Smc4g0zyGSJAdH
+hikM1K9VKsyb+Mczg/u6Z7mB5VSJeSMfYjYfj5vMN7kXZ3ZgW9XaeNzxykRKbM9QkQilQw0DLXJW
+IcODRbL/kczA/vRBMjrhB7xCzCBw/V2JRNkKOItbDmnGIeP57DPZDOm+zdLeTUd5QGsuHT5QfIjK
+F/Lp/xYR8DYL6aYerzjPcWpV/YDZNjewnsfEyWbeyH2ZNtKapjKeZKVCWkulC4yXmM6NTDKrpvjO
+PNafeI4TyJ9b3j1x39Pjnlsh4ryui/bouMmzR2yEks1s/5e+kVLsF03Wn9CsasI3SWsUMW1L6xlh
+E7bDjEF/6PkK295wz4jEGXHot43PoBHog4Zoton+VgP0EoUOmKxa5rZTphXu+yJjnKzN0Bpv1YU0
+mcsmU4VMOp2ThYagRH5PpK11/66+h01u2w5J1HyvGZ8oruVyqpQ8rjueoZR1XfGPWIFucp8qj4vd
+oUqZKgdSwsUOnN2sFjhEdxtdLF6YNK/J5n1Xr68cFWOn+Lhpc7GbC94V+z6qpTbPHXntVKRzbOs3
+e9ryy7NfDG/dFq5cPxvzHzj56/zpJ8e9hZFfdkRGL06dyJ6ZXvq2vOHCB2emY9cvv/nZj0vm1bep
++37w0u97PTX7yWIpP72RzD52vO947Z2pufZ6ffbuycN/ATcKyLOECAAA`
 	rpmPackageContent, err := base64.StdEncoding.DecodeString(base64RpmPackageContent)
 	require.NoError(t, err)
 
@@ -114,6 +105,11 @@ enabled=1`,
 
 				req := NewRequestWithBody(t, "PUT", url, bytes.NewReader(content))
 				MakeRequest(t, req, http.StatusUnauthorized)
+
+				req = NewRequestWithBody(t, "PUT", url, bytes.NewReader(content)).
+					AddBasicAuth(user.Name).
+					SetHeader("content-type", "multipart/form-data")
+				MakeRequest(t, req, http.StatusBadRequest)
 
 				req = NewRequestWithBody(t, "PUT", url, bytes.NewReader(content)).
 					AddBasicAuth(user.Name)
@@ -185,9 +181,9 @@ enabled=1`,
 
 					var result ReleaseClassic
 
-					lines := strings.Split(resp, "\n")
+					lines := strings.SplitSeq(resp, "\n")
 
-					for _, line := range lines {
+					for line := range lines {
 						parts := strings.SplitN(line, ": ", 2)
 						if len(parts) < 2 {
 							continue
@@ -214,7 +210,7 @@ enabled=1`,
 					}
 
 					assert.Equal(t, "classic", result.Component)
-					assert.Equal(t, "Alt Linux Team", result.Origin)
+					assert.Equal(t, "Forgejo", result.Origin)
 					assert.Equal(t, "Forgejo", result.Label)
 					assert.Equal(t, "x86_64", result.Architecture)
 					assert.False(t, result.NotAutomatic)
@@ -299,17 +295,17 @@ enabled=1`,
 
 					assert.Equal(t, "Forgejo", result.Origin)
 					assert.Equal(t, "Forgejo", result.Label)
-					assert.Equal(t, "Sisyphus", result.Suite)
+					assert.Equal(t, "Unknown", result.Suite)
 					assert.Equal(t, "x86_64", result.Architectures)
 
 					assert.Len(t, result.MD5Sum, 3)
-					assert.Equal(t, "bbf7ae6b2f540673ed1cfc0266b5f319", result.MD5Sum[0].Hash)
-					assert.Equal(t, 1003, result.MD5Sum[0].Size)
+					assert.Equal(t, "bd5c5952ded4f7e8d664a650ba286059", result.MD5Sum[0].Hash)
+					assert.Equal(t, 1047, result.MD5Sum[0].Size)
 					assert.Equal(t, "base/pkglist.classic", result.MD5Sum[0].File)
 
 					assert.Len(t, result.BLAKE2B, 3)
-					assert.Equal(t, "b527bf038895ce29107ec3a6d2eebd7c365e8ce5ab767276eeddd7c549a159025225cb0ecfdbf7b71da13db7e865e77bcb0e2dae4d21335df01a4a17e0056a70", result.BLAKE2B[0].Hash)
-					assert.Equal(t, 1003, result.BLAKE2B[0].Size)
+					assert.Equal(t, "5ca9fcf185ab58068f3d887c21715bddd4797bcb06da7ebd8e30b8330dad630065227504406b55b071da0d52ab6ab6811d2ce1c7132446626388902144fbd7ae", result.BLAKE2B[0].Hash)
+					assert.Equal(t, 1047, result.BLAKE2B[0].Size)
 					assert.Equal(t, "base/pkglist.classic", result.BLAKE2B[0].File)
 				})
 
@@ -410,7 +406,7 @@ enabled=1`,
 
 							if typ == 6 || typ == 8 || typ == 9 {
 								elem := data[offset:]
-								for j := uint32(0); j < count; j++ {
+								for range count {
 									strEnd := bytes.IndexByte(elem, 0)
 									if strEnd == -1 {
 										require.NoError(t, err)
@@ -424,13 +420,13 @@ enabled=1`,
 										result.Release = string(elem[:strEnd])
 									case 1004:
 										var summaries []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											summaries = append(summaries, string(elem[:strEnd]))
 										}
 										result.Summary = summaries
 									case 1005:
 										var descriptions []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											descriptions = append(descriptions, string(elem[:strEnd]))
 										}
 										result.Description = descriptions
@@ -440,7 +436,7 @@ enabled=1`,
 										result.Packager = string(elem[:strEnd])
 									case 1016:
 										var groups []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											groups = append(groups, string(elem[:strEnd]))
 										}
 										result.Group = groups
@@ -452,49 +448,49 @@ enabled=1`,
 										result.SourceRpm = string(elem[:strEnd])
 									case 1047:
 										var provideNames []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											provideNames = append(provideNames, string(elem[:strEnd]))
 										}
 										result.ProvideNames = provideNames
 									case 1049:
 										var requireNames []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											requireNames = append(requireNames, string(elem[:strEnd]))
 										}
 										result.RequireNames = requireNames
 									case 1050:
 										var requireVersions []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											requireVersions = append(requireVersions, string(elem[:strEnd]))
 										}
 										result.RequireVersions = requireVersions
 									case 1081:
 										var changeLogNames []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											changeLogNames = append(changeLogNames, string(elem[:strEnd]))
 										}
 										result.ChangeLogNames = changeLogNames
 									case 1082:
 										var changeLogTexts []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											changeLogTexts = append(changeLogTexts, string(elem[:strEnd]))
 										}
 										result.ChangeLogTexts = changeLogTexts
 									case 1113:
 										var provideVersions []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											provideVersions = append(provideVersions, string(elem[:strEnd]))
 										}
 										result.ProvideVersions = provideVersions
 									case 1117:
 										var baseNames []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											baseNames = append(baseNames, string(elem[:strEnd]))
 										}
 										result.BaseNames = baseNames
 									case 1118:
 										var dirNames []string
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											dirNames = append(dirNames, string(elem[:strEnd]))
 										}
 										result.DirNames = dirNames
@@ -513,7 +509,7 @@ enabled=1`,
 								}
 							} else if typ == 4 {
 								elem := data[offset:]
-								for j := uint32(0); j < count; j++ {
+								for range count {
 									val := binary.BigEndian.Uint32(elem)
 									switch tag {
 									case 1006:
@@ -522,25 +518,25 @@ enabled=1`,
 										result.Size = int(val)
 									case 1048:
 										var requireFlags []int
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											requireFlags = append(requireFlags, int(val))
 										}
 										result.RequireFlags = requireFlags
 									case 1080:
 										var changeLogTimes []int
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											changeLogTimes = append(changeLogTimes, int(val))
 										}
 										result.ChangeLogTimes = changeLogTimes
 									case 1112:
 										var provideFlags []int
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											provideFlags = append(provideFlags, int(val))
 										}
 										result.ProvideFlags = provideFlags
 									case 1116:
 										var dirIndexes []int
-										for i := uint32(0); i < count; i++ {
+										for range count {
 											dirIndexes = append(dirIndexes, int(val))
 										}
 										result.DirIndexes = dirIndexes
@@ -554,23 +550,23 @@ enabled=1`,
 							}
 						}
 					}
-					assert.Equal(t, "gitea-test", result.Name)
+					assert.Equal(t, "test.package-name", result.Name)
 					assert.Equal(t, "1.0.2", result.Version)
 					assert.Equal(t, "1", result.Release)
 					assert.Equal(t, []string{"RPM package summary"}, result.Summary)
 					assert.Equal(t, []string{"RPM package description"}, result.Description)
-					assert.Equal(t, 1678225964, result.BuildTime)
+					assert.Equal(t, 1761294337, result.BuildTime)
 					assert.Equal(t, 13, result.Size)
 					assert.Equal(t, "MIT", result.License)
 					assert.Equal(t, "KN4CK3R", result.Packager)
 					assert.Equal(t, []string{"System"}, result.Group)
 					assert.Equal(t, "https://gitea.io", result.URL)
 					assert.Equal(t, "x86_64", result.Arch)
-					assert.Equal(t, "gitea-test-1.0.2-1.src.rpm", result.SourceRpm)
-					assert.Equal(t, []string{"", ""}, result.ProvideNames)
-					assert.Equal(t, []int{16777226, 16777226, 16777226, 16777226, 16777226, 16777226, 16777226}, result.RequireFlags)
-					assert.Equal(t, []string{"", "", "", "", "", "", ""}, result.RequireNames)
-					assert.Equal(t, []string{"5.2-1", "5.2-1", "5.2-1", "5.2-1", "5.2-1", "5.2-1", "5.2-1"}, result.RequireVersions)
+					assert.Equal(t, "test.package-name-1.0.2-1.src.rpm", result.SourceRpm)
+					assert.Equal(t, []string{"test.package-name", "test.package-name"}, result.ProvideNames)
+					assert.Equal(t, []int{16777280, 16777280, 16777280}, result.RequireFlags)
+					assert.Equal(t, []string{"rpmlib(PayloadIsLzma)", "rpmlib(PayloadIsLzma)", "rpmlib(PayloadIsLzma)"}, result.RequireNames)
+					assert.Equal(t, []string{"", "", ""}, result.RequireVersions)
 					assert.Equal(t, []int{1678276800}, result.ChangeLogTimes)
 					assert.Equal(t, []string{"KN4CK3R <dummy@gitea.io>"}, result.ChangeLogNames)
 					assert.Equal(t, []string{"- Changelog message."}, result.ChangeLogTexts)
@@ -578,12 +574,12 @@ enabled=1`,
 					assert.Equal(t, []string{"1.0.2-1", "1.0.2-1"}, result.ProvideVersions)
 					assert.Equal(t, []int(nil), result.DirIndexes)
 					assert.Equal(t, []string{"hello"}, result.BaseNames)
-					assert.Equal(t, []string{"/usr/local/bin/"}, result.DirNames)
-					assert.Equal(t, "", result.DistTag)
-					assert.Equal(t, "gitea-test-1.0.2-1.x86_64.rpm", result.AptIndexLegacyFileName)
-					assert.Equal(t, 7116, result.AptIndexLegacyFileSize)
-					assert.Equal(t, "9ea82dd62968719aea19c08cd2ced79a", result.MD5Sum)
-					assert.Equal(t, "8ba7f1f52a47b23997aa2de21b305cc71974d51f0c54fb53cb927156284dafdcc233d514a46c020e4a0666e218529e0284933c5873d24c2555830d7627140f7d", result.BLAKE2B)
+					assert.Equal(t, []string{"/usr/bin/"}, result.DirNames)
+					assert.Empty(t, result.DistTag)
+					assert.Equal(t, "test.package-name-1.0.2-1.x86_64.rpm", result.AptIndexLegacyFileName)
+					assert.Equal(t, 2180, result.AptIndexLegacyFileSize)
+					assert.Equal(t, "aa17381c0b52a33f7ec70f49dc792157", result.MD5Sum)
+					assert.Equal(t, "4ea8ca38eb5ece86dce30d26f8237262a2f7a1f1a8a5307934848545e157768a0dd45ae00ca9c4d9ec211815b10969313ac17d1bd24055e48909fc57e22411ed", result.BLAKE2B)
 					assert.Equal(t, "RPMS.classic", result.AptIndexLegacyDirectory)
 				})
 

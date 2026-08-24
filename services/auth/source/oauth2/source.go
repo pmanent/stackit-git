@@ -27,8 +27,14 @@ type Source struct {
 	AdminGroup            string
 	GroupTeamMap          string
 	GroupTeamMapRemoval   bool
+	DynGroupMaps          string
+	DynGroupMapsRemoval   bool
+	QuotaGroupClaimName   string
+	QuotaGroupMap         string
+	QuotaGroupMapRemoval  bool
 	RestrictedGroup       string
 	SkipLocalTwoFA        bool `json:",omitempty"`
+	AllowUsernameChange   bool
 
 	// reference to the authSource
 	authSource *auth.Source

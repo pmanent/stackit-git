@@ -15,6 +15,7 @@ import (
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
+	"forgejo.org/services/stats"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func TestGetMilestonesByRepoID(t *testing.T) {
 
 		assert.Len(t, milestones, n)
 		for _, milestone := range milestones {
-			assert.EqualValues(t, repoID, milestone.RepoID)
+			assert.Equal(t, repoID, milestone.RepoID)
 		}
 	}
 	test(1, api.StateOpen)
@@ -306,7 +307,7 @@ func TestChangeMilestoneStatusByRepoIDAndID(t *testing.T) {
 	unittest.CheckConsistencyFor(t, &repo_model.Repository{ID: 1}, &issues_model.Milestone{})
 
 	require.NoError(t, issues_model.ChangeMilestoneStatusByRepoIDAndID(db.DefaultContext, 1, 1, false))
-	unittest.AssertExistsAndLoadBean(t, &issues_model.Milestone{ID: 1}, "is_closed=0")
+	unittest.AssertExistsAndLoadBean(t, &issues_model.Milestone{ID: 1}, unittest.Cond("is_closed = ?", false))
 	unittest.CheckConsistencyFor(t, &repo_model.Repository{ID: 1}, &issues_model.Milestone{})
 }
 
@@ -327,27 +328,27 @@ func TestUpdateMilestone(t *testing.T) {
 	milestone.Content = "newMilestoneContent"
 	require.NoError(t, issues_model.UpdateMilestone(db.DefaultContext, milestone, milestone.IsClosed))
 	milestone = unittest.AssertExistsAndLoadBean(t, &issues_model.Milestone{ID: 1})
-	assert.EqualValues(t, "newMilestoneName", milestone.Name)
+	assert.Equal(t, "newMilestoneName", milestone.Name)
 	unittest.CheckConsistencyFor(t, &issues_model.Milestone{})
 }
 
 func TestUpdateMilestoneCounters(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{MilestoneID: 1},
-		"is_closed=0")
+		unittest.Cond("is_closed = ?", false))
 
 	issue.IsClosed = true
 	issue.ClosedUnix = timeutil.TimeStampNow()
 	_, err := db.GetEngine(db.DefaultContext).ID(issue.ID).Cols("is_closed", "closed_unix").Update(issue)
 	require.NoError(t, err)
-	require.NoError(t, issues_model.UpdateMilestoneCounters(db.DefaultContext, issue.MilestoneID))
+	stats.QueueRecalcMilestoneByID(t.Context(), issue.MilestoneID)
 	unittest.CheckConsistencyFor(t, &issues_model.Milestone{})
 
 	issue.IsClosed = false
 	issue.ClosedUnix = 0
 	_, err = db.GetEngine(db.DefaultContext).ID(issue.ID).Cols("is_closed", "closed_unix").Update(issue)
 	require.NoError(t, err)
-	require.NoError(t, issues_model.UpdateMilestoneCounters(db.DefaultContext, issue.MilestoneID))
+	stats.QueueRecalcMilestoneByID(t.Context(), issue.MilestoneID)
 	unittest.CheckConsistencyFor(t, &issues_model.Milestone{})
 }
 
@@ -364,7 +365,7 @@ func TestMigrate_InsertMilestones(t *testing.T) {
 	require.NoError(t, err)
 	unittest.AssertExistsAndLoadBean(t, ms)
 	repoModified := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo.ID})
-	assert.EqualValues(t, repo.NumMilestones+1, repoModified.NumMilestones)
+	assert.Equal(t, repo.NumMilestones+1, repoModified.NumMilestones)
 
 	unittest.CheckConsistencyFor(t, &issues_model.Milestone{})
 }

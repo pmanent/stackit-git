@@ -15,8 +15,10 @@ import (
 	issue_indexer "forgejo.org/modules/indexer/issues"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/updatechecker"
+	moderation_service "forgejo.org/services/moderation"
 	repo_service "forgejo.org/services/repository"
 	archiver_service "forgejo.org/services/repository/archiver"
+	"forgejo.org/services/stats"
 	user_service "forgejo.org/services/user"
 )
 
@@ -85,16 +87,6 @@ func registerRewriteAllPrincipalKeys() {
 	})
 }
 
-func registerRepositoryUpdateHook() {
-	RegisterTaskFatal("resync_all_hooks", &BaseConfig{
-		Enabled:    false,
-		RunAtStart: false,
-		Schedule:   "@every 72h",
-	}, func(ctx context.Context, _ *user_model.User, _ Config) error {
-		return repo_service.SyncRepositoryHooks(ctx)
-	})
-}
-
 func registerReinitMissingRepositories() {
 	RegisterTaskFatal("reinit_missing_repos", &BaseConfig{
 		Enabled:    false,
@@ -110,8 +102,8 @@ func registerDeleteMissingRepositories() {
 		Enabled:    false,
 		RunAtStart: false,
 		Schedule:   "@every 72h",
-	}, func(ctx context.Context, user *user_model.User, _ Config) error {
-		return repo_service.DeleteMissingRepositories(ctx, user)
+	}, func(ctx context.Context, _ *user_model.User, _ Config) error {
+		return repo_service.DeleteMissingRepositories(ctx)
 	})
 }
 
@@ -226,13 +218,44 @@ func registerRebuildIssueIndexer() {
 	})
 }
 
+func registerRemoveResolvedReports() {
+	type ReportConfig struct {
+		BaseConfig
+		ConfigKeepResolvedReportsFor time.Duration
+	}
+	RegisterTaskFatal("remove_resolved_reports", &ReportConfig{
+		BaseConfig: BaseConfig{
+			Enabled:    false,
+			RunAtStart: false,
+			Schedule:   "@every 24h",
+		},
+		ConfigKeepResolvedReportsFor: setting.Moderation.KeepResolvedReportsFor,
+	}, func(ctx context.Context, _ *user_model.User, config Config) error {
+		reportConfig := config.(*ReportConfig)
+		return moderation_service.RemoveResolvedReports(ctx, reportConfig.ConfigKeepResolvedReportsFor)
+	})
+}
+
+// >>> @@@ STACKIT CODE @@@
+func registerRefreshStorageStats() {
+	RegisterTaskFatal("refresh_storage_stats", &BaseConfig{
+		Enabled:    true,
+		RunAtStart: true,
+		Schedule:   "@every 10m",
+	}, func(_ context.Context, _ *user_model.User, _ Config) error {
+		stats.RefreshStats()
+		return nil
+	})
+}
+
+// <<< @@@ STACKIT CODE @@@
+
 func initExtendedTasks() {
 	registerDeleteInactiveUsers()
 	registerDeleteRepositoryArchives()
 	registerGarbageCollectRepositories()
 	registerRewriteAllPublicKeys()
 	registerRewriteAllPrincipalKeys()
-	registerRepositoryUpdateHook()
 	registerReinitMissingRepositories()
 	registerDeleteMissingRepositories()
 	registerRemoveRandomAvatars()
@@ -241,4 +264,10 @@ func initExtendedTasks() {
 	registerDeleteOldSystemNotices()
 	registerGCLFS()
 	registerRebuildIssueIndexer()
+	if setting.Moderation.Enabled {
+		registerRemoveResolvedReports()
+	}
+	// >>> @@@ STACKIT CODE @@@
+	registerRefreshStorageStats()
+	// <<< @@@ STACKIT CODE @@@
 }

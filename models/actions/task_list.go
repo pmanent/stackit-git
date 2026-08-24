@@ -1,4 +1,5 @@
 // Copyright 2022 The Gitea Authors. All rights reserved.
+// Copyright 2026 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package actions
@@ -8,6 +9,7 @@ import (
 
 	"forgejo.org/models/db"
 	"forgejo.org/modules/container"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/timeutil"
 
 	"xorm.io/builder"
@@ -53,16 +55,9 @@ type FindTaskOptions struct {
 	Status        []Status
 	UpdatedBefore timeutil.TimeStamp
 	StartedBefore timeutil.TimeStamp
-
-	//>>> @@@@ STACKIT Code @@@
-	StoppedAfter timeutil.TimeStamp
-	//>>> @@@@ STACKIT Code @@@
-
-	RunnerID int64
-
-	// >>> @@@ STACKIT CODE @@@
-	RunnerIDs []int64
-	// >>> @@@ STACKIT CODE @@@
+	RunnerID      int64
+	LogExpired    optional.Option[bool]
+	LogInStorage  optional.Option[bool]
 }
 
 func (opts FindTaskOptions) ToConds() builder.Cond {
@@ -70,13 +65,13 @@ func (opts FindTaskOptions) ToConds() builder.Cond {
 	if opts.RepoID > 0 {
 		cond = cond.And(builder.Eq{"repo_id": opts.RepoID})
 	}
-	if opts.OwnerID > 0 {
+	if opts.OwnerID != 0 {
 		cond = cond.And(builder.Eq{"owner_id": opts.OwnerID})
 	}
 	if opts.CommitSHA != "" {
 		cond = cond.And(builder.Eq{"commit_sha": opts.CommitSHA})
 	}
-	if opts.Status != nil {
+	if len(opts.Status) > 0 {
 		cond = cond.And(builder.In("status", opts.Status))
 	}
 	if opts.UpdatedBefore > 0 {
@@ -85,23 +80,15 @@ func (opts FindTaskOptions) ToConds() builder.Cond {
 	if opts.StartedBefore > 0 {
 		cond = cond.And(builder.Lt{"started": opts.StartedBefore})
 	}
-
-	//>>> @@@@ STACKIT Code @@@
-	if opts.StoppedAfter > 0 {
-		cond = cond.And(builder.Gt{"stopped": opts.StoppedAfter})
-	}
-	//>>> @@@@ STACKIT Code @@@
-
 	if opts.RunnerID > 0 {
 		cond = cond.And(builder.Eq{"runner_id": opts.RunnerID})
 	}
-
-	// >>> @@@ STACKIT CODE @@@
-	if len(opts.RunnerIDs) > 0 && opts.RunnerID == 0 {
-		cond = cond.And(builder.In("runner_id", opts.RunnerIDs))
+	if has, value := opts.LogExpired.Get(); has {
+		cond = cond.And(builder.Eq{"log_expired": value})
 	}
-	// >>> @@@ STACKIT CODE @@@
-
+	if has, value := opts.LogInStorage.Get(); has {
+		cond = cond.And(builder.Eq{"log_in_storage": value})
+	}
 	return cond
 }
 

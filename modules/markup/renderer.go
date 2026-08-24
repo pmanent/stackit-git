@@ -17,6 +17,7 @@ import (
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
+	"forgejo.org/modules/util/donotpanic"
 
 	"github.com/yuin/goldmark/ast"
 )
@@ -197,10 +198,28 @@ func RegisterRenderer(renderer Renderer) {
 	}
 }
 
-// GetRendererByFileName get renderer by filename
-func GetRendererByFileName(filename string) Renderer {
-	extension := strings.ToLower(filepath.Ext(filename))
-	return extRenderers[extension]
+// FullExtension returns the full extension of path, i.e. everything after and including
+// the first period in the basename of path.
+func FullExtension(path string) string {
+	_, extension, found := strings.Cut(strings.ToLower(filepath.Base(path)), ".")
+	if !found {
+		return ""
+	}
+	return "." + extension
+}
+
+// GetRendererByExtension returns the most specific registered renderer for extension.
+func GetRendererByExtension(extension string) Renderer {
+	_, extension, found := strings.Cut(extension, ".")
+	checkedExtensions := 0
+	for found && checkedExtensions < 10 {
+		if renderer, ok := extRenderers["."+extension]; ok {
+			return renderer
+		}
+		checkedExtensions++
+		_, extension, found = strings.Cut(extension, ".")
+	}
+	return nil
 }
 
 // GetRendererByType returns a renderer according type
@@ -248,15 +267,14 @@ type nopCloser struct {
 func (nopCloser) Close() error { return nil }
 
 func renderIFrame(ctx *RenderContext, output io.Writer) error {
-	// set height="0" ahead, otherwise the scrollHeight would be max(150, realHeight)
+	// set height="300", otherwise if the postMessage mechanism breaks, we are left with a 0-height iframe
 	// at the moment, only "allow-scripts" is allowed for sandbox mode.
 	// "allow-same-origin" should never be used, it leads to XSS attack, and it makes the JS in iframe can access parent window's config and CSRF token
 	// TODO: when using dark theme, if the rendered content doesn't have proper style, the default text color is black, which is not easy to read
 	_, err := io.WriteString(output, fmt.Sprintf(`
 <iframe src="%s/%s/%s/render/%s/%s"
-name="giteaExternalRender"
-onload="this.height=giteaExternalRender.document.documentElement.scrollHeight"
-width="100%%" height="0" scrolling="no" frameborder="0" style="overflow: hidden"
+class="external-render"
+width="100%%" height="300" frameborder="0"
 sandbox="allow-scripts"
 ></iframe>`,
 		setting.AppSubURL,
@@ -265,6 +283,15 @@ sandbox="allow-scripts"
 		ctx.Metas["BranchNameSubURL"],
 		url.PathEscape(ctx.RelativePath),
 	))
+	return err
+}
+
+func postProcessOrCopy(ctx *RenderContext, renderer Renderer, reader io.Reader, writer io.Writer) (err error) {
+	if r, ok := renderer.(PostProcessRenderer); ok && r.NeedPostProcess() {
+		err = PostProcess(ctx, reader, writer)
+	} else {
+		_, err = io.Copy(writer, reader)
+	}
 	return err
 }
 
@@ -292,30 +319,28 @@ func render(ctx *RenderContext, renderer Renderer, input io.Reader, output io.Wr
 			_ = pw2.Close()
 		}()
 
-		wg.Add(1)
-		go func() {
-			err = SanitizeReader(pr2, renderer.Name(), output)
+		wg.Go(func() {
+			err = donotpanic.SafeFuncWithError(func() error { return SanitizeReader(pr2, renderer.Name(), output) })
 			_ = pr2.Close()
-			wg.Done()
-		}()
+		})
 	} else {
 		pw2 = nopCloser{output}
 	}
 
-	wg.Add(1)
-	go func() {
-		if r, ok := renderer.(PostProcessRenderer); ok && r.NeedPostProcess() {
-			err = PostProcess(ctx, pr, pw2)
-		} else {
-			_, err = io.Copy(pw2, pr)
-		}
+	wg.Go(func() {
+		err = donotpanic.SafeFuncWithError(func() error { return postProcessOrCopy(ctx, renderer, pr, pw2) })
 		_ = pr.Close()
 		_ = pw2.Close()
-		wg.Done()
-	}()
+	})
 
 	if err1 := renderer.Render(ctx, input, pw); err1 != nil {
 		return err1
+	}
+
+	if r, ok := renderer.(ExternalRenderer); ok && r.DisplayInIFrame() {
+		// Append a short script to the iframe's contents, which will communicate the scroll height of the embedded document via postMessage, either once loaded (in case the containing page loads first) in response to a postMessage from external.js, in case the iframe loads first
+		// We use '*' as a target origin for postMessage, because can be certain we are embedded on the same domain, due to X-Frame-Options configured elsewhere. (Plus, the offsetHeight of an embedded document is likely not sensitive data anyway.)
+		_, _ = pw.Write([]byte("<script>{let postHeight = () => {window.parent.postMessage({frameHeight: document.documentElement.offsetHeight || document.documentElement.scrollHeight}, '*')}; window.addEventListener('load', postHeight); window.addEventListener('message', (event) => {if (event.source === window.parent && event.data.requestOffsetHeight) postHeight()});}</script>"))
 	}
 	_ = pw.Close()
 
@@ -339,6 +364,20 @@ func renderByType(ctx *RenderContext, input io.Reader, output io.Writer) error {
 	return ErrUnsupportedRenderType{ctx.Type}
 }
 
+// ErrMissingExtension represents the error when a path does not have any extension.
+type ErrMissingExtension struct {
+	Path string
+}
+
+func IsErrMissingExtension(err error) bool {
+	_, ok := err.(ErrMissingExtension)
+	return ok
+}
+
+func (err ErrMissingExtension) Error() string {
+	return fmt.Sprintf("path '%s' does not have an extension", err.Path)
+}
+
 // ErrUnsupportedRenderExtension represents the error when extension doesn't supported to render
 type ErrUnsupportedRenderExtension struct {
 	Extension string
@@ -354,8 +393,11 @@ func (err ErrUnsupportedRenderExtension) Error() string {
 }
 
 func renderFile(ctx *RenderContext, input io.Reader, output io.Writer) error {
-	extension := strings.ToLower(filepath.Ext(ctx.RelativePath))
-	if renderer, ok := extRenderers[extension]; ok {
+	extension := FullExtension(ctx.RelativePath)
+	if extension == "" {
+		return ErrMissingExtension{ctx.RelativePath}
+	}
+	if renderer := GetRendererByExtension(extension); renderer != nil {
 		if r, ok := renderer.(ExternalRenderer); ok && r.DisplayInIFrame() {
 			if !ctx.InStandalonePage {
 				// for an external render, it could only output its content in a standalone page
@@ -370,7 +412,7 @@ func renderFile(ctx *RenderContext, input io.Reader, output io.Writer) error {
 
 // Type returns if markup format via the filename
 func Type(filename string) string {
-	if parser := GetRendererByFileName(filename); parser != nil {
+	if parser := GetRendererByExtension(FullExtension(filename)); parser != nil {
 		return parser.Name()
 	}
 	return ""
@@ -378,7 +420,7 @@ func Type(filename string) string {
 
 // IsMarkupFile reports whether file is a markup type file
 func IsMarkupFile(name, markup string) bool {
-	if parser := GetRendererByFileName(name); parser != nil {
+	if parser := GetRendererByExtension(FullExtension(name)); parser != nil {
 		return parser.Name() == markup
 	}
 	return false

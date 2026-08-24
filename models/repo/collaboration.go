@@ -19,8 +19,8 @@ import (
 // Collaboration represent the relation between an individual and a repository.
 type Collaboration struct {
 	ID          int64              `xorm:"pk autoincr"`
-	RepoID      int64              `xorm:"UNIQUE(s) INDEX NOT NULL"`
-	UserID      int64              `xorm:"UNIQUE(s) INDEX NOT NULL"`
+	RepoID      int64              `xorm:"UNIQUE(s) INDEX NOT NULL REFERENCES(repository, id)"`
+	UserID      int64              `xorm:"UNIQUE(s) INDEX NOT NULL REFERENCES(user, id)"`
 	Mode        perm.AccessMode    `xorm:"DEFAULT 2 NOT NULL"`
 	CreatedUnix timeutil.TimeStamp `xorm:"INDEX created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"INDEX updated"`
@@ -99,8 +99,9 @@ func (opts FindCollaborationOptions) ToConds() builder.Cond {
 
 // ChangeCollaborationAccessMode sets new access mode for the collaboration.
 func ChangeCollaborationAccessMode(ctx context.Context, repo *Repository, uid int64, mode perm.AccessMode) error {
-	// Discard invalid input
-	if mode <= perm.AccessModeNone || mode > perm.AccessModeOwner {
+	// Discard invalid input. Collaborator should not be able to become owner via
+	// collaboration, at most it is a repository admin.
+	if mode <= perm.AccessModeNone || mode >= perm.AccessModeOwner {
 		return nil
 	}
 

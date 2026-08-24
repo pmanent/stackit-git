@@ -6,33 +6,26 @@
   "service": "app",
   "workspaceFolder": "/workspace",
   "features": {
-    "ghcr.io/devcontainers/features/go:1": {
-        "version": "1.25.6"
+    // installs nodejs into container
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "24"
     },
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "20"
-    },
-    "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.14"
-    },
-    "ghcr.io/devcontainers/features/git-lfs:1.2.1": {},
-    "ghcr.io/devcontainers-extra/features/poetry:2": {},
-    "ghcr.io/warrenbuckley/codespace-features/sqlite:1": {},
     "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
-    "ghcr.io/robbert229/devcontainer-features/postgresql-client:1":{
-      "version":"17"
-    },
-    "ghcr.io/christophermacgown/devcontainer-features/minio-client:1":{},
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+    "ghcr.io/devcontainers/features/git-lfs:1": {},
+    "ghcr.io/warrenbuckley/codespace-features/sqlite:1": {}
   },
   "mounts": [
-    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached"
   ],
-  "remoteUser": "vscode",
   "customizations": {
     "vscode": {
-      "settings": {},
+      "settings": {
+        "go.gopath": "/go",
+        "go.toolsManagement.checkForUpdates": "local",
+        "go.useLanguageServer": true,
+        "remote.localPortHost": "allInterfaces"
+      },
+      // same extensions as Gitpod, should match /.gitpod.yml
       "extensions": [
         "editorconfig.editorconfig",
         "dbaeumer.vscode-eslint",
@@ -42,9 +35,9 @@
         "Vue.volar",
         "ms-azuretools.vscode-docker",
         "vitest.explorer",
-        "TabNine.tabnine-vscode-self-hosted-updater",
-        "eamodio.gitlens",
-        "cweijan.vscode-database-client2"
+        "cweijan.vscode-database-client2",
+        "GitHub.vscode-pull-request-github",
+        "Azurite.azurite"
       ]
     }
   },
@@ -52,43 +45,24 @@
     "3000": {
       "label": "Gitea Web",
       "onAutoForward": "notify"
-    },
-    "6060": {
-      "label": "Gitea Web Profile",
-      "onAutoForward": "notify"
-    },
-    "2222": {
-      "label": "Gitea SSH",
-      "onAutoForward": "notify"
     }
   },
   "runServices": [
     "docker-proxy",
-    "db",
     "docker-in-docker",
-    "minio",
-    "minio-init",
     "runner-1",
     "runner-2",
-    "runner-3"
+    "runner-3",
+    "minio",
+    "minio-init",
+    "db"
   ],
   "shutdownAction": "stopCompose",
-  "forwardPorts": [
-    3000,
-    6432,
-    6060,
-    9020,
-    9001,
-    222,
-    2222
-  ],
-  "initializeCommand": "zsh .devcontainer/commands/initialize.sh",
-  "onCreateCommand": "zsh .devcontainer/commands/post-attach.sh",
-  "postAttachCommand": "zsh .devcontainer/commands/on-create.sh",
-  "postCreateCommand": "zsh .devcontainer/commands/post-create.sh",
-  "postStartCommand": "zsh .devcontainer/commands/post-start.sh",
-  "updateContentCommand": "zsh .devcontainer/commands/update-content.sh",
-  "containerEnv": {
-    "DOCKER_HOST": "tcp://docker-proxy:2375"
-  }
+  "postCreateCommand": "zsh ./.devcontainer/commands/post-create.sh",
+  "postStartCommand": "zsh ./.devcontainer/commands/post-start.sh",
+  "postAttachCommand": "zsh ./.devcontainer/commands/post-attach.sh",
+  "initializeCommand": "zsh ./.devcontainer/commands/initialize.sh",
+  "onCreateCommand": "zsh ./.devcontainer/commands/on-create.sh",
+  "updateContentCommand": "zsh ./.devcontainer/commands/update-content.sh",
+  "remoteUser": "vscode"
 }

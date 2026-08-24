@@ -6,7 +6,6 @@ package release
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -14,10 +13,8 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
+	"forgejo.org/modules/test"
 	"forgejo.org/services/attachment"
-
-	_ "forgejo.org/models/actions"
-	_ "forgejo.org/models/forgefed"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -138,9 +135,9 @@ func TestRelease_Create(t *testing.T) {
 	}))
 	assert.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, &release))
 	assert.Len(t, release.Attachments, 1)
-	assert.EqualValues(t, attach.UUID, release.Attachments[0].UUID)
-	assert.EqualValues(t, attach.Name, release.Attachments[0].Name)
-	assert.EqualValues(t, attach.ExternalURL, release.Attachments[0].ExternalURL)
+	assert.Equal(t, attach.UUID, release.Attachments[0].UUID)
+	assert.Equal(t, attach.Name, release.Attachments[0].Name)
+	assert.Equal(t, attach.ExternalURL, release.Attachments[0].ExternalURL)
 
 	release = repo_model.Release{
 		RepoID:       repo.ID,
@@ -165,8 +162,8 @@ func TestRelease_Create(t *testing.T) {
 	}))
 	assert.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, &release))
 	assert.Len(t, release.Attachments, 1)
-	assert.EqualValues(t, "test", release.Attachments[0].Name)
-	assert.EqualValues(t, "https://forgejo.org/", release.Attachments[0].ExternalURL)
+	assert.Equal(t, "test", release.Attachments[0].Name)
+	assert.Equal(t, "https://forgejo.org/", release.Attachments[0].ExternalURL)
 
 	release = repo_model.Release{
 		RepoID:       repo.ID,
@@ -219,7 +216,7 @@ func TestRelease_Update(t *testing.T) {
 	release, err := repo_model.GetRelease(db.DefaultContext, repo.ID, "v1.1.1")
 	require.NoError(t, err)
 	releaseCreatedUnix := release.CreatedUnix
-	time.Sleep(2 * time.Second) // sleep 2 seconds to ensure a different timestamp
+	test.SleepTillNextSecond()
 	release.Note = "Changed note"
 	require.NoError(t, UpdateRelease(db.DefaultContext, user, gitRepo, release, false, []*AttachmentChange{}))
 	release, err = repo_model.GetReleaseByID(db.DefaultContext, release.ID)
@@ -243,7 +240,7 @@ func TestRelease_Update(t *testing.T) {
 	release, err = repo_model.GetRelease(db.DefaultContext, repo.ID, "v1.2.1")
 	require.NoError(t, err)
 	releaseCreatedUnix = release.CreatedUnix
-	time.Sleep(2 * time.Second) // sleep 2 seconds to ensure a different timestamp
+	test.SleepTillNextSecond()
 	release.Title = "Changed title"
 	require.NoError(t, UpdateRelease(db.DefaultContext, user, gitRepo, release, false, []*AttachmentChange{}))
 	release, err = repo_model.GetReleaseByID(db.DefaultContext, release.ID)
@@ -267,7 +264,7 @@ func TestRelease_Update(t *testing.T) {
 	release, err = repo_model.GetRelease(db.DefaultContext, repo.ID, "v1.3.1")
 	require.NoError(t, err)
 	releaseCreatedUnix = release.CreatedUnix
-	time.Sleep(2 * time.Second) // sleep 2 seconds to ensure a different timestamp
+	test.SleepTillNextSecond()
 	release.Title = "Changed title"
 	release.Note = "Changed note"
 	require.NoError(t, UpdateRelease(db.DefaultContext, user, gitRepo, release, false, []*AttachmentChange{}))
@@ -318,10 +315,10 @@ func TestRelease_Update(t *testing.T) {
 	}))
 	require.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, release))
 	assert.Len(t, release.Attachments, 1)
-	assert.EqualValues(t, attach.UUID, release.Attachments[0].UUID)
-	assert.EqualValues(t, release.ID, release.Attachments[0].ReleaseID)
-	assert.EqualValues(t, attach.Name, release.Attachments[0].Name)
-	assert.EqualValues(t, attach.ExternalURL, release.Attachments[0].ExternalURL)
+	assert.Equal(t, attach.UUID, release.Attachments[0].UUID)
+	assert.Equal(t, release.ID, release.Attachments[0].ReleaseID)
+	assert.Equal(t, attach.Name, release.Attachments[0].Name)
+	assert.Equal(t, attach.ExternalURL, release.Attachments[0].ExternalURL)
 
 	// update the attachment name
 	require.NoError(t, UpdateRelease(db.DefaultContext, user, gitRepo, release, false, []*AttachmentChange{
@@ -334,10 +331,10 @@ func TestRelease_Update(t *testing.T) {
 	release.Attachments = nil
 	require.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, release))
 	assert.Len(t, release.Attachments, 1)
-	assert.EqualValues(t, attach.UUID, release.Attachments[0].UUID)
-	assert.EqualValues(t, release.ID, release.Attachments[0].ReleaseID)
-	assert.EqualValues(t, "test2.txt", release.Attachments[0].Name)
-	assert.EqualValues(t, attach.ExternalURL, release.Attachments[0].ExternalURL)
+	assert.Equal(t, attach.UUID, release.Attachments[0].UUID)
+	assert.Equal(t, release.ID, release.Attachments[0].ReleaseID)
+	assert.Equal(t, "test2.txt", release.Attachments[0].Name)
+	assert.Equal(t, attach.ExternalURL, release.Attachments[0].ExternalURL)
 
 	// delete the attachment
 	require.NoError(t, UpdateRelease(db.DefaultContext, user, gitRepo, release, false, []*AttachmentChange{
@@ -361,9 +358,9 @@ func TestRelease_Update(t *testing.T) {
 	}))
 	assert.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, release))
 	assert.Len(t, release.Attachments, 1)
-	assert.EqualValues(t, release.ID, release.Attachments[0].ReleaseID)
-	assert.EqualValues(t, "test", release.Attachments[0].Name)
-	assert.EqualValues(t, "https://forgejo.org/", release.Attachments[0].ExternalURL)
+	assert.Equal(t, release.ID, release.Attachments[0].ReleaseID)
+	assert.Equal(t, "test", release.Attachments[0].Name)
+	assert.Equal(t, "https://forgejo.org/", release.Attachments[0].ExternalURL)
 	externalAttachmentUUID := release.Attachments[0].UUID
 
 	// update the attachment name
@@ -378,10 +375,78 @@ func TestRelease_Update(t *testing.T) {
 	release.Attachments = nil
 	assert.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, release))
 	assert.Len(t, release.Attachments, 1)
-	assert.EqualValues(t, externalAttachmentUUID, release.Attachments[0].UUID)
-	assert.EqualValues(t, release.ID, release.Attachments[0].ReleaseID)
-	assert.EqualValues(t, "test2", release.Attachments[0].Name)
-	assert.EqualValues(t, "https://about.gitea.com/", release.Attachments[0].ExternalURL)
+	assert.Equal(t, externalAttachmentUUID, release.Attachments[0].UUID)
+	assert.Equal(t, release.ID, release.Attachments[0].ReleaseID)
+	assert.Equal(t, "test2", release.Attachments[0].Name)
+	assert.Equal(t, "https://about.gitea.com/", release.Attachments[0].ExternalURL)
+
+	// delete the attachment
+	require.NoError(t, UpdateRelease(db.DefaultContext, user, gitRepo, release, false, []*AttachmentChange{
+		{
+			Action: "delete",
+			UUID:   externalAttachmentUUID,
+		},
+	}))
+	release.Attachments = nil
+	require.NoError(t, repo_model.GetReleaseAttachments(db.DefaultContext, release))
+	assert.Empty(t, release.Attachments)
+
+	t.Run("Permission denied", func(t *testing.T) {
+		require.NoError(t, UpdateRelease(t.Context(), user, gitRepo, release, false, []*AttachmentChange{
+			{
+				Action: "add",
+				Type:   "attachment",
+				UUID:   "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13",
+			},
+		}))
+		require.NoError(t, repo_model.GetReleaseAttachments(t.Context(), release))
+		assert.Empty(t, release.Attachments)
+
+		require.NoError(t, UpdateRelease(t.Context(), user, gitRepo, release, false, []*AttachmentChange{
+			{
+				Action: "update",
+				Name:   "test2.txt",
+				UUID:   "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13",
+			},
+		}))
+		require.NoError(t, repo_model.GetReleaseAttachments(t.Context(), release))
+		assert.Empty(t, release.Attachments)
+	})
+
+	t.Run("Delete and edit", func(t *testing.T) {
+		// Add a attachment.
+		attach, err := attachment.NewAttachment(t.Context(), &repo_model.Attachment{
+			RepoID:     repo.ID,
+			UploaderID: user.ID,
+			Name:       "test.txt",
+		}, strings.NewReader("beep"), 4)
+		require.NoError(t, err)
+
+		require.NoError(t, UpdateRelease(t.Context(), user, gitRepo, release, false, []*AttachmentChange{
+			{
+				Action: "add",
+				Type:   "attachment",
+				UUID:   attach.UUID,
+			},
+		}))
+		require.NoError(t, repo_model.GetReleaseAttachments(t.Context(), release))
+		assert.Len(t, release.Attachments, 1)
+
+		// Delete and edit at the same time, this is identical how the browser would delete a attachment.
+		require.NoError(t, UpdateRelease(t.Context(), user, gitRepo, release, false, []*AttachmentChange{
+			{
+				Action: "update",
+				Name:   "test.txt",
+				UUID:   attach.UUID,
+			},
+			{
+				Action: "delete",
+				UUID:   attach.UUID,
+			},
+		}))
+		require.NoError(t, repo_model.GetReleaseAttachments(t.Context(), release))
+		assert.Empty(t, release.Attachments)
+	})
 }
 
 func TestRelease_createTag(t *testing.T) {
@@ -412,7 +477,7 @@ func TestRelease_createTag(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, release.CreatedUnix)
 	releaseCreatedUnix := release.CreatedUnix
-	time.Sleep(2 * time.Second) // sleep 2 seconds to ensure a different timestamp
+	test.SleepTillNextSecond()
 	release.Note = "Changed note"
 	_, err = createTag(db.DefaultContext, gitRepo, release, "")
 	require.NoError(t, err)
@@ -435,7 +500,7 @@ func TestRelease_createTag(t *testing.T) {
 	_, err = createTag(db.DefaultContext, gitRepo, release, "")
 	require.NoError(t, err)
 	releaseCreatedUnix = release.CreatedUnix
-	time.Sleep(2 * time.Second) // sleep 2 seconds to ensure a different timestamp
+	test.SleepTillNextSecond()
 	release.Title = "Changed title"
 	_, err = createTag(db.DefaultContext, gitRepo, release, "")
 	require.NoError(t, err)
@@ -458,7 +523,7 @@ func TestRelease_createTag(t *testing.T) {
 	_, err = createTag(db.DefaultContext, gitRepo, release, "")
 	require.NoError(t, err)
 	releaseCreatedUnix = release.CreatedUnix
-	time.Sleep(2 * time.Second) // sleep 2 seconds to ensure a different timestamp
+	test.SleepTillNextSecond()
 	release.Title = "Changed title"
 	release.Note = "Changed note"
 	_, err = createTag(db.DefaultContext, gitRepo, release, "")

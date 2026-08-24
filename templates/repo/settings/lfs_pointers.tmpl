@@ -5,7 +5,6 @@
 			{{if gt .NumAssociatable 0}}
 				<div class="ui right">
 					<form class="ui form" method="post" action="{{$.Link}}/associate">
-						{{.CsrfTokenHtml}}
 						{{range .Pointers}}
 							{{if .Associatable}}
 								<input type="hidden" name="oid" value="{{.Oid}} {{.Size}}">
@@ -22,8 +21,8 @@
 					<tr>
 						<th class="three wide">{{ctx.Locale.Tr "repo.settings.lfs_pointers.sha"}}</th>
 						<th class="four wide">{{ctx.Locale.Tr "repo.settings.lfs_pointers.oid"}}</th>
-						<th class="two wide">{{ctx.Locale.Tr "repo.settings.lfs_pointers.inRepo"}}</th>
-						<th class="two wide">{{ctx.Locale.Tr "repo.settings.lfs_pointers.exists"}}</th>
+						<th class="two wide" data-tooltip-content="{{ctx.Locale.Tr "repo.settings.lfs_pointers.inRepo"}}">{{ctx.Locale.Tr "repo.settings.lfs_pointers.inRepo"}}</th>
+						<th class="two wide" data-tooltip-content="{{ctx.Locale.Tr "repo.settings.lfs_pointers.exists"}}">{{ctx.Locale.Tr "repo.settings.lfs_pointers.exists"}}</th>
 						<th class="two wide" data-tooltip-content="{{ctx.Locale.Tr "repo.settings.lfs_pointers.accessible"}}">{{ctx.Locale.Tr "repo.settings.lfs_pointers.accessible"}}</th>
 						<th class="three wide"></th>
 					</tr>

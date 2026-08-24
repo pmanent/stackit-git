@@ -7,24 +7,23 @@
 // @watch end
 
 import {expect} from '@playwright/test';
-import {save_visual, test} from './utils_e2e.ts';
+import {test} from './utils_e2e.ts';
+import {screenshot} from './shared/screenshots.ts';
 
-test('Explore view taborder', async ({page}) => {
+test('Explore view taborder', async ({page}, workerInfo) => {
+  test.skip(['Mobile Safari', 'webkit'].includes(workerInfo.project.name), 'Safari does not tab-focus links by default on macOS');
   await page.goto('/explore/repos');
 
-  const l1 = page.locator('[href="https://forgejo.org"]');
+  // custom/templates/base/footer_content.tmpl removes the upstream
+  // "Powered by Forgejo" link, so l1 is intentionally absent here.
   const l2 = page.locator('[href="/assets/licenses.txt"]');
   const l3 = page.locator('[href*="/stars"]').first();
   const l4 = page.locator('[href*="/forks"]').first();
   let res = 0;
-  const exp = 15; // 0b1111 = four passing tests
+  const exp = 14; // 0b1110 = three passing tests (l2, l3, l4)
 
   for (let i = 0; i < 150; i++) {
     await page.keyboard.press('Tab');
-    if (await l1.evaluate((node) => document.activeElement === node)) {
-      res |= 1;
-      continue;
-    }
     if (await l2.evaluate((node) => document.activeElement === node)) {
       res |= 1 << 1;
       continue;
@@ -42,5 +41,5 @@ test('Explore view taborder', async ({page}) => {
     }
   }
   expect(res).toBe(exp);
-  await save_visual(page);
+  await screenshot(page);
 });

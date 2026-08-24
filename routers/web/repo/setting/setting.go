@@ -6,6 +6,7 @@
 package setting
 
 import (
+	go_context "context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"forgejo.org/models"
-	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	quota_model "forgejo.org/models/quota"
@@ -24,6 +24,7 @@ import (
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/indexer/code"
+	"forgejo.org/modules/indexer/issues"
 	"forgejo.org/modules/indexer/stats"
 	"forgejo.org/modules/lfs"
 	"forgejo.org/modules/log"
@@ -37,7 +38,7 @@ import (
 	"forgejo.org/services/context"
 	"forgejo.org/services/federation"
 	"forgejo.org/services/forms"
-	"forgejo.org/services/migrations"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 	mirror_service "forgejo.org/services/mirror"
 	repo_service "forgejo.org/services/repository"
 	wiki_service "forgejo.org/services/wiki"
@@ -64,6 +65,9 @@ func SettingsCtxData(ctx *context.Context) {
 	ctx.Data["DisableNewPushMirrors"] = setting.Mirror.DisableNewPush
 	ctx.Data["DefaultMirrorInterval"] = setting.Mirror.DefaultInterval
 	ctx.Data["MinimumMirrorInterval"] = setting.Mirror.MinInterval
+	ctx.Data["MaxAvatarFileSize"] = setting.Avatar.MaxFileSize
+	ctx.Data["MaxAvatarWidth"] = setting.Avatar.MaxWidth
+	ctx.Data["MaxAvatarHeight"] = setting.Avatar.MaxHeight
 
 	signing, _ := asymkey_service.SigningKey(ctx, ctx.Repo.Repository.RepoPath())
 	ctx.Data["SigningKeyAvailable"] = len(signing) > 0
@@ -95,7 +99,7 @@ func SettingsCtxData(ctx *context.Context) {
 	ctx.Data["CanUseSSHMirroring"] = git.HasSSHExecutable
 }
 
-// Units show a repositorys unit settings page
+// Units show a repository's unit settings page
 func Units(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.settings.units.units")
 	ctx.Data["PageIsRepoSettingsUnits"] = true
@@ -392,8 +396,8 @@ func SettingsPost(ctx *context.Context) {
 
 	case "federation":
 		if !setting.Federation.Enabled {
-			ctx.NotFound("", nil)
 			ctx.Flash.Info(ctx.Tr("repo.settings.federation_not_enabled"))
+			ctx.NotFound("", nil)
 			return
 		}
 		followingRepos := strings.TrimSpace(form.FollowingRepos)
@@ -458,19 +462,19 @@ func SettingsPost(ctx *context.Context) {
 			return
 		}
 
-		u, err := git.GetRemoteURL(ctx, ctx.Repo.Repository.RepoPath(), pullMirror.GetRemoteName())
+		u, err := mirror_service.DecryptOrRecoverRemoteAddress(ctx, pullMirror)
 		if err != nil {
-			ctx.Data["Err_MirrorAddress"] = true
-			handleSettingRemoteAddrError(ctx, err, form)
+			ctx.ServerError("DecryptOrRecoverRemoteAddress", err)
 			return
 		}
+
 		if u.User != nil && form.MirrorPassword == "" && form.MirrorUsername == u.User.Username() {
 			form.MirrorPassword, _ = u.User.Password()
 		}
 
 		address, err := forms.ParseRemoteAddr(form.MirrorAddress, form.MirrorUsername, form.MirrorPassword)
 		if err == nil {
-			err = migrations.IsMigrateURLAllowed(address, ctx.Doer)
+			err = migrations_allowlist.IsMigrateURLAllowed(address, ctx.Doer)
 		}
 		if err != nil {
 			ctx.Data["Err_MirrorAddress"] = true
@@ -478,17 +482,25 @@ func SettingsPost(ctx *context.Context) {
 			return
 		}
 
-		if err := mirror_service.UpdateAddress(ctx, pullMirror, address); err != nil {
-			ctx.ServerError("UpdateAddress", err)
-			return
-		}
-		remoteAddress, err := util.SanitizeURL(address)
-		if err != nil {
+		if err := pullMirror.UpdateRemoteAddress(ctx, address); err != nil {
 			ctx.Data["Err_MirrorAddress"] = true
 			handleSettingRemoteAddrError(ctx, err, form)
 			return
 		}
-		pullMirror.RemoteAddress = remoteAddress
+
+		// Update the unencrypted address stored in the git config, so that future `git fetch` will access the right
+		// address. pullMirror.RemoteAddress is the sanitized no-creds version from UpdateRemoteAddress.
+		if maybeSanitizedURL, err := pullMirror.SanitizedRemoteAddress(); err != nil {
+			ctx.ServerError("SanitizedRemoteAddress", err)
+			return
+		} else if has, sanitizedURL := maybeSanitizedURL.Get(); !has {
+			// SanitizedRemoteAddress must be present after we just stored it
+			ctx.ServerError("SanitizedRemoteAddress", err)
+			return
+		} else if err := mirror_service.UpdateAddress(ctx, pullMirror, sanitizedURL); err != nil {
+			ctx.ServerError("UpdateAddress", err)
+			return
+		}
 
 		form.LFS = form.LFS && setting.LFS.StartServer
 
@@ -499,7 +511,7 @@ func SettingsPost(ctx *context.Context) {
 				ctx.RenderWithErr(ctx.Tr("repo.migrate.invalid_lfs_endpoint"), tplSettingsOptions, &form)
 				return
 			}
-			err = migrations.IsMigrateURLAllowed(ep.String(), ctx.Doer)
+			err = migrations_allowlist.IsMigrateURLAllowed(ep.String(), ctx.Doer)
 			if err != nil {
 				ctx.Data["Err_LFSEndpoint"] = true
 				handleSettingRemoteAddrError(ctx, err, form)
@@ -592,6 +604,23 @@ func SettingsPost(ctx *context.Context) {
 			ctx.ServerError("UpdatePushMirrorInterval", err)
 			return
 		}
+
+		if m.BranchFilter != form.PushMirrorBranchFilter {
+			// replace `remote.<remote>.push` in config and db
+			m.BranchFilter = form.PushMirrorBranchFilter
+			if err := db.WithTx(ctx, func(ctx go_context.Context) error {
+				// Update the DB
+				if err = repo_model.UpdatePushMirrorBranchFilter(ctx, m); err != nil {
+					return err
+				}
+				// Update the repo config
+				return mirror_service.UpdatePushMirrorBranchFilter(ctx, m)
+			}); err != nil {
+				ctx.ServerError("UpdatePushMirrorBranchFilter", err)
+				return
+			}
+		}
+
 		// Background why we are adding it to Queue
 		// If we observed its implementation in the context of `push-mirror-sync` where it
 		// is evident that pushing to the queue is necessary for updates.
@@ -659,7 +688,7 @@ func SettingsPost(ctx *context.Context) {
 
 		address, err := forms.ParseRemoteAddr(form.PushMirrorAddress, form.PushMirrorUsername, form.PushMirrorPassword)
 		if err == nil {
-			err = migrations.IsPushMirrorURLAllowed(address, ctx.Doer)
+			err = migrations_allowlist.IsPushMirrorURLAllowed(address, ctx.Doer)
 		}
 		if err != nil {
 			ctx.Data["Err_PushMirrorAddress"] = true
@@ -667,11 +696,7 @@ func SettingsPost(ctx *context.Context) {
 			return
 		}
 
-		remoteSuffix, err := util.CryptoRandomString(10)
-		if err != nil {
-			ctx.ServerError("RandomString", err)
-			return
-		}
+		remoteSuffix := util.CryptoRandomString(util.RandomStringLow)
 
 		remoteAddress, err := util.SanitizeURL(address)
 		if err != nil {
@@ -687,6 +712,7 @@ func SettingsPost(ctx *context.Context) {
 			SyncOnCommit:  form.PushMirrorSyncOnCommit,
 			Interval:      interval,
 			RemoteAddress: remoteAddress,
+			BranchFilter:  form.PushMirrorBranchFilter,
 		}
 
 		var plainPrivateKey []byte
@@ -780,6 +806,8 @@ func SettingsPost(ctx *context.Context) {
 				return
 			}
 			code.UpdateRepoIndexer(ctx.Repo.Repository)
+		case "issues":
+			issues.UpdateRepoIndexer(ctx, ctx.Repo.Repository.ID)
 		default:
 			ctx.NotFound("", nil)
 			return
@@ -804,13 +832,9 @@ func SettingsPost(ctx *context.Context) {
 			ctx.Error(http.StatusNotFound)
 			return
 		}
-		repo.IsMirror = false
 
-		if _, err := repo_service.CleanUpMigrateInfo(ctx, repo); err != nil {
-			ctx.ServerError("CleanUpMigrateInfo", err)
-			return
-		} else if err = repo_model.DeleteMirrorByRepoID(ctx, ctx.Repo.Repository.ID); err != nil {
-			ctx.ServerError("DeleteMirrorByRepoID", err)
+		if err := repo_service.ConvertMirrorToNormalRepo(ctx, ctx.Repo.Repository); err != nil {
+			ctx.ServerError("ConvertMirror", err)
 			return
 		}
 		log.Trace("Repository converted from mirror to regular: %s", repo.FullName())
@@ -1038,7 +1062,7 @@ func SettingsPost(ctx *context.Context) {
 			return
 		}
 
-		if err := actions_model.CleanRepoScheduleTasks(ctx, repo, true); err != nil {
+		if err := actions_service.CleanRepoScheduleTasks(ctx, repo, true); err != nil {
 			log.Error("CleanRepoScheduleTasks for archived repo %s/%s: %v", ctx.Repo.Owner.Name, repo.Name, err)
 		}
 

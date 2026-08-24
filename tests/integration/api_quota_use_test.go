@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -21,7 +22,6 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/migration"
-	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
@@ -30,6 +30,7 @@ import (
 	"forgejo.org/services/forms"
 	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -187,16 +188,6 @@ func (e *quotaEnv) SetupWithMultipleQuotaRules(t *testing.T) {
 	cleaner = createQuotaGroup(t, "default")
 	e.cleanups = append(e.cleanups, cleaner)
 
-	// Create three rules: all, repo-size, and asset-size
-	zero := int64(0)
-	ruleAll := api.CreateQuotaRuleOptions{
-		Name:     "all",
-		Limit:    &zero,
-		Subjects: []string{"size:all"},
-	}
-	cleaner = createQuotaRule(t, ruleAll)
-	e.cleanups = append(e.cleanups, cleaner)
-
 	fifteenMb := int64(1024 * 1024 * 15)
 	ruleRepoSize := api.CreateQuotaRuleOptions{
 		Name:     "repo-size",
@@ -215,8 +206,6 @@ func (e *quotaEnv) SetupWithMultipleQuotaRules(t *testing.T) {
 	e.cleanups = append(e.cleanups, cleaner)
 
 	// Add these rules to the group
-	cleaner = e.AddRuleToGroup(t, "default", "all")
-	e.cleanups = append(e.cleanups, cleaner)
 	cleaner = e.AddRuleToGroup(t, "default", "repo-size")
 	e.cleanups = append(e.cleanups, cleaner)
 	cleaner = e.AddRuleToGroup(t, "default", "asset-size")
@@ -292,15 +281,16 @@ func prepareQuotaEnv(t *testing.T, username string) *quotaEnv {
 	env.cleanups = append(env.cleanups, userCleanup)
 
 	// Create a repository
-	repo, _, repoCleanup := tests.CreateDeclarativeRepoWithOptions(t, env.User.User, tests.DeclarativeRepoOptions{})
+	repo := forgery.CreateRepository(t, env.User.User, &forgery.CreateRepositoryOptions{
+		Files: forgery.FilesInit{}, // some tests will fail with 404 if the repository is empty
+	})
 	env.Repo = repo
-	env.cleanups = append(env.cleanups, repoCleanup)
 
 	return &env
 }
 
 func TestAPIQuotaUserCleanSlate(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		defer test.MockVariableValue(&setting.Quota.Enabled, true)()
 		defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
 
@@ -320,13 +310,13 @@ func TestAPIQuotaUserCleanSlate(t *testing.T) {
 }
 
 func TestAPIQuotaEnforcement(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		testAPIQuotaEnforcement(t)
 	})
 }
 
 func TestAPIQuotaCountsTowardsCorrectUser(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := prepareQuotaEnv(t, "quota-correct-user-test")
 		defer env.Cleanup()
 		env.SetupWithSingleQuotaRule(t)
@@ -362,7 +352,7 @@ func TestAPIQuotaCountsTowardsCorrectUser(t *testing.T) {
 }
 
 func TestAPIQuotaError(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := prepareQuotaEnv(t, "quota-enforcement")
 		defer env.Cleanup()
 		env.SetupWithSingleQuotaRule(t)
@@ -377,7 +367,7 @@ func TestAPIQuotaError(t *testing.T) {
 		var msg context.APIQuotaExceeded
 		DecodeJSON(t, resp, &msg)
 
-		assert.EqualValues(t, env.Orgs.Limited.ID, msg.UserID)
+		assert.Equal(t, env.Orgs.Limited.ID, msg.UserID)
 		assert.Equal(t, env.Orgs.Limited.UserName, msg.UserName)
 	})
 }
@@ -414,7 +404,7 @@ func testAPIQuotaEnforcement(t *testing.T) {
 
 	t.Run("#/orgs/{org}/repos", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
-		defer env.SetRuleLimit(t, "all", 0)
+		defer env.SetRuleLimit(t, "all", 0)()
 
 		assertCreateRepo := func(t *testing.T, orgName, repoName string, expectedStatus int) func() {
 			t.Helper()
@@ -487,10 +477,9 @@ func testAPIQuotaEnforcement(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 
 		// Create a template repository
-		template, _, cleanup := tests.CreateDeclarativeRepoWithOptions(t, env.User.User, tests.DeclarativeRepoOptions{
-			IsTemplate: optional.Some(true),
+		template := forgery.CreateRepository(t, env.User.User, &forgery.CreateRepositoryOptions{
+			IsTemplate: true,
 		})
-		defer cleanup()
 
 		// Drop the quota to 0
 		defer env.SetRuleLimit(t, "all", 0)()
@@ -524,8 +513,7 @@ func testAPIQuotaEnforcement(t *testing.T) {
 
 	t.Run("#/repos/{username}/{reponame}", func(t *testing.T) {
 		// Lets create a new repo to play with.
-		repo, _, repoCleanup := tests.CreateDeclarativeRepoWithOptions(t, env.User.User, tests.DeclarativeRepoOptions{})
-		defer repoCleanup()
+		repo := forgery.CreateRepository(t, env.User.User, nil)
 
 		// Drop the quota to 0
 		defer env.SetRuleLimit(t, "all", 0)()
@@ -1209,8 +1197,7 @@ func testAPIQuotaEnforcement(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				// Create a repository to transfer
-				repo, _, cleanup := tests.CreateDeclarativeRepoWithOptions(t, env.User.User, tests.DeclarativeRepoOptions{})
-				defer cleanup()
+				repo := forgery.CreateRepository(t, env.User.User, nil)
 
 				// Initiate repo transfer
 				req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/transfer", env.User.User.Name, repo.Name), api.TransferRepoOption{
@@ -1244,8 +1231,7 @@ func testAPIQuotaEnforcement(t *testing.T) {
 				defer env.SetRuleLimit(t, "deny-all", -1)()
 
 				// Create a repository to transfer
-				repo, _, cleanup := tests.CreateDeclarativeRepoWithOptions(t, env.User.User, tests.DeclarativeRepoOptions{})
-				defer cleanup()
+				repo := forgery.CreateRepository(t, env.User.User, nil)
 
 				// Initiate repo transfer
 				req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/transfer", env.User.User.Name, repo.Name), api.TransferRepoOption{
@@ -1297,10 +1283,170 @@ func testAPIQuotaEnforcement(t *testing.T) {
 			env.User.Session.MakeRequest(t, req, http.StatusNoContent)
 		})
 	})
+
+	// verify that package upload quota is evaluated against the package owner, not the uploader
+	t.Run("#/packages/{org}/quota-enforcement-against-owner", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		// Ensure the user's own quota is unlimited for this block; prior tests may have left it at 0.
+		defer env.SetRuleLimit(t, "all", -1)()
+
+		t.Run("upload to limited org is rejected", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			// Verify the user has quota remaining, so rejection is due to org quota
+			req := NewRequest(t, "GET", "/api/v1/user/quota/check?subject=size:assets:packages:all").AddTokenAuth(env.User.Token)
+			resp := env.User.Session.MakeRequest(t, req, http.StatusOK)
+			var quotaOK bool
+			DecodeJSON(t, resp, &quotaOK)
+			assert.True(t, quotaOK, "user must have quota remaining before the rejection test")
+
+			body := strings.NewReader("forgejo is awesome")
+			req = NewRequestWithBody(t, "PUT",
+				fmt.Sprintf("/api/packages/%s/generic/org-quota-test/1.0.0/file.txt", env.Orgs.Limited.Name),
+				body,
+			).AddTokenAuth(env.User.Token)
+			env.User.Session.MakeRequest(t, req, http.StatusRequestEntityTooLarge)
+		})
+
+		t.Run("upload to unlimited org succeeds even when user quota is zero", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			defer env.SetRuleLimit(t, "all", 0)()
+
+			// Verify the user's quota is zero before the upload
+			req := NewRequest(t, "GET", "/api/v1/user/quota/check?subject=size:assets:packages:all").AddTokenAuth(env.User.Token)
+			resp := env.User.Session.MakeRequest(t, req, http.StatusOK)
+			var quotaOK bool
+			DecodeJSON(t, resp, &quotaOK)
+			assert.False(t, quotaOK, "user must have no quota before the upload test")
+
+			body := strings.NewReader("forgejo is awesome")
+			req = NewRequestWithBody(t, "PUT",
+				fmt.Sprintf("/api/packages/%s/generic/org-quota-test/1.0.0/file.txt", env.Orgs.Unlimited.Name),
+				body,
+			).AddTokenAuth(env.User.Token)
+			env.User.Session.MakeRequest(t, req, http.StatusCreated)
+
+			env.WithoutQuota(t, func() {
+				req := NewRequestf(t, "DELETE", "/api/v1/packages/%s/generic/org-quota-test/1.0.0", env.Orgs.Unlimited.Name).
+					AddTokenAuth(env.User.Token)
+				env.User.Session.MakeRequest(t, req, http.StatusNoContent)
+			})
+		})
+	})
+
+	t.Run("#/v2/{org}/container/quota-enforcement-against-owner", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		// Ensure the user's own quota is unlimited for this block; prior tests may have left it at 0.
+		defer env.SetRuleLimit(t, "all", -1)()
+
+		type tokenResponse struct {
+			Token string `json:"token"`
+		}
+
+		getContainerToken := func(t *testing.T, username string) string {
+			t.Helper()
+			req := NewRequest(t, "GET", fmt.Sprintf("%sv2/token", setting.AppURL)).
+				AddBasicAuth(username)
+			resp := MakeRequest(t, req, http.StatusOK)
+			var tr tokenResponse
+			DecodeJSON(t, resp, &tr)
+			return fmt.Sprintf("Bearer %s", tr.Token)
+		}
+
+		blobContent := []byte("quota-container-blob")
+		blobDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(blobContent))
+		configContent := `{}`
+		configDigest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(configContent)))
+		manifestContent := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.docker.container.image.v1+json","digest":%q,"size":%d},"layers":[{"mediaType":"application/vnd.docker.image.rootfs.diff.tar.gzip","digest":%q,"size":%d}]}`,
+			configDigest, len(configContent), blobDigest, len(blobContent))
+
+		userToken := getContainerToken(t, env.User.User.Name)
+
+		t.Run("upload to limited org is rejected", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			// Verify the user has quota remaining, so rejection is due to org quota
+			req := NewRequest(t, "GET", "/api/v1/user/quota/check?subject=size:assets:packages:all").AddTokenAuth(env.User.Token)
+			resp := env.User.Session.MakeRequest(t, req, http.StatusOK)
+			var quotaOK bool
+			DecodeJSON(t, resp, &quotaOK)
+			assert.True(t, quotaOK, "user must have quota remaining before the rejection test")
+
+			image := fmt.Sprintf("%sv2/%s/quota-test-img", setting.AppURL, env.Orgs.Limited.Name)
+
+			req = NewRequestWithBody(t, "POST", fmt.Sprintf("%s/blobs/uploads?digest=%s", image, blobDigest), bytes.NewReader(blobContent)).
+				AddTokenAuth(userToken)
+			MakeRequest(t, req, http.StatusRequestEntityTooLarge)
+
+			req = NewRequest(t, "POST", fmt.Sprintf("%s/blobs/uploads", image)).
+				AddTokenAuth(userToken)
+			resp = MakeRequest(t, req, http.StatusRequestEntityTooLarge)
+
+			// chunked upload: initiate returns 413, so patch/put are never reached
+			// this is the result we expect, otherwise it's very hard to create multi-tenant environment
+			_ = resp
+		})
+
+		t.Run("upload to unlimited org succeeds even when user quota is zero", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			defer env.SetRuleLimit(t, "all", 0)()
+
+			// Verify the user's quota is zero before the upload
+			req := NewRequest(t, "GET", "/api/v1/user/quota/check?subject=size:assets:packages:all").AddTokenAuth(env.User.Token)
+			resp := env.User.Session.MakeRequest(t, req, http.StatusOK)
+			var quotaOK bool
+			DecodeJSON(t, resp, &quotaOK)
+			assert.False(t, quotaOK, "user must have no quota before the upload test")
+
+			image := fmt.Sprintf("%sv2/%s/quota-test-img", setting.AppURL, env.Orgs.Unlimited.Name)
+
+			// monolithic blob upload
+			req = NewRequestWithBody(t, "POST", fmt.Sprintf("%s/blobs/uploads?digest=%s", image, blobDigest), bytes.NewReader(blobContent)).
+				AddTokenAuth(userToken)
+			MakeRequest(t, req, http.StatusCreated)
+
+			req = NewRequestWithBody(t, "POST", fmt.Sprintf("%s/blobs/uploads?digest=%s", image, configDigest), strings.NewReader(configContent)).
+				AddTokenAuth(userToken)
+			MakeRequest(t, req, http.StatusCreated)
+
+			// chunked blob upload (patch + put)
+			req = NewRequest(t, "POST", fmt.Sprintf("%s/blobs/uploads", image)).
+				AddTokenAuth(userToken)
+			resp = MakeRequest(t, req, http.StatusAccepted)
+
+			uploadURL := resp.Header().Get("Location")
+			contentRange := fmt.Sprintf("0-%d", len(blobContent)-1)
+			req = NewRequestWithBody(t, "PATCH", setting.AppURL+uploadURL[1:], bytes.NewReader(blobContent)).
+				AddTokenAuth(userToken).
+				SetHeader("Content-Range", contentRange)
+			resp = MakeRequest(t, req, http.StatusAccepted)
+
+			uploadURL = resp.Header().Get("Location")
+			req = NewRequest(t, "PUT", fmt.Sprintf("%s?digest=%s", setting.AppURL+uploadURL[1:], blobDigest)).
+				AddTokenAuth(userToken)
+			MakeRequest(t, req, http.StatusCreated)
+
+			// upload manifest
+			req = NewRequestWithBody(t, "PUT", fmt.Sprintf("%s/manifests/v1", image), strings.NewReader(manifestContent)).
+				AddTokenAuth(userToken).
+				SetHeader("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+			MakeRequest(t, req, http.StatusCreated)
+
+			// delete manifest
+			env.WithoutQuota(t, func() {
+				manifestDigest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(manifestContent)))
+				req := NewRequest(t, "DELETE", fmt.Sprintf("%s/manifests/%s", image, manifestDigest)).
+					AddTokenAuth(userToken)
+				MakeRequest(t, req, http.StatusAccepted)
+			})
+		})
+	})
 }
 
 func TestAPIQuotaOrgQuotaQuery(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := prepareQuotaEnv(t, "quota-enforcement")
 		defer env.Cleanup()
 
@@ -1327,7 +1473,7 @@ func TestAPIQuotaOrgQuotaQuery(t *testing.T) {
 }
 
 func TestAPIQuotaUserBasics(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := prepareQuotaEnv(t, "quota-enforcement")
 		defer env.Cleanup()
 
@@ -1414,7 +1560,6 @@ func TestAPIQuotaUserBasics(t *testing.T) {
 
 				// Temporarily disable quota checking
 				defer env.SetRuleLimit(t, "repo-size", -1)()
-				defer env.SetRuleLimit(t, "all", -1)()
 
 				// Create a branch
 				req := NewRequestWithJSON(t, "POST", env.APIPathForRepo("/branches"), api.CreateBranchRepoOption{
@@ -1424,7 +1569,6 @@ func TestAPIQuotaUserBasics(t *testing.T) {
 
 				// Set the limit back. No need to defer, the first one will set it
 				// back to the correct value.
-				env.SetRuleLimit(t, "all", 0)
 				env.SetRuleLimit(t, "repo-size", 0)
 
 				// Deleting a branch does not incur quota enforcement

@@ -5,6 +5,7 @@ package issues_test
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -66,6 +67,10 @@ func TestIssueAPIURL(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://try.gitea.io/api/v1/repos/user2/repo1/issues/1", issue.APIURL(db.DefaultContext))
+
+	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
+	require.NoError(t, pr.LoadIssue(db.DefaultContext))
+	assert.Equal(t, "https://try.gitea.io/api/v1/repos/user2/repo1/pulls/2", pr.Issue.APIURL(db.DefaultContext))
 }
 
 func TestGetIssuesByIDs(t *testing.T) {
@@ -85,6 +90,7 @@ func TestGetIssuesByIDs(t *testing.T) {
 }
 
 func TestGetParticipantIDsByIssue(t *testing.T) {
+	defer unittest.OverrideFixtures("models/issues/TestGetParticipantIDsByIssue")()
 	require.NoError(t, unittest.PrepareTestDatabase())
 
 	checkParticipants := func(issueID int64, userIDs []int) {
@@ -107,6 +113,7 @@ func TestGetParticipantIDsByIssue(t *testing.T) {
 	// User 2 only labeled issue1 (see fixtures/comment.yml)
 	// Users 3 and 5 made actual comments (see fixtures/comment.yml)
 	// User 3 is inactive, thus not active participant
+	// User 10 has a pending review, thus not an active participant, yet (see TestGetParticipantIDsByIssue/comment.yml)
 	checkParticipants(1, []int{1, 5})
 }
 
@@ -143,14 +150,14 @@ func TestUpdateIssueCols(t *testing.T) {
 	then := time.Now().Unix()
 
 	updatedIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: issue.ID})
-	assert.EqualValues(t, newTitle, updatedIssue.Title)
-	assert.EqualValues(t, prevContent, updatedIssue.Content)
+	assert.Equal(t, newTitle, updatedIssue.Title)
+	assert.Equal(t, prevContent, updatedIssue.Content)
 	unittest.AssertInt64InRange(t, now, then, int64(updatedIssue.UpdatedUnix))
 }
 
 func TestIssues(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	for _, test := range []struct {
+	for idx, test := range []struct {
 		Opts             issues_model.IssuesOptions
 		ExpectedIssueIDs []int64
 	}{
@@ -221,7 +228,16 @@ func TestIssues(t *testing.T) {
 			issues_model.IssuesOptions{
 				SubscriberID: 4,
 			},
-			[]int64{11, 5, 7, 4, 3, 2, 1},
+			[]int64{12, 11, 6, 5, 7, 4, 3, 2, 1},
+		},
+		{
+			// This user watches repo 5 but not its issues.
+			// Therefore, they are not a subscriber of its issues (namely issue_id 15)
+			// user 5 commented on issue 1 and 3.
+			issues_model.IssuesOptions{
+				SubscriberID: 5,
+			},
+			[]int64{3, 1},
 		},
 		{
 			issues_model.IssuesOptions{
@@ -238,9 +254,9 @@ func TestIssues(t *testing.T) {
 	} {
 		issues, err := issues_model.Issues(db.DefaultContext, &test.Opts)
 		require.NoError(t, err)
-		if assert.Len(t, issues, len(test.ExpectedIssueIDs)) {
+		if assert.Len(t, issues, len(test.ExpectedIssueIDs), "idx: %d", idx) {
 			for i, issue := range issues {
-				assert.EqualValues(t, test.ExpectedIssueIDs[i], issue.ID)
+				assert.Equal(t, test.ExpectedIssueIDs[i], issue.ID, "idx: %d", idx)
 			}
 		}
 	}
@@ -273,10 +289,10 @@ func testInsertIssue(t *testing.T, title, content string, expectIndex int64) *is
 		has, err := db.GetEngine(db.DefaultContext).ID(issue.ID).Get(&newIssue)
 		require.NoError(t, err)
 		assert.True(t, has)
-		assert.EqualValues(t, issue.Title, newIssue.Title)
-		assert.EqualValues(t, issue.Content, newIssue.Content)
+		assert.Equal(t, issue.Title, newIssue.Title)
+		assert.Equal(t, issue.Content, newIssue.Content)
 		if expectIndex > 0 {
-			assert.EqualValues(t, expectIndex, newIssue.Index)
+			assert.Equal(t, expectIndex, newIssue.Index)
 		}
 	})
 	return &newIssue
@@ -309,8 +325,8 @@ func TestIssue_ResolveMentions(t *testing.T) {
 		for i, user := range resolved {
 			ids[i] = user.ID
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		assert.EqualValues(t, expected, ids)
+		slices.Sort(ids)
+		assert.Equal(t, expected, ids)
 	}
 
 	// Public repo, existing user
@@ -336,7 +352,7 @@ func TestResourceIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		t.Run(fmt.Sprintf("issue %d", i+1), func(t *testing.T) {
 			t.Parallel()
@@ -367,7 +383,7 @@ func TestCorrectIssueStats(t *testing.T) {
 	issueAmount := issues_model.MaxQueryParameters + 10
 
 	var wg sync.WaitGroup
-	for i := 0; i < issueAmount; i++ {
+	for i := range issueAmount {
 		wg.Add(1)
 		go func(i int) {
 			testInsertIssue(t, fmt.Sprintf("Issue %d", i+1), "Bugs are nasty", 0)
@@ -431,7 +447,7 @@ func TestCountIssues(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	count, err := issues_model.CountIssues(db.DefaultContext, &issues_model.IssuesOptions{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 22, count)
+	assert.EqualValues(t, 23, count)
 }
 
 func TestIssueLoadAttributes(t *testing.T) {
@@ -445,28 +461,28 @@ func TestIssueLoadAttributes(t *testing.T) {
 
 	for _, issue := range issueList {
 		require.NoError(t, issue.LoadAttributes(db.DefaultContext))
-		assert.EqualValues(t, issue.RepoID, issue.Repo.ID)
+		assert.Equal(t, issue.RepoID, issue.Repo.ID)
 		for _, label := range issue.Labels {
-			assert.EqualValues(t, issue.RepoID, label.RepoID)
+			assert.Equal(t, issue.RepoID, label.RepoID)
 			unittest.AssertExistsAndLoadBean(t, &issues_model.IssueLabel{IssueID: issue.ID, LabelID: label.ID})
 		}
 		if issue.PosterID > 0 {
-			assert.EqualValues(t, issue.PosterID, issue.Poster.ID)
+			assert.Equal(t, issue.PosterID, issue.Poster.ID)
 		}
 		if issue.AssigneeID > 0 {
-			assert.EqualValues(t, issue.AssigneeID, issue.Assignee.ID)
+			assert.Equal(t, issue.AssigneeID, issue.Assignee.ID)
 		}
 		if issue.MilestoneID > 0 {
-			assert.EqualValues(t, issue.MilestoneID, issue.Milestone.ID)
+			assert.Equal(t, issue.MilestoneID, issue.Milestone.ID)
 		}
 		if issue.IsPull {
-			assert.EqualValues(t, issue.ID, issue.PullRequest.IssueID)
+			assert.Equal(t, issue.ID, issue.PullRequest.IssueID)
 		}
 		for _, attachment := range issue.Attachments {
-			assert.EqualValues(t, issue.ID, attachment.IssueID)
+			assert.Equal(t, issue.ID, attachment.IssueID)
 		}
 		for _, comment := range issue.Comments {
-			assert.EqualValues(t, issue.ID, comment.IssueID)
+			assert.Equal(t, issue.ID, comment.IssueID)
 		}
 		if issue.ID == int64(1) {
 			assert.Equal(t, int64(400), issue.TotalTrackedTime)

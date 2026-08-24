@@ -17,7 +17,10 @@ import (
 	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/optional"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/test"
 	"forgejo.org/services/convert"
 	"forgejo.org/tests"
 
@@ -41,9 +44,20 @@ func TestAPITeam(t *testing.T) {
 
 	var apiTeam api.Team
 	DecodeJSON(t, resp, &apiTeam)
-	assert.EqualValues(t, team.ID, apiTeam.ID)
+	assert.Equal(t, team.ID, apiTeam.ID)
 	assert.Equal(t, team.Name, apiTeam.Name)
-	assert.EqualValues(t, convert.ToOrganization(db.DefaultContext, org), apiTeam.Organization)
+
+	toOrg := convert.ToOrganization(db.DefaultContext, org)
+	assert.Equal(t, toOrg.ID, apiTeam.Organization.ID)
+	assert.Equal(t, toOrg.AvatarURL, apiTeam.Organization.AvatarURL)
+	assert.Equal(t, toOrg.Name, apiTeam.Organization.Name)
+	assert.Equal(t, toOrg.FullName, apiTeam.Organization.FullName)
+	assert.Equal(t, toOrg.Description, apiTeam.Organization.Description)
+	assert.Equal(t, toOrg.Website, apiTeam.Organization.Website)
+	assert.Equal(t, toOrg.Location, apiTeam.Organization.Location)
+	assert.Equal(t, toOrg.Visibility, apiTeam.Organization.Visibility)
+	assert.Equal(t, toOrg.RepoAdminChangeTeamAccess, apiTeam.Organization.RepoAdminChangeTeamAccess)
+	assert.Equal(t, toOrg.Created.Local(), apiTeam.Organization.Created.Local())
 
 	// non team member user will not access the teams details
 	teamUser2 := unittest.AssertExistsAndLoadBean(t, &organization.TeamUser{ID: 3})
@@ -248,10 +262,10 @@ func checkTeamResponse(t *testing.T, testName string, apiTeam *api.Team, name, d
 		if units != nil {
 			sort.StringSlice(units).Sort()
 			sort.StringSlice(apiTeam.Units).Sort()
-			assert.EqualValues(t, units, apiTeam.Units, "units")
+			assert.Equal(t, units, apiTeam.Units, "units")
 		}
 		if unitsMap != nil {
-			assert.EqualValues(t, unitsMap, apiTeam.UnitsMap, "unitsMap")
+			assert.Equal(t, unitsMap, apiTeam.UnitsMap, "unitsMap")
 		}
 	})
 }
@@ -295,6 +309,82 @@ func TestAPITeamSearch(t *testing.T) {
 	MakeRequest(t, req, http.StatusForbidden)
 }
 
+func TestAPIGetTeamReposAccessTokenResources(t *testing.T) {
+	defer unittest.OverrideFixtures("tests/integration/fixtures/TestAPIGetTeamReposAccessTokenResources")()
+	defer tests.PrepareTestEnv(t)()
+
+	var repos []api.Repository
+
+	// Test cases org3/repo21 (public), org3/repo3 (private), org3/repo5 (private) --
+	// TestAPIGetTeamReposAccessTokenResources fixtures create a team w/ ID=26 that contains all three repos.
+	session := loginUser(t, "user2")
+
+	find := func() (bool, bool, bool) {
+		foundRepo21 := false // public org3/repo21
+		foundRepo3 := false  // private org3/repo3
+		foundRepo5 := false  // second private repo org3/repo5 used in fine-grain testing, included as baseline
+		for _, repo := range repos {
+			switch repo.Name {
+			case "repo21":
+				foundRepo21 = true
+			case "repo3":
+				foundRepo3 = true
+			case "repo5":
+				foundRepo5 = true
+			}
+		}
+		return foundRepo21, foundRepo3, foundRepo5
+	}
+
+	t.Run("all access token", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		allToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeReadOrganization)
+
+		req := NewRequest(t, "GET", "/api/v1/teams/26/repos").AddTokenAuth(allToken)
+		resp := MakeRequest(t, req, http.StatusOK)
+		DecodeJSON(t, resp, &repos)
+		foundRepo21, foundRepo3, foundRepo5 := find()
+
+		assert.True(t, foundRepo21) // public org3/repo21
+		assert.True(t, foundRepo3)  // private org3/repo3
+		assert.True(t, foundRepo5)  // private org3/repo5, used in fine-grain testing, included as baseline
+	})
+
+	t.Run("public-only access token", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		publicOnlyToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopePublicOnly, auth_model.AccessTokenScopeReadOrganization)
+
+		req := NewRequest(t, "GET", "/api/v1/teams/26/repos").AddTokenAuth(publicOnlyToken)
+		resp := MakeRequest(t, req, http.StatusOK)
+		DecodeJSON(t, resp, &repos)
+		foundRepo21, foundRepo3, foundRepo5 := find()
+
+		assert.True(t, foundRepo21) // public org3/repo21
+		assert.False(t, foundRepo3) // private org3/repo3
+		assert.False(t, foundRepo5) // private org3/repo5
+	})
+
+	t.Run("specific repo access token", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		repo2OnlyToken := createFineGrainedRepoAccessToken(t, "user2",
+			[]auth_model.AccessTokenScope{auth_model.AccessTokenScopeReadOrganization},
+			[]int64{3},
+		)
+
+		req := NewRequest(t, "GET", "/api/v1/teams/26/repos").AddTokenAuth(repo2OnlyToken)
+		resp := MakeRequest(t, req, http.StatusOK)
+		DecodeJSON(t, resp, &repos)
+		foundRepo21, foundRepo3, foundRepo5 := find()
+
+		assert.True(t, foundRepo21) // public org3/repo21, allowed as it's public and read-access only
+		assert.True(t, foundRepo3)  // private org3/repo3, allowed inside fine-grain
+		assert.False(t, foundRepo5) // private org3/repo5, denied outside fine-grain
+	})
+}
+
 func TestAPIGetTeamRepo(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
@@ -318,4 +408,118 @@ func TestAPIGetTeamRepo(t *testing.T) {
 	req = NewRequestf(t, "GET", "/api/v1/teams/%d/repos/%s/", team.ID, teamRepo.FullName()).
 		AddTokenAuth(token5)
 	MakeRequest(t, req, http.StatusNotFound)
+}
+
+func TestAPIGetTeamRepoAccessTokenResources(t *testing.T) {
+	defer unittest.OverrideFixtures("tests/integration/fixtures/TestAPIGetTeamRepoAccessTokenResources")()
+	defer tests.PrepareTestEnv(t)()
+
+	// Test cases org3/repo21 (public), org3/repo3 (private), org3/repo5 (private) --
+	// TestAPIGetTeamRepoAccessTokenResources fixtures create a team w/ ID=26 that contains all three repos.
+	session := loginUser(t, "user2")
+
+	var repo api.Repository
+
+	t.Run("all access token", func(t *testing.T) {
+		allToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeReadOrganization)
+
+		t.Run("allowed public repo21", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo21").AddTokenAuth(allToken)
+			resp := MakeRequest(t, req, http.StatusOK)
+			DecodeJSON(t, resp, &repo)
+			assert.False(t, repo.Private)
+		})
+		t.Run("allowed private repo3", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo3").AddTokenAuth(allToken)
+			resp := MakeRequest(t, req, http.StatusOK)
+			DecodeJSON(t, resp, &repo)
+			assert.True(t, repo.Private)
+		})
+		// org3/repo5 is a second repo used in fine-grain testing below, so we include it in other tests as a baseline
+		t.Run("allowed private repo5", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo5").AddTokenAuth(allToken)
+			resp := MakeRequest(t, req, http.StatusOK)
+			DecodeJSON(t, resp, &repo)
+			assert.True(t, repo.Private)
+		})
+	})
+
+	t.Run("public-only access token", func(t *testing.T) {
+		publicOnlyToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopePublicOnly, auth_model.AccessTokenScopeReadOrganization)
+
+		t.Run("allowed public repo21", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo21").AddTokenAuth(publicOnlyToken)
+			resp := MakeRequest(t, req, http.StatusOK)
+			DecodeJSON(t, resp, &repo)
+			assert.False(t, repo.Private)
+		})
+		t.Run("denied private repo3", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo3").AddTokenAuth(publicOnlyToken)
+			MakeRequest(t, req, http.StatusNotFound)
+		})
+		t.Run("denied private repo5", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo5").AddTokenAuth(publicOnlyToken)
+			MakeRequest(t, req, http.StatusNotFound)
+		})
+	})
+
+	t.Run("specific repo access token", func(t *testing.T) {
+		repo2OnlyToken := createFineGrainedRepoAccessToken(t, "user2",
+			[]auth_model.AccessTokenScope{auth_model.AccessTokenScopeReadOrganization},
+			[]int64{3},
+		)
+
+		t.Run("allowed public repo21", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo21").AddTokenAuth(repo2OnlyToken)
+			resp := MakeRequest(t, req, http.StatusOK)
+			DecodeJSON(t, resp, &repo)
+			assert.False(t, repo.Private)
+		})
+		t.Run("allowed inside fine-grain repo3", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo3").AddTokenAuth(repo2OnlyToken)
+			resp := MakeRequest(t, req, http.StatusOK)
+			DecodeJSON(t, resp, &repo)
+			assert.True(t, repo.Private)
+		})
+		t.Run("denied private outside fine-grain repo5", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/teams/26/repos/org3/repo5").AddTokenAuth(repo2OnlyToken)
+			MakeRequest(t, req, http.StatusNotFound)
+		})
+	})
+}
+
+func TestAPIAddMemberDirectly(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Service.AddMembersByInvitations, false)()
+	token := getUserToken(t, "user1", auth_model.AccessTokenScopeWriteOrganization)
+
+	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
+	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+
+	req := NewRequestf(t, "PUT", "/api/v1/teams/%d/members/%s", team.ID, user5.Name).
+		AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+
+	isMember, err := organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, user5.ID)
+	require.NoError(t, err)
+	assert.True(t, isMember)
+}
+
+func TestAPIAddMemberGeneratesInvite(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Service.AddMembersByInvitations, true)()
+
+	token := getUserToken(t, "user1", auth_model.AccessTokenScopeWriteOrganization)
+
+	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
+	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+
+	req := NewRequestf(t, "PUT", "/api/v1/teams/%d/members/%s", team.ID, user5.Name).
+		AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+
+	isMember, err := organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, user5.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
+	unittest.AssertExistsAndLoadBean(t, &organization.TeamInvite{TeamID: team.ID, InviterID: 1, InvitedID: optional.Some(user5.ID)})
 }

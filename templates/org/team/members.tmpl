@@ -10,14 +10,19 @@
 				{{if .IsOrganizationOwner}}
 					<div class="ui attached segment">
 						<form class="ui form ignore-dirty tw-flex tw-flex-wrap tw-gap-2" action="{{$.OrgLink}}/teams/{{$.Team.LowerName | PathEscape}}/action/add" method="post">
-							{{.CsrfTokenHtml}}
 							<input type="hidden" name="uid" value="{{.SignedUser.ID}}">
 							<div id="search-user-box" class="ui search tw-mr-2"{{if .IsEmailInviteEnabled}} data-allow-email="true" data-allow-email-description="{{ctx.Locale.Tr "org.teams.invite_team_member" $.Team.Name}}"{{end}}>
 								<div class="ui input">
 									<input class="prompt" name="uname" placeholder="{{ctx.Locale.Tr "search.user_kind"}}" autocomplete="off" required>
 								</div>
 							</div>
-							<button class="ui primary button">{{ctx.Locale.Tr "org.teams.add_team_member"}}</button>
+							<button class="ui primary button">
+								{{if $.AddMembersByInvitations}}
+									{{ctx.Locale.Tr "members.invite_team_member"}}
+								{{else}}
+									{{ctx.Locale.Tr "org.teams.add_team_member"}}
+								{{end}}
+							</button>
 						</form>
 					</div>
 				{{end}}
@@ -50,6 +55,7 @@
 							</div>
 						{{end}}
 					</div>
+					{{template "base/paginate" .}}
 				</div>
 				{{if and .Invites $.IsOrganizationOwner}}
 				<h4 class="ui top attached header">{{ctx.Locale.Tr "org.teams.invite_team_member.list"}}</h4>
@@ -57,12 +63,22 @@
 					<div class="flex-list">
 						{{range .Invites}}
 							<div class="flex-item tw-items-center">
-								<div class="flex-item-main">
-									{{.Email}}
-								</div>
+								{{if .InvitedUser}}
+									<div class="flex-item-leading">
+										<a href="{{.InvitedUser.HomeLink}}">{{ctx.AvatarUtils.Avatar .InvitedUser 32}}</a>
+									</div>
+									<div class="flex-item-main">
+										<div class="flex-item-title">
+											{{template "shared/user/name" .InvitedUser}}
+										</div>
+									</div>
+								{{else}}
+									<div class="flex-item-main">
+										{{.Email}}
+									</div>
+								{{end}}
 								<div class="flex-item-trailing">
 									<form action="{{$.OrgLink}}/teams/{{$.Team.LowerName | PathEscape}}/action/remove_invite" method="post">
-										{{$.CsrfTokenHtml}}
 										<input type="hidden" name="iid" value="{{.ID}}">
 										<button class="ui red button">{{ctx.Locale.Tr "org.members.remove"}}</button>
 									</form>
@@ -81,7 +97,7 @@
 		{{ctx.Locale.Tr "org.members.remove"}}
 	</div>
 	<div class="content">
-		<p>{{ctx.Locale.Tr "org.members.remove.detail" (`<span class="name"></span>`|SafeHTML) (`<span class="dataTeamName"></span>`|SafeHTML)}}</p>
+		<p>{{ctx.Locale.Tr "org.members.remove.detail" (`<span class="name"></span>`|TrustHTML) (`<span class="dataTeamName"></span>`|TrustHTML)}}</p>
 	</div>
 	{{template "base/modal_actions_confirm" .}}
 </div>

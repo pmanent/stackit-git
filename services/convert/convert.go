@@ -1,5 +1,6 @@
 // Copyright 2015 The Gogs Authors. All rights reserved.
-// Copyright 2018 The Gitea Authors. All rights reserved.
+// Copyright 2018 The Gitea Authors. All rights
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package convert
@@ -29,6 +30,8 @@ import (
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
 	"forgejo.org/services/gitdiff"
+
+	runnerv1 "code.forgejo.org/forgejo/actions-proto/runner/v1"
 )
 
 // ToEmail convert models.EmailAddress to api.Email
@@ -185,7 +188,12 @@ func ToBranchProtection(ctx context.Context, bp *git_model.ProtectedBranch, repo
 }
 
 // ToTag convert a git.Tag to an api.Tag
-func ToTag(repo *repo_model.Repository, t *git.Tag) *api.Tag {
+func ToTag(ctx context.Context, repo *repo_model.Repository, t *git.Tag) (*api.Tag, error) {
+	archiveDownloadCount, err := repo_model.GetArchiveDownloadCountForTagName(ctx, repo.ID, t.Name)
+	if err != nil {
+		return nil, err
+	}
+
 	return &api.Tag{
 		Name:                 t.Name,
 		Message:              strings.TrimSpace(t.Message),
@@ -193,8 +201,8 @@ func ToTag(repo *repo_model.Repository, t *git.Tag) *api.Tag {
 		Commit:               ToCommitMeta(repo, t),
 		ZipballURL:           util.URLJoin(repo.HTMLURL(), "archive", t.Name+".zip"),
 		TarballURL:           util.URLJoin(repo.HTMLURL(), "archive", t.Name+".tar.gz"),
-		ArchiveDownloadCount: t.ArchiveDownloadCount,
-	}
+		ArchiveDownloadCount: archiveDownloadCount,
+	}, nil
 }
 
 // ToActionTask convert a actions_model.ActionTask to an api.ActionTask
@@ -251,6 +259,8 @@ func ToPublicKey(apiLink string, key *asymkey_model.PublicKey) *api.PublicKey {
 		Title:       key.Name,
 		Fingerprint: key.Fingerprint,
 		Created:     key.CreatedUnix.AsTime(),
+		Updated:     key.UpdatedUnix.AsTime(),
+		Verified:    key.Verified,
 	}
 }
 
@@ -338,6 +348,7 @@ func ToOrganization(ctx context.Context, org *organization.Organization) *api.Or
 		Location:                  org.Location,
 		Visibility:                org.Visibility.String(),
 		RepoAdminChangeTeamAccess: org.RepoAdminChangeTeamAccess,
+		Created:                   org.CreatedUnix.AsTime(),
 	}
 }
 
@@ -389,7 +400,32 @@ func ToTeams(ctx context.Context, teams []*organization.Team, loadOrgs bool) ([]
 }
 
 // ToAnnotatedTag convert git.Tag to api.AnnotatedTag
-func ToAnnotatedTag(ctx context.Context, repo *repo_model.Repository, t *git.Tag, c *git.Commit) *api.AnnotatedTag {
+func ToAnnotatedTag(ctx context.Context, gitRepo *git.Repository, repo *repo_model.Repository, t *git.Tag, c *git.Commit) (*api.AnnotatedTag, error) {
+	archiveDownloadCount, err := repo_model.GetArchiveDownloadCountForTagName(ctx, repo.ID, t.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Use the tag's own signature if the tag is signed, otherwise fall back to commit signature.
+	var verification *api.PayloadCommitVerification
+	if t.Signature != nil {
+		verif := asymkey_model.ParseTagWithSignature(ctx, gitRepo, t)
+		verification = &api.PayloadCommitVerification{
+			Verified:  verif.Verified,
+			Reason:    verif.Reason,
+			Signature: t.Signature.Signature,
+			Payload:   t.Signature.Payload,
+		}
+		if verif.SigningUser != nil {
+			verification.Signer = &api.PayloadUser{
+				Name:  verif.SigningUser.Name,
+				Email: verif.SigningEmail,
+			}
+		}
+	} else {
+		verification = ToVerification(ctx, c)
+	}
+
 	return &api.AnnotatedTag{
 		Tag:                  t.Name,
 		SHA:                  t.ID.String(),
@@ -397,9 +433,9 @@ func ToAnnotatedTag(ctx context.Context, repo *repo_model.Repository, t *git.Tag
 		Message:              t.Message,
 		URL:                  util.URLJoin(repo.APIURL(), "git/tags", t.ID.String()),
 		Tagger:               ToCommitUser(t.Tagger),
-		Verification:         ToVerification(ctx, c),
-		ArchiveDownloadCount: t.ArchiveDownloadCount,
-	}
+		Verification:         verification,
+		ArchiveDownloadCount: archiveDownloadCount,
+	}, nil
 }
 
 // ToAnnotatedTagObject convert a git.Commit to an api.AnnotatedTagObject
@@ -507,4 +543,35 @@ func ToChangedFile(f *gitdiff.DiffFile, repo *repo_model.Repository, commit stri
 	}
 
 	return file
+}
+
+func ToActionRunner(runner *actions_model.ActionRunner) (api.ActionRunner, error) {
+	runnerStatus := runner.Status()
+
+	var status api.RunnerStatus
+	switch runnerStatus {
+	case runnerv1.RunnerStatus_RUNNER_STATUS_OFFLINE:
+		status = api.RunnerStatusOffline
+	case runnerv1.RunnerStatus_RUNNER_STATUS_IDLE:
+		status = api.RunnerStatusIdle
+	case runnerv1.RunnerStatus_RUNNER_STATUS_ACTIVE:
+		status = api.RunnerStatusActive
+	default:
+		return api.ActionRunner{}, fmt.Errorf("unexpected runner status: %s", runnerStatus)
+	}
+
+	actionRunner := api.ActionRunner{
+		ID:          runner.ID,
+		Name:        runner.Name,
+		UUID:        runner.UUID,
+		OwnerID:     runner.OwnerID,
+		RepoID:      runner.RepoID,
+		Description: runner.Description,
+		Version:     runner.Version,
+		Status:      status.String(),
+		Labels:      runner.AgentLabels,
+		Ephemeral:   runner.Ephemeral,
+	}
+
+	return actionRunner, nil
 }

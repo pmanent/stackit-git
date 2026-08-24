@@ -13,7 +13,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 var (
@@ -128,7 +128,11 @@ func (r requirement) AsVersionRequirement() []VersionRequirement {
 			continue
 		}
 		version, ok := versionInt.(string)
-		if !ok || version == "0" {
+		if !ok {
+			continue
+		}
+
+		if restriction == ">=" && version == "0" {
 			continue
 		}
 

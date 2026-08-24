@@ -26,6 +26,11 @@ func (du *DateUtils) AbsoluteShort(time any) template.HTML {
 	return dateTimeFormat("short", time)
 }
 
+// AbsoluteShort renders in "Sun, 01 Jan, 2006" format
+func (du *DateUtils) AbsoluteShortWithDay(time any) template.HTML {
+	return dateTimeFormat("short-with-day", time)
+}
+
 // AbsoluteLong renders in "January 01, 2006" format
 func (du *DateUtils) AbsoluteLong(time any) template.HTML {
 	return dateTimeFormat("long", time)
@@ -75,6 +80,7 @@ func anyToTime(any any) (t time.Time, isZero bool) {
 	switch v := any.(type) {
 	case nil:
 		// it is zero
+		break
 	case *time.Time:
 		if v != nil {
 			t = *v
@@ -113,6 +119,10 @@ func dateTimeFormat(format string, datetime any) template.HTML {
 	case "short", "long": // date only
 		attrs = append(attrs, `month="`+format+`"`, `day="numeric"`)
 		return template.HTML(fmt.Sprintf(`<absolute-date %s date="%s">%s</absolute-date>`, strings.Join(attrs, " "), datetimeEscaped, textEscaped))
+	case "short-with-day":
+		attrs = append(attrs, `month="short"`, `day="numeric"`)
+		attrs[0] = `weekday="short"`
+		return template.HTML(fmt.Sprintf(`<absolute-date %s date="%s">%s</absolute-date>`, strings.Join(attrs, " "), datetimeEscaped, textEscaped))
 	case "full": // full date including time
 		attrs = append(attrs, `format="datetime"`, `month="short"`, `day="numeric"`, `hour="numeric"`, `minute="numeric"`, `second="numeric"`, `data-tooltip-content`, `data-tooltip-interactive="true"`)
 		return template.HTML(fmt.Sprintf(`<relative-time %s datetime="%s">%s</relative-time>`, strings.Join(attrs, " "), datetimeEscaped, textEscaped))
@@ -144,8 +154,5 @@ func timeSinceTo(then any, now time.Time) template.HTML {
 
 // TimeSince renders relative time HTML given a time
 func TimeSince(then any) template.HTML {
-	if setting.UI.PreferredTimestampTense == "absolute" {
-		return dateTimeFormat("full", then)
-	}
 	return timeSinceTo(then, time.Now())
 }

@@ -6,6 +6,8 @@
 package templates
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"html"
 	"html/template"
@@ -29,20 +31,38 @@ func NewFuncMap() template.FuncMap {
 	return map[string]any{
 		"ctx": func() any { return nil }, // template context function
 
+		"ExecuteTemplate": func(ctx context.Context, tmplName string, args any) template.HTML {
+			h := HTMLRenderer()
+			tmpl, err := h.TemplateLookup(tmplName, ctx)
+			if err != nil {
+				panic("Template not found: " + tmplName)
+			}
+
+			buf := bytes.Buffer{}
+			if err := tmpl.Execute(&buf, args); err != nil {
+				panic("Error while executing template")
+			}
+
+			// We can safely return this as `template.HTML` as html/template will
+			// already make sure it's sanitized.
+			return template.HTML(buf.String())
+		},
+
 		"DumpVar": dumpVar,
 
 		// -----------------------------------------------------------------
 		// html/template related functions
-		"dict":         dict, // it's lowercase because this name has been widely used. Our other functions should have uppercase names.
-		"Eval":         Eval,
-		"SafeHTML":     SafeHTML,
-		"HTMLFormat":   HTMLFormat,
-		"HTMLEscape":   HTMLEscape,
-		"QueryEscape":  QueryEscape,
-		"JSEscape":     JSEscapeSafe,
-		"SanitizeHTML": SanitizeHTML,
-		"URLJoin":      util.URLJoin,
-		"DotEscape":    DotEscape,
+		"dict":               dict, // it's lowercase because this name has been widely used. Our other functions should have uppercase names.
+		"Eval":               Eval,
+		"TrustHTML":          TrustHTML,
+		"HTMLFormat":         HTMLFormat,
+		"HTMLEscape":         HTMLEscape,
+		"QueryEscape":        QueryEscape,
+		"JSEscape":           JSEscapeSafe,
+		"SanitizeHTML":       SanitizeHTML,
+		"SanitizeHTMLStrict": SanitizeHTMLStrict,
+		"URLJoin":            util.URLJoin,
+		"DotEscape":          DotEscape,
 
 		"PathEscape":         url.PathEscape,
 		"PathEscapeSegments": util.PathEscapeSegments,
@@ -131,8 +151,8 @@ func NewFuncMap() template.FuncMap {
 		"AllowedReactions": func() []string {
 			return setting.UI.Reactions
 		},
-		"CustomEmojis": func() map[string]string {
-			return setting.UI.CustomEmojisMap
+		"CustomEmojis": func() []string {
+			return setting.UI.CustomEmojis
 		},
 		"MetaAuthor": func() string {
 			return setting.UI.Meta.Author
@@ -156,6 +176,7 @@ func NewFuncMap() template.FuncMap {
 			return !setting.ImportLocalPaths
 		},
 		"ThemeName": func(user *user_model.User) string {
+			// Guest user may not be nil on some pages, e.g. in org pages, so user.Theme check is also needed
 			if user == nil || user.Theme == "" {
 				return setting.UI.DefaultTheme
 			}
@@ -191,6 +212,7 @@ func NewFuncMap() template.FuncMap {
 		"RenderMarkdownToHtml": RenderMarkdownToHtml,
 		"RenderLabel":          RenderLabel,
 		"RenderLabels":         RenderLabels,
+		"RenderUser":           RenderUser,
 		"RenderReviewRequest":  RenderReviewRequest,
 
 		// -----------------------------------------------------------------
@@ -212,6 +234,7 @@ func HTMLFormat(s string, rawArgs ...any) template.HTML {
 		switch v := v.(type) {
 		case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, template.HTML:
 			// for most basic types (including template.HTML which is safe), just do nothing and use it
+			break
 		case string:
 			args[i] = template.HTMLEscapeString(v)
 		case fmt.Stringer:
@@ -223,8 +246,8 @@ func HTMLFormat(s string, rawArgs ...any) template.HTML {
 	return template.HTML(fmt.Sprintf(s, args...))
 }
 
-// SafeHTML render raw as HTML
-func SafeHTML(s any) template.HTML {
+// TrustHTML render raw as HTML
+func TrustHTML(s any) template.HTML {
 	switch v := s.(type) {
 	case string:
 		return template.HTML(v)
@@ -237,6 +260,10 @@ func SafeHTML(s any) template.HTML {
 // SanitizeHTML sanitizes the input by pre-defined markdown rules
 func SanitizeHTML(s string) template.HTML {
 	return template.HTML(markup.Sanitize(s))
+}
+
+func SanitizeHTMLStrict(s string) template.HTML {
+	return template.HTML(markup.SanitizeDescription(s))
 }
 
 func HTMLEscape(s any) template.HTML {

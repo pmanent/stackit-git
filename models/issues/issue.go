@@ -6,6 +6,7 @@ package issues
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"regexp"
@@ -115,7 +116,7 @@ type Issue struct {
 
 	DeadlineUnix timeutil.TimeStamp `xorm:"INDEX"`
 
-	Created timeutil.TimeStampNano
+	Created timeutil.TimeStampNano // more precise Created, but may not be populated for older issues
 
 	CreatedUnix timeutil.TimeStamp `xorm:"INDEX created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"INDEX updated"`
@@ -236,7 +237,7 @@ func (issue *Issue) LoadPullRequest(ctx context.Context) (err error) {
 	return nil
 }
 
-func (issue *Issue) loadComments(ctx context.Context) (err error) {
+func (issue *Issue) LoadComments(ctx context.Context) (err error) {
 	return issue.loadCommentsByType(ctx, CommentTypeUndefined)
 }
 
@@ -340,7 +341,7 @@ func (issue *Issue) LoadAttributes(ctx context.Context) (err error) {
 		return err
 	}
 
-	if err = issue.loadComments(ctx); err != nil {
+	if err = issue.LoadComments(ctx); err != nil {
 		return err
 	}
 
@@ -363,7 +364,7 @@ func (issue *Issue) ResetAttributesLoaded() {
 	issue.isAssigneeLoaded = false
 }
 
-// GetIsRead load the `IsRead` field of the issue
+// GetIsRead loads the `IsRead` field of the issue
 func (issue *Issue) GetIsRead(ctx context.Context, userID int64) error {
 	issueUser := &IssueUser{IssueID: issue.ID, UID: userID}
 	if has, err := db.GetEngine(ctx).Get(issueUser); err != nil {
@@ -385,7 +386,14 @@ func (issue *Issue) APIURL(ctx context.Context) string {
 			return ""
 		}
 	}
-	return fmt.Sprintf("%s/issues/%d", issue.Repo.APIURL(), issue.Index)
+
+	var path string
+	if issue.IsPull {
+		path = "pulls"
+	} else {
+		path = "issues"
+	}
+	return fmt.Sprintf("%s/%s/%d", issue.Repo.APIURL(), path, issue.Index)
 }
 
 // HTMLURL returns the absolute URL to this issue.
@@ -468,6 +476,8 @@ func (issue *Issue) GetLastEventTimestamp() timeutil.TimeStamp {
 }
 
 // GetLastEventLabel returns the localization label for the current issue.
+//
+//llu:returnsTrKey
 func (issue *Issue) GetLastEventLabel() string {
 	if issue.IsClosed {
 		if issue.IsPull && issue.PullRequest.HasMerged {
@@ -493,6 +503,8 @@ func (issue *Issue) GetLastComment(ctx context.Context) (*Comment, error) {
 }
 
 // GetLastEventLabelFake returns the localization label for the current issue without providing a link in the username.
+//
+//llu:returnsTrKey
 func (issue *Issue) GetLastEventLabelFake() string {
 	if issue.IsClosed {
 		if issue.IsPull && issue.PullRequest.HasMerged {
@@ -586,10 +598,12 @@ func GetParticipantsIDsByIssueID(ctx context.Context, issueID int64) ([]int64, e
 	userIDs := make([]int64, 0, 5)
 	return userIDs, db.GetEngine(ctx).
 		Table("comment").
-		Cols("poster_id").
-		Where("issue_id = ?", issueID).
-		And("type in (?,?,?)", CommentTypeComment, CommentTypeCode, CommentTypeReview).
-		Distinct("poster_id").
+		Cols("`comment`.poster_id").
+		Where("`comment`.issue_id = ?", issueID).
+		And("`comment`.type in (?,?,?)", CommentTypeComment, CommentTypeCode, CommentTypeReview).
+		And("`review`.type is null or `review`.type != ?", ReviewTypePending).
+		Join("LEFT", "`review`", "`review`.id = `comment`.review_id").
+		Distinct("`comment`.poster_id").
 		Find(&userIDs)
 }
 
@@ -618,9 +632,11 @@ func (issue *Issue) GetParticipantIDsByIssue(ctx context.Context) ([]int64, erro
 	if err := db.GetEngine(ctx).Table("comment").Cols("poster_id").
 		Where("`comment`.issue_id = ?", issue.ID).
 		And("`comment`.type in (?,?,?)", CommentTypeComment, CommentTypeCode, CommentTypeReview).
+		And("`review`.type != ?", ReviewTypePending).
 		And("`user`.is_active = ?", true).
 		And("`user`.prohibit_login = ?", false).
 		Join("INNER", "`user`", "`user`.id = `comment`.poster_id").
+		Join("INNER", "`review`", "`review`.reviewer_id = `user`.id").
 		Distinct("poster_id").
 		Find(&userIDs); err != nil {
 		return nil, fmt.Errorf("get poster IDs: %w", err)
@@ -646,7 +662,7 @@ func (issue *Issue) BlockedByDependencies(ctx context.Context, opts db.ListOptio
 	err = sess.Find(&issueDeps)
 
 	for _, depInfo := range issueDeps {
-		depInfo.Issue.Repo = &depInfo.Repository
+		depInfo.Repo = &depInfo.Repository
 	}
 
 	return issueDeps, err
@@ -664,7 +680,7 @@ func (issue *Issue) BlockingDependencies(ctx context.Context) (issueDeps []*Depe
 		Find(&issueDeps)
 
 	for _, depInfo := range issueDeps {
-		depInfo.Issue.Repo = &depInfo.Repository
+		depInfo.Repo = &depInfo.Repository
 	}
 
 	return issueDeps, err
@@ -804,7 +820,7 @@ func (issue *Issue) MovePin(ctx context.Context, newPosition int) error {
 	}
 
 	if newPosition < 1 {
-		return fmt.Errorf("The Position can't be lower than 1")
+		return errors.New("The Position can't be lower than 1")
 	}
 
 	dbctx, committer, err := db.TxContext(ctx)

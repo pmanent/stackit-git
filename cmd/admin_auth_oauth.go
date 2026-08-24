@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,11 +12,11 @@ import (
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/services/auth/source/oauth2"
 
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
-var (
-	oauthCLIFlags = []cli.Flag{
+func oauthCLIFlags() []cli.Flag {
+	return []cli.Flag{
 		&cli.StringFlag{
 			Name:  "name",
 			Value: "",
@@ -86,6 +87,11 @@ var (
 			Usage: "Scopes to request when to authenticate against this OAuth2 source",
 		},
 		&cli.StringFlag{
+			Name:  "attribute-ssh-public-key",
+			Value: "",
+			Usage: "Claim name providing SSH public keys for this source",
+		},
+		&cli.StringFlag{
 			Name:  "required-claim-name",
 			Value: "",
 			Usage: "Claim name that has to be set to allow users to login with this source",
@@ -119,24 +125,57 @@ var (
 			Name:  "group-team-map-removal",
 			Usage: "Activate automatic team membership removal depending on groups",
 		},
+		&cli.StringFlag{
+			Name:  "dyn-group-maps",
+			Value: "",
+			Usage: "Dynamic mappings between groups and org teams",
+		},
+		&cli.BoolFlag{
+			Name:  "dyn-group-maps-removal",
+			Usage: "Activate automatic team membership removal of org teams not automatically added",
+		},
+		&cli.BoolFlag{
+			Name:  "allow-username-change",
+			Usage: "Allow users to change their username",
+		},
+		&cli.StringFlag{
+			Name:  "quota-group-claim-name",
+			Value: "",
+			Usage: "Claim name providing quota group names for this source",
+		},
+		&cli.StringFlag{
+			Name:  "quota-group-map",
+			Value: "",
+			Usage: "JSON mapping between groups and quota groups",
+		},
+		&cli.BoolFlag{
+			Name:  "quota-group-map-removal",
+			Usage: "Activate automatic quota group removal depending on groups",
+		},
 	}
+}
 
-	microcmdAuthAddOauth = &cli.Command{
+func microcmdAuthAddOauth() *cli.Command {
+	return &cli.Command{
 		Name:   "add-oauth",
 		Usage:  "Add new Oauth authentication source",
-		Action: runAddOauth,
-		Flags:  oauthCLIFlags,
+		Before: noDanglingArgs,
+		Action: newAuthService().addOauth,
+		Flags:  oauthCLIFlags(),
 	}
+}
 
-	microcmdAuthUpdateOauth = &cli.Command{
+func microcmdAuthUpdateOauth() *cli.Command {
+	return &cli.Command{
 		Name:   "update-oauth",
 		Usage:  "Update existing Oauth authentication source",
-		Action: runUpdateOauth,
-		Flags:  append(oauthCLIFlags[:1], append([]cli.Flag{idFlag}, oauthCLIFlags[1:]...)...),
+		Before: noDanglingArgs,
+		Action: newAuthService().updateOauth,
+		Flags:  append(oauthCLIFlags()[:1], append([]cli.Flag{idFlag()}, oauthCLIFlags()[1:]...)...),
 	}
-)
+}
 
-func parseOAuth2Config(c *cli.Context) *oauth2.Source {
+func parseOAuth2Config(_ context.Context, c *cli.Command) *oauth2.Source {
 	var customURLMapping *oauth2.CustomURLMapping
 	if c.IsSet("use-custom-urls") {
 		customURLMapping = &oauth2.CustomURLMapping{
@@ -158,6 +197,7 @@ func parseOAuth2Config(c *cli.Context) *oauth2.Source {
 		IconURL:                       c.String("icon-url"),
 		SkipLocalTwoFA:                c.Bool("skip-local-2fa"),
 		Scopes:                        c.StringSlice("scopes"),
+		AttributeSSHPublicKey:         c.String("attribute-ssh-public-key"),
 		RequiredClaimName:             c.String("required-claim-name"),
 		RequiredClaimValue:            c.String("required-claim-value"),
 		GroupClaimName:                c.String("group-claim-name"),
@@ -165,18 +205,24 @@ func parseOAuth2Config(c *cli.Context) *oauth2.Source {
 		RestrictedGroup:               c.String("restricted-group"),
 		GroupTeamMap:                  c.String("group-team-map"),
 		GroupTeamMapRemoval:           c.Bool("group-team-map-removal"),
+		DynGroupMaps:                  c.String("dyn-group-maps"),
+		DynGroupMapsRemoval:           c.Bool("dyn-group-maps-removal"),
+		AllowUsernameChange:           c.Bool("allow-username-change"),
+		QuotaGroupClaimName:           c.String("quota-group-claim-name"),
+		QuotaGroupMap:                 c.String("quota-group-map"),
+		QuotaGroupMapRemoval:          c.Bool("quota-group-map-removal"),
 	}
 }
 
-func runAddOauth(c *cli.Context) error {
-	ctx, cancel := installSignals()
+func (a *authService) addOauth(ctx context.Context, c *cli.Command) error {
+	ctx, cancel := installSignals(ctx)
 	defer cancel()
 
-	if err := initDB(ctx); err != nil {
+	if err := a.initDB(ctx); err != nil {
 		return err
 	}
 
-	config := parseOAuth2Config(c)
+	config := parseOAuth2Config(ctx, c)
 	if config.Provider == "openidConnect" {
 		discoveryURL, err := url.Parse(config.OpenIDConnectAutoDiscoveryURL)
 		if err != nil || (discoveryURL.Scheme != "http" && discoveryURL.Scheme != "https") {
@@ -184,7 +230,7 @@ func runAddOauth(c *cli.Context) error {
 		}
 	}
 
-	return auth_model.CreateSource(ctx, &auth_model.Source{
+	return a.createAuthSource(ctx, &auth_model.Source{
 		Type:     auth_model.OAuth2,
 		Name:     c.String("name"),
 		IsActive: true,
@@ -192,19 +238,19 @@ func runAddOauth(c *cli.Context) error {
 	})
 }
 
-func runUpdateOauth(c *cli.Context) error {
+func (a *authService) updateOauth(ctx context.Context, c *cli.Command) error {
 	if !c.IsSet("id") {
 		return errors.New("--id flag is missing")
 	}
 
-	ctx, cancel := installSignals()
+	ctx, cancel := installSignals(ctx)
 	defer cancel()
 
-	if err := initDB(ctx); err != nil {
+	if err := a.initDB(ctx); err != nil {
 		return err
 	}
 
-	source, err := auth_model.GetSourceByID(ctx, c.Int64("id"))
+	source, err := a.getAuthSourceByID(ctx, c.Int64("id"))
 	if err != nil {
 		return err
 	}
@@ -239,6 +285,10 @@ func runUpdateOauth(c *cli.Context) error {
 		oAuth2Config.Scopes = c.StringSlice("scopes")
 	}
 
+	if c.IsSet("attribute-ssh-public-key") {
+		oAuth2Config.AttributeSSHPublicKey = c.String("attribute-ssh-public-key")
+	}
+
 	if c.IsSet("required-claim-name") {
 		oAuth2Config.RequiredClaimName = c.String("required-claim-name")
 	}
@@ -260,6 +310,25 @@ func runUpdateOauth(c *cli.Context) error {
 	}
 	if c.IsSet("group-team-map-removal") {
 		oAuth2Config.GroupTeamMapRemoval = c.Bool("group-team-map-removal")
+	}
+	if c.IsSet("dyn-group-maps") {
+		oAuth2Config.DynGroupMaps = c.String("dyn-group-maps")
+	}
+	if c.IsSet("dyn-group-maps-removal") {
+		oAuth2Config.DynGroupMapsRemoval = c.Bool("dyn-group-maps-removal")
+	}
+	if c.IsSet("quota-group-claim-name") {
+		oAuth2Config.QuotaGroupClaimName = c.String("quota-group-claim-name")
+	}
+	if c.IsSet("quota-group-map") {
+		oAuth2Config.QuotaGroupMap = c.String("quota-group-map")
+	}
+	if c.IsSet("quota-group-map-removal") {
+		oAuth2Config.QuotaGroupMapRemoval = c.Bool("quota-group-map-removal")
+	}
+
+	if c.IsSet("allow-username-change") {
+		oAuth2Config.AllowUsernameChange = c.Bool("allow-username-change")
 	}
 
 	// update custom URL mapping
@@ -295,5 +364,5 @@ func runUpdateOauth(c *cli.Context) error {
 	oAuth2Config.CustomURLMapping = customURLMapping
 	source.Cfg = oAuth2Config
 
-	return auth_model.UpdateSource(ctx, source)
+	return a.updateAuthSource(ctx, source)
 }

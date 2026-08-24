@@ -239,6 +239,13 @@ func TestMailerIssueTemplate(t *testing.T) {
 		Content: rejectComment.Content, Comment: rejectComment,
 	})
 	expect(t, msg, pull, rejectComment.Content)
+
+	msg = testCompose(t, &mailCommentContext{
+		Issue: issue, Doer: doer, ActionType: activities_model.ActionCloseIssue,
+		Content: comment.Content, Comment: comment,
+		ActionAdditionalData: ActionCloseIssueByCommit{CommitID: "abc123def"},
+	})
+	expect(t, msg, issue, comment.Content, "abc123def")
 }
 
 func TestTemplateSelection(t *testing.T) {
@@ -494,48 +501,54 @@ func Test_createReference(t *testing.T) {
 func TestFromDisplayName(t *testing.T) {
 	template, err := texttmpl.New("mailFrom").Parse("{{ .DisplayName }}")
 	require.NoError(t, err)
-	setting.MailService = &setting.Mailer{FromDisplayNameFormatTemplate: template}
-	defer func() { setting.MailService = nil }()
+	defer test.MockVariableValue(&setting.MailService, &setting.Mailer{FromDisplayNameFormatTemplate: template})()
 
 	tests := []struct {
-		userDisplayName string
-		fromDisplayName string
+		userDisplayName     string
+		fromDisplayName     string
+		defaultShowFullName bool
 	}{{
-		userDisplayName: "test",
-		fromDisplayName: "test",
+		userDisplayName:     "test",
+		fromDisplayName:     "test",
+		defaultShowFullName: true,
 	}, {
-		userDisplayName: "Hi Its <Mee>",
-		fromDisplayName: "Hi Its <Mee>",
+		userDisplayName:     "Hi Its <Mee>",
+		fromDisplayName:     "Hi Its <Mee>",
+		defaultShowFullName: true,
 	}, {
-		userDisplayName: "Æsir",
-		fromDisplayName: "=?utf-8?q?=C3=86sir?=",
+		userDisplayName:     "Æsir",
+		fromDisplayName:     "=?utf-8?q?=C3=86sir?=",
+		defaultShowFullName: true,
 	}, {
-		userDisplayName: "new😀user",
-		fromDisplayName: "=?utf-8?q?new=F0=9F=98=80user?=",
+		userDisplayName:     "new😀user",
+		fromDisplayName:     "=?utf-8?q?new=F0=9F=98=80user?=",
+		defaultShowFullName: true,
+	}, {
+		userDisplayName:     "new😀user",
+		fromDisplayName:     "tmp",
+		defaultShowFullName: false,
 	}}
 
 	for _, tc := range tests {
 		t.Run(tc.userDisplayName, func(t *testing.T) {
+			defer test.MockVariableValue(&setting.UI.DefaultShowFullName, tc.defaultShowFullName)()
+
 			user := &user_model.User{FullName: tc.userDisplayName, Name: "tmp"}
 			got := fromDisplayName(user)
-			assert.EqualValues(t, tc.fromDisplayName, got)
+			assert.Equal(t, tc.fromDisplayName, got)
 		})
 	}
 
 	t.Run("template with all available vars", func(t *testing.T) {
+		defer test.MockVariableValue(&setting.UI.DefaultShowFullName, true)()
+
 		template, err = texttmpl.New("mailFrom").Parse("{{ .DisplayName }} (by {{ .AppName }} on [{{ .Domain }}])")
 		require.NoError(t, err)
-		setting.MailService = &setting.Mailer{FromDisplayNameFormatTemplate: template}
-		oldAppName := setting.AppName
-		setting.AppName = "Code IT"
-		oldDomain := setting.Domain
-		setting.Domain = "code.it"
-		defer func() {
-			setting.AppName = oldAppName
-			setting.Domain = oldDomain
-		}()
+		defer test.MockVariableValue(&setting.MailService, &setting.Mailer{FromDisplayNameFormatTemplate: template})()
+		defer test.MockVariableValue(&setting.AppName, "Code IT")()
+		defer test.MockVariableValue(&setting.Domain, "code.it")()
 
-		assert.EqualValues(t, "Mister X (by Code IT on [code.it])", fromDisplayName(&user_model.User{FullName: "Mister X", Name: "tmp"}))
+		assert.Equal(t, "Mister X (by Code IT on [code.it])", fromDisplayName(&user_model.User{FullName: "Mister X", Name: "tmp"}))
 	})
 }
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -157,7 +158,7 @@ func httpBase(ctx *context.Context) *serviceHandler {
 			return nil
 		}
 
-		if ctx.IsBasicAuth && ctx.Data["IsApiToken"] != true && ctx.Data["IsActionsToken"] != true {
+		if ctx.Authentication.IsPasswordAuthentication() {
 			_, err = auth_model.GetTwoFactorByUID(ctx, ctx.Doer.ID)
 			if err == nil {
 				// TODO: This response should be changed to "invalid credentials" for security reasons once the expectation behind it (creating an app token to authenticate) is properly documented
@@ -183,36 +184,30 @@ func httpBase(ctx *context.Context) *serviceHandler {
 		}
 
 		if repoExist {
-			// Because of special ref "refs/for" .. , need delay write permission check
-			if git.SupportProcReceive {
+			if !isWiki {
+				// Because of special ref "refs/for" .. , need delay write permission check
 				accessMode = perm.AccessModeRead
 			}
 
-			if ctx.Data["IsActionsToken"] == true {
-				taskID := ctx.Data["ActionsTaskID"].(int64)
+			if hasTaskID, taskID := ctx.Authentication.ActionsTaskID().Get(); hasTaskID {
 				task, err := actions_model.GetTaskByID(ctx, taskID)
 				if err != nil {
 					ctx.ServerError("GetTaskByID", err)
 					return nil
 				}
-				if task.RepoID != repo.ID {
+
+				p, err := access_model.GetActionRepoPermission(ctx, repo, task)
+				if err != nil {
+					ctx.ServerError("GetActionRepoPermission", err)
+					return nil
+				}
+
+				if !p.CanAccess(accessMode, unitType) {
 					ctx.PlainText(http.StatusForbidden, "User permission denied")
 					return nil
 				}
 
-				if task.IsForkPullRequest {
-					if accessMode > perm.AccessModeRead {
-						ctx.PlainText(http.StatusForbidden, "User permission denied")
-						return nil
-					}
-					environ = append(environ, fmt.Sprintf("%s=%d", repo_module.EnvActionPerm, perm.AccessModeRead))
-				} else {
-					if accessMode > perm.AccessModeWrite {
-						ctx.PlainText(http.StatusForbidden, "User permission denied")
-						return nil
-					}
-					environ = append(environ, fmt.Sprintf("%s=%d", repo_module.EnvActionPerm, perm.AccessModeWrite))
-				}
+				environ = append(environ, fmt.Sprintf("%s=%d", repo_module.EnvActionPerm, p.AccessMode))
 			} else {
 				p, err := access_model.GetUserRepoPermission(ctx, repo, ctx.Doer)
 				if err != nil {
@@ -370,12 +365,7 @@ func containsParentDirectorySeparator(v string) bool {
 	if !strings.Contains(v, "..") {
 		return false
 	}
-	for _, ent := range strings.FieldsFunc(v, isSlashRune) {
-		if ent == ".." {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.FieldsFunc(v, isSlashRune), "..")
 }
 
 func isSlashRune(r rune) bool { return r == '/' || r == '\\' }

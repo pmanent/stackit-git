@@ -1,5 +1,6 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package admin
@@ -61,7 +62,7 @@ func TestCache(ctx *context.Context) {
 
 func shadowPasswordKV(cfgItem, splitter string) string {
 	fields := strings.Split(cfgItem, splitter)
-	for i := 0; i < len(fields); i++ {
+	for i := range fields {
 		if strings.HasPrefix(fields[i], "password=") {
 			fields[i] = "password=******"
 			break
@@ -127,6 +128,7 @@ func Config(ctx *context.Context) {
 	ctx.Data["AppBuiltWith"] = setting.AppBuiltWith
 	ctx.Data["Domain"] = setting.Domain
 	ctx.Data["OfflineMode"] = setting.OfflineMode
+	ctx.Data["GlobalTwoFactorRequirement"] = setting.GlobalTwoFactorRequirement
 	ctx.Data["RunUser"] = setting.RunUser
 	ctx.Data["RunMode"] = util.ToTitleCase(setting.RunMode)
 	ctx.Data["GitVersion"] = git.VersionInfo()
@@ -148,6 +150,9 @@ func Config(ctx *context.Context) {
 	// >>> @@@ STACKIT Code @@@@
 	ctx.Data["StackitGit"] = setting.StackitGit
 	// <<< @@@ STACKIT Code @@@@
+	ctx.Data["Moderation"] = setting.Moderation
+	ctx.Data["Federation"] = setting.Federation
+	ctx.Data["FederationMaxSize"] = setting.Federation.MaxSize / 1024 / 1024 // in MiB
 
 	ctx.Data["MailerEnabled"] = false
 	if setting.MailService != nil {

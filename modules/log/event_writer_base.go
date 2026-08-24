@@ -68,11 +68,21 @@ func (b *EventWriterBaseImpl) Run(ctx context.Context) {
 		}
 	}
 
+	var exclusionRegexp *regexp.Regexp
+	if b.Mode.Exclusion != "" {
+		var err error
+		if exclusionRegexp, err = regexp.Compile(b.Mode.Exclusion); err != nil {
+			FallbackErrorf("unable to compile exclusion %q for writer %q: %v", b.Mode.Exclusion, b.Name, err)
+		}
+	}
+
 	handlePaused := func() {
 		if pause := b.GetPauseChan(); pause != nil {
 			select {
 			case <-pause:
+				break
 			case <-ctx.Done():
+				break
 			}
 		}
 	}
@@ -95,6 +105,13 @@ func (b *EventWriterBaseImpl) Run(ctx context.Context) {
 					continue
 				}
 			}
+			if exclusionRegexp != nil {
+				fileLineCaller := fmt.Sprintf("%s:%d:%s", event.Origin.Filename, event.Origin.Line, event.Origin.Caller)
+				matched := exclusionRegexp.MatchString(fileLineCaller) || exclusionRegexp.MatchString(event.Origin.MsgSimpleText)
+				if matched {
+					continue
+				}
+			}
 
 			var err error
 			switch msg := event.Msg.(type) {
@@ -105,7 +122,7 @@ func (b *EventWriterBaseImpl) Run(ctx context.Context) {
 			case io.WriterTo:
 				_, err = msg.WriteTo(b.OutputWriteCloser)
 			default:
-				_, err = b.OutputWriteCloser.Write([]byte(fmt.Sprint(msg)))
+				_, err = fmt.Fprint(b.OutputWriteCloser, msg)
 			}
 			if err != nil {
 				FallbackErrorf("unable to write log message of %q (%v): %v", b.Name, err, event.Msg)
@@ -163,6 +180,7 @@ func eventWriterStopWait(w EventWriter) {
 	close(w.Base().Queue)
 	select {
 	case <-w.Base().stopped:
+		break
 	case <-time.After(2 * time.Second):
 		FallbackErrorf("unable to stop log writer %q in time, skip", w.GetWriterName())
 	}

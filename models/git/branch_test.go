@@ -22,7 +22,7 @@ import (
 func TestAddDeletedBranch(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	assert.EqualValues(t, git.Sha1ObjectFormat.Name(), repo.ObjectFormatName)
+	assert.Equal(t, git.Sha1ObjectFormat.Name(), repo.ObjectFormatName)
 	firstBranch := unittest.AssertExistsAndLoadBean(t, &git_model.Branch{ID: 1})
 
 	assert.True(t, firstBranch.IsDeleted)
@@ -115,7 +115,7 @@ func TestFindRenamedBranch(t *testing.T) {
 	assert.True(t, exist)
 	assert.Equal(t, "master", branch.To)
 
-	_, exist, err = git_model.FindRenamedBranch(db.DefaultContext, 1, "unknow")
+	_, exist, err = git_model.FindRenamedBranch(db.DefaultContext, 1, "unknown")
 	require.NoError(t, err)
 	assert.False(t, exist)
 }

@@ -1,17 +1,23 @@
 // Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2023 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package integration
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	unit_model "forgejo.org/models/unit"
@@ -19,11 +25,13 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/setting"
+	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
 	"forgejo.org/modules/translation"
 	repo_service "forgejo.org/services/repository"
 	files_service "forgejo.org/services/repository/files"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +70,7 @@ func testViewRepo(t *testing.T) {
 	resp := session.MakeRequest(t, req, http.StatusOK)
 
 	htmlDoc := NewHTMLParser(t, resp.Body)
-	files := htmlDoc.doc.Find("#repo-files-table  > TBODY > TR")
+	files := htmlDoc.doc.Find("#repo-files-table > tbody > tr:not(.commit-list)")
 
 	type file struct {
 		fileName   string
@@ -95,7 +103,7 @@ func testViewRepo(t *testing.T) {
 	})
 
 	commitT := time.Date(2017, time.June, 14, 13, 54, 21, 0, time.UTC).In(time.Local).Format(time.RFC1123)
-	assert.EqualValues(t, []file{
+	assert.Equal(t, []file{
 		{
 			fileName:   "doc",
 			commitID:   "2a47ca4b614a9f5a43abbd5ad851a54a616ffee6",
@@ -190,9 +198,9 @@ func TestViewRepoWithSymlinks(t *testing.T) {
 
 // TestViewAsRepoAdmin tests PR #2167
 func TestViewAsRepoAdmin(t *testing.T) {
-	for _, user := range []string{"user2", "user4"} {
-		defer tests.PrepareTestEnv(t)()
+	defer tests.PrepareTestEnv(t)()
 
+	for _, user := range []string{"user2", "user4"} {
 		session := loginUser(t, user)
 
 		req := NewRequest(t, "GET", "/user2/repo1.git")
@@ -217,13 +225,13 @@ func TestRepoHTMLTitle(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			htmlTitle := GetHTMLTitle(t, nil, "/user2/repo1")
-			assert.EqualValues(t, "user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+			assert.Equal(t, "user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 		})
 		t.Run("With description", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			htmlTitle := GetHTMLTitle(t, nil, "/user27/repo49")
-			assert.EqualValues(t, "user27/repo49: A wonderful repository with more than just a README.md - Forgejo: Beyond coding. We Forge.", htmlTitle)
+			assert.Equal(t, "user27/repo49: A wonderful repository with more than just a README.md - Forgejo: Beyond coding. We Forge.", htmlTitle)
 		})
 	})
 
@@ -233,25 +241,25 @@ func TestRepoHTMLTitle(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/branch/master/deep/nesting")
-				assert.EqualValues(t, "repo59/deep/nesting at master - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting at master - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 			t.Run("Non-default branch", func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/branch/cake-recipe/deep/nesting")
-				assert.EqualValues(t, "repo59/deep/nesting at cake-recipe - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting at cake-recipe - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 			t.Run("Commit", func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/commit/d8f53dfb33f6ccf4169c34970b5e747511c18beb/deep/nesting/")
-				assert.EqualValues(t, "repo59/deep/nesting at d8f53dfb33f6ccf4169c34970b5e747511c18beb - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting at d8f53dfb33f6ccf4169c34970b5e747511c18beb - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 			t.Run("Tag", func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/tag/v1.0/deep/nesting/")
-				assert.EqualValues(t, "repo59/deep/nesting at v1.0 - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting at v1.0 - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 		})
 		t.Run("File", func(t *testing.T) {
@@ -259,25 +267,25 @@ func TestRepoHTMLTitle(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/branch/master/deep/nesting/folder/secret_sauce_recipe.txt")
-				assert.EqualValues(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at master - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at master - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 			t.Run("Non-default branch", func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/branch/cake-recipe/deep/nesting/folder/secret_sauce_recipe.txt")
-				assert.EqualValues(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at cake-recipe - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at cake-recipe - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 			t.Run("Commit", func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/commit/d8f53dfb33f6ccf4169c34970b5e747511c18beb/deep/nesting/folder/secret_sauce_recipe.txt")
-				assert.EqualValues(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at d8f53dfb33f6ccf4169c34970b5e747511c18beb - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at d8f53dfb33f6ccf4169c34970b5e747511c18beb - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 			t.Run("Tag", func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 
 				htmlTitle := GetHTMLTitle(t, nil, "/user2/repo59/src/tag/v1.0/deep/nesting/folder/secret_sauce_recipe.txt")
-				assert.EqualValues(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at v1.0 - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+				assert.Equal(t, "repo59/deep/nesting/folder/secret_sauce_recipe.txt at v1.0 - user2/repo59 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 			})
 		})
 	})
@@ -287,13 +295,13 @@ func TestRepoHTMLTitle(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			htmlTitle := GetHTMLTitle(t, nil, "/user2/repo1/issues")
-			assert.EqualValues(t, "Issues - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+			assert.Equal(t, "Issues - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 		})
 		t.Run("View issue page", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			htmlTitle := GetHTMLTitle(t, nil, "/user2/repo1/issues/1")
-			assert.EqualValues(t, "#1 - issue1 - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+			assert.Equal(t, "#1 - issue1 - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 		})
 	})
 
@@ -302,13 +310,13 @@ func TestRepoHTMLTitle(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			htmlTitle := GetHTMLTitle(t, nil, "/user2/repo1/pulls")
-			assert.EqualValues(t, "Pull requests - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+			assert.Equal(t, "Pull requests - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 		})
 		t.Run("View pull request", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			htmlTitle := GetHTMLTitle(t, nil, "/user2/repo1/pulls/2")
-			assert.EqualValues(t, "#2 - issue2 - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
+			assert.Equal(t, "#2 - issue2 - user2/repo1 - Forgejo: Beyond coding. We Forge.", htmlTitle)
 		})
 	})
 }
@@ -327,9 +335,9 @@ func TestViewFileInRepo(t *testing.T) {
 	repoTopics := htmlDoc.doc.Find("#repo-topics")
 	repoSummary := htmlDoc.doc.Find(".repository-summary")
 
-	assert.EqualValues(t, 0, description.Length())
-	assert.EqualValues(t, 0, repoTopics.Length())
-	assert.EqualValues(t, 0, repoSummary.Length())
+	assert.Equal(t, 0, description.Length())
+	assert.Equal(t, 0, repoTopics.Length())
+	assert.Equal(t, 0, repoSummary.Length())
 }
 
 func TestViewFileInRepoRSSFeed(t *testing.T) {
@@ -383,9 +391,9 @@ func TestBlameFileInRepo(t *testing.T) {
 		repoTopics := htmlDoc.doc.Find("#repo-topics")
 		repoSummary := htmlDoc.doc.Find(".repository-summary")
 
-		assert.EqualValues(t, 0, description.Length())
-		assert.EqualValues(t, 0, repoTopics.Length())
-		assert.EqualValues(t, 0, repoSummary.Length())
+		assert.Equal(t, 0, description.Length())
+		assert.Equal(t, 0, repoTopics.Length())
+		assert.Equal(t, 0, repoSummary.Length())
 	})
 
 	t.Run("File size", func(t *testing.T) {
@@ -560,32 +568,106 @@ func TestViewRepoDirectoryReadme(t *testing.T) {
 }
 
 func TestRenamedFileHistory(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		t.Run("Renamed file", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
 
-	t.Run("Renamed file", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
+			req := NewRequest(t, "GET", "/user2/repo59/commits/branch/master/license")
+			resp := MakeRequest(t, req, http.StatusOK)
 
-		req := NewRequest(t, "GET", "/user2/repo59/commits/branch/master/license")
-		resp := MakeRequest(t, req, http.StatusOK)
+			htmlDoc := NewHTMLParser(t, resp.Body)
 
-		htmlDoc := NewHTMLParser(t, resp.Body)
+			renameNotice := htmlDoc.doc.Find(".ui.bottom.attached.header")
+			assert.Equal(t, 1, renameNotice.Length())
+			assert.Contains(t, renameNotice.Text(), "Renamed from licnse (Browse further)")
 
-		renameNotice := htmlDoc.doc.Find(".ui.bottom.attached.header")
-		assert.Equal(t, 1, renameNotice.Length())
-		assert.Contains(t, renameNotice.Text(), "Renamed from licnse (Browse further)")
+			oldFileHistoryLink, ok := renameNotice.Find("a").Attr("href")
+			assert.True(t, ok)
+			assert.Equal(t, "/user2/repo59/commits/commit/80b83c5c8220c3aa3906e081f202a2a7563ec879/licnse", oldFileHistoryLink)
+		})
 
-		oldFileHistoryLink, ok := renameNotice.Find("a").Attr("href")
-		assert.True(t, ok)
-		assert.Equal(t, "/user2/repo59/commits/commit/80b83c5c8220c3aa3906e081f202a2a7563ec879/licnse", oldFileHistoryLink)
-	})
+		t.Run("Renamed file, pagination", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			defer test.MockVariableValue(&setting.Git.CommitsRangeSize, 1)() // Limit commits displayed on the page to one
 
-	t.Run("Non renamed file", func(t *testing.T) {
-		req := NewRequest(t, "GET", "/user2/repo59/commits/branch/master/README.md")
-		resp := MakeRequest(t, req, http.StatusOK)
+			resp := MakeRequest(t, NewRequest(t, "GET", "/user2/repo59/commits/branch/master/license"), http.StatusOK)
+			page1 := NewHTMLParser(t, resp.Body)
 
-		htmlDoc := NewHTMLParser(t, resp.Body)
+			resp = MakeRequest(t, NewRequest(t, "GET", "/user2/repo59/commits/branch/master/license?page=2"), http.StatusOK)
+			page2 := NewHTMLParser(t, resp.Body)
 
-		htmlDoc.AssertElement(t, ".ui.bottom.attached.header", false)
+			// Browse further is only shown on 2nd page
+			browseFurtherSel := ".ui.bottom.attached.header a[href='/user2/repo59/commits/commit/80b83c5c8220c3aa3906e081f202a2a7563ec879/licnse']"
+			page1.AssertElement(t, browseFurtherSel, false)
+			page2.AssertElement(t, browseFurtherSel, true)
+
+			// Pagination goes after Browser further
+			afterBrowseFurther := page2.Find(browseFurtherSel).Parent().Parent().NextAll()
+			assert.Equal(t, 1, afterBrowseFurther.Find(".pagination.menu").Length())
+		})
+
+		t.Run("Non renamed file", func(t *testing.T) {
+			req := NewRequest(t, "GET", "/user2/repo59/commits/branch/master/README.md")
+			resp := MakeRequest(t, req, http.StatusOK)
+
+			htmlDoc := NewHTMLParser(t, resp.Body)
+
+			htmlDoc.AssertElement(t, ".ui.bottom.attached.header", false)
+		})
+
+		t.Run("Renamed file (with escaped name)", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			user2 := forgery.CreateUser(t, nil)
+
+			var commitID string
+			repo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					"#beep": forgery.MapFile("ping pong"),
+				},
+				LatestSha: &commitID,
+			})
+
+			files, err := files_service.ChangeRepoFiles(git.DefaultContext, repo, user2, &files_service.ChangeRepoFilesOptions{
+				Files: []*files_service.ChangeRepoFile{
+					{
+						Operation:     "update",
+						TreePath:      "beep",
+						FromTreePath:  "#beep",
+						ContentReader: strings.NewReader("ping pong"),
+					},
+				},
+				Message:   "rename",
+				OldBranch: "main",
+				NewBranch: "main",
+				Author: &files_service.IdentityOptions{
+					Name:  user2.Name,
+					Email: user2.Email,
+				},
+				Committer: &files_service.IdentityOptions{
+					Name:  user2.Name,
+					Email: user2.Email,
+				},
+				Dates: &files_service.CommitDateOptions{
+					Author:    time.Now(),
+					Committer: time.Now(),
+				},
+				LastCommitID: commitID,
+			})
+			require.NoError(t, err)
+
+			req := NewRequestf(t, "GET", "/%s/commits/branch/main/beep", repo.FullName())
+			resp := MakeRequest(t, req, http.StatusOK)
+
+			htmlDoc := NewHTMLParser(t, resp.Body)
+
+			renameNotice := htmlDoc.doc.Find(".ui.bottom.attached.header")
+			assert.Equal(t, 1, renameNotice.Length())
+			assert.Contains(t, renameNotice.Text(), "Renamed from #beep (Browse further)")
+
+			oldFileHistoryLink, ok := renameNotice.Find("a").Attr("href")
+			assert.True(t, ok)
+			assert.Equal(t, fmt.Sprintf("/%s/commits/commit/%s/%%23beep", repo.FullName(), files.Commit.SHA), oldFileHistoryLink)
+		})
 	})
 }
 
@@ -679,6 +761,79 @@ func TestViewCommit(t *testing.T) {
 	assert.True(t, test.IsNormalPageCompleted(resp.Body.String()), "non-existing commit should render 404 page")
 }
 
+func TestViewCommitSignature(t *testing.T) {
+	t.Cleanup(func() {
+		// Cannot use t.Context(), it is in the done state.
+		require.NoError(t, git.InitFull(context.Background()))
+	})
+
+	defer test.MockVariableValue(&setting.Repository.Signing.SigningName, "UwU")()
+	defer test.MockVariableValue(&setting.Repository.Signing.SigningEmail, "fox@example.com")()
+	defer test.MockVariableValue(&setting.Repository.Signing.CRUDActions, []string{"always"})()
+	defer test.MockVariableValue(&setting.Repository.Signing.InitialCommit, []string{"always"})()
+
+	filePath := "signed.txt"
+	fromBranch := "master"
+	toBranch := "branch-signed"
+
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		// Use a new GNUPGPHOME to avoid messing with the existing GPG keyring.
+		tmpDir := t.TempDir()
+		require.NoError(t, os.Chmod(tmpDir, 0o700))
+		t.Setenv("GNUPGHOME", tmpDir)
+
+		rootKeyPair, err := importTestingKey()
+		require.NoError(t, err)
+		defer test.MockVariableValue(&setting.Repository.Signing.SigningKey, rootKeyPair.PrimaryKey.KeyIdShortString())()
+		defer test.MockVariableValue(&setting.Repository.Signing.Format, "openpgp")()
+
+		// Ensure the git config is updated with the new signing format.
+		require.NoError(t, git.InitFull(t.Context()))
+
+		user := forgery.CreateUser(t, nil)
+		testCtx := NewAPITestContext(t, user.Name, "commit-header-signed", auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteUser)
+		u.Path = testCtx.GitPath()
+
+		t.Run("Create repository", doAPICreateRepository(testCtx, nil, git.Sha1ObjectFormat))
+
+		t.Run("Create commit", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			options := &api.CreateFileOptions{
+				FileOptions: api.FileOptions{
+					BranchName:    fromBranch,
+					NewBranchName: toBranch,
+					Message:       fmt.Sprintf("from:%s to:%s path:%s", fromBranch, toBranch, filePath),
+					Author: api.Identity{
+						Name:  user.FullName,
+						Email: user.Email,
+					},
+					Committer: api.Identity{
+						Name:  user.FullName,
+						Email: user.Email,
+					},
+				},
+				ContentBase64: base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "This is new text for %s", filePath)),
+			}
+
+			req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", testCtx.Username, testCtx.Reponame, filePath), &options).
+				AddTokenAuth(testCtx.Token)
+			resp := testCtx.Session.MakeRequest(t, req, http.StatusCreated)
+
+			var contents api.FileResponse
+			DecodeJSON(t, resp, &contents)
+
+			assert.True(t, contents.Verification.Verified)
+
+			req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/commit/%s", testCtx.Username, testCtx.Reponame, contents.Commit.SHA))
+			resp = testCtx.Session.MakeRequest(t, req, http.StatusOK)
+
+			htmlDoc := NewHTMLParser(t, resp.Body)
+			htmlDoc.AssertElement(t, ".signature-row.message.isSigned.isVerified", true)
+		})
+	})
+}
+
 func TestCommitView(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
@@ -691,7 +846,7 @@ func TestCommitView(t *testing.T) {
 
 		// Really ensure that 404 is being sent back.
 		doc := NewHTMLParser(t, resp.Body)
-		doc.AssertElement(t, `[aria-label="Page Not Found"]`, true)
+		doc.AssertElement(t, `[aria-label="Page not found"]`, true)
 	})
 
 	t.Run("Too short commit ID", func(t *testing.T) {
@@ -830,61 +985,33 @@ func TestRepoHomeViewRedirect(t *testing.T) {
 }
 
 func TestRepoFilesList(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
 		// create the repo
-		repo, _, f := tests.CreateDeclarativeRepo(t, user2, "",
-			[]unit_model.Type{unit_model.TypeCode}, nil,
-			[]*files_service.ChangeRepoFile{
-				{
-					Operation:     "create",
-					TreePath:      "zEta",
-					ContentReader: strings.NewReader("zeta"),
-				},
-				{
-					Operation:     "create",
-					TreePath:      "licensa",
-					ContentReader: strings.NewReader("licensa"),
-				},
-				{
-					Operation:     "create",
-					TreePath:      "licensz",
-					ContentReader: strings.NewReader("licensz"),
-				},
-				{
-					Operation:     "create",
-					TreePath:      "delta",
-					ContentReader: strings.NewReader("delta"),
-				},
-				{
-					Operation:     "create",
-					TreePath:      "Charlie/aa.txt",
-					ContentReader: strings.NewReader("charlie"),
-				},
-				{
-					Operation:     "create",
-					TreePath:      "Beta",
-					ContentReader: strings.NewReader("beta"),
-				},
-				{
-					Operation:     "create",
-					TreePath:      "alpha",
-					ContentReader: strings.NewReader("alpha"),
-				},
+		repo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+			Files: forgery.MapFS{
+				"zEta":           forgery.MapFile("zeta"),
+				"licensa":        forgery.MapFile("licensa"),
+				"LICENSE":        forgery.MapFile("LICENSE"),
+				"licensz":        forgery.MapFile("licensz"),
+				"delta":          forgery.MapFile("delta"),
+				"Charlie/aa.txt": forgery.MapFile("charlie"),
+				"Beta":           forgery.MapFile("beta"),
+				"alpha":          forgery.MapFile("alpha"),
+				"README.md":      forgery.MapFile("README.md"),
 			},
-		)
-		defer f()
+		})
 
 		req := NewRequest(t, "GET", "/"+repo.FullName())
 		resp := MakeRequest(t, req, http.StatusOK)
 
 		htmlDoc := NewHTMLParser(t, resp.Body)
-		filesList := htmlDoc.Find("#repo-files-table tbody tr").Map(func(_ int, s *goquery.Selection) string {
+		filesList := htmlDoc.Find("#repo-files-table tbody tr:not(.commit-list)").Map(func(_ int, s *goquery.Selection) string {
 			return s.AttrOr("data-entryname", "")
 		})
 
-		assert.EqualValues(t, []string{"Charlie", "alpha", "Beta", "delta", "licensa", "LICENSE", "licensz", "README.md", "zEta"}, filesList)
+		assert.Equal(t, []string{"Charlie", "alpha", "Beta", "delta", "licensa", "LICENSE", "licensz", "README.md", "zEta"}, filesList)
 	})
 }
 
@@ -920,7 +1047,7 @@ func TestRepoFollowSymlink(t *testing.T) {
 
 	t.Run("Normal", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
-		assertCase(t, "/user2/readme-test/src/branch/symlink/up/back/down/down/README.md", "/user2/readme-test/src/branch/symlink/down/side/../left/right/../reelmein", true)
+		assertCase(t, "/user2/readme-test/src/branch/symlink/up/back/down/down/README.md", "/user2/readme-test/src/branch/symlink/up/down/left/reelmein", true)
 	})
 
 	t.Run("Broken symlink", func(t *testing.T) {
@@ -985,7 +1112,6 @@ func TestViewRepoOpenWith(t *testing.T) {
 
 			req := NewRequestWithValues(t, "POST", "/admin/config?key=repository.open-with.editor-apps", map[string]string{
 				"value": apps,
-				"_csrf": GetCSRF(t, session, "/admin/config/settings"),
 			})
 			session.MakeRequest(t, req, http.StatusOK)
 		}
@@ -1061,374 +1187,118 @@ func TestFileHistoryPager(t *testing.T) {
 	})
 }
 
-func TestRepoIssueSorting(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
-
-	t.Run("Dropdown content", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		assert.Equal(t,
-			9,
-			htmlDoc.Find(`.list-header-sort .menu a`).Length(),
-			"Wrong amount of sort options in dropdown")
-
-		menuItemsHTML := htmlDoc.Find(`.list-header-sort .menu`).Text()
-		locale := translation.NewLocale("en-US")
-		for _, key := range []string{
-			"relevance",
-			"latest",
-			"oldest",
-			"recentupdate",
-			"leastupdate",
-			"mostcomment",
-			"leastcomment",
-			"nearduedate",
-			"farduedate",
-		} {
-			assert.Contains(t,
-				menuItemsHTML,
-				locale.Tr("repo.issues.filter_sort."+key),
-				"Sort option %s ('%s') not found in dropdown", key, locale.Tr("repo.issues.filter_sort."+key))
-		}
-	})
-}
-
-func TestRepoIssueFilterLinks(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
-
-	t.Run("No filters", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Keyword", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?q=search-on-this")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=search-on-this")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Sort", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?sort=oldest")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-sort a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=oldest")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Type", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?type=assigned")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-type a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=assigned")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("State", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?state=closed")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.issue-list-toolbar-left a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=closed")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Milestone", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?milestone=1")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-milestone a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=1")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Milestone", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?milestone=1")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-milestone a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=1")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Project", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?project=1")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-project a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=1")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Assignee", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?assignee=1")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-assignee a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=1")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Poster", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?poster=1")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.list-header-poster a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=1")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Labels", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?labels=1")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']:not(.label-filter a)").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=1")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-		})
-		assert.True(t, called)
-	})
-
-	t.Run("Archived labels", func(t *testing.T) {
-		defer tests.PrintCurrentTest(t)()
-
-		req := NewRequest(t, "GET", "/user2/repo1/issues?archived=true")
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		called := false
-		htmlDoc.Find("#issue-filters a[href^='?']").Each(func(_ int, s *goquery.Selection) {
-			called = true
-			href, _ := s.Attr("href")
-			assert.Contains(t, href, "?q=&")
-			assert.Contains(t, href, "&type=")
-			assert.Contains(t, href, "&sort=")
-			assert.Contains(t, href, "&state=")
-			assert.Contains(t, href, "&labels=")
-			assert.Contains(t, href, "&milestone=")
-			assert.Contains(t, href, "&project=")
-			assert.Contains(t, href, "&assignee=")
-			assert.Contains(t, href, "&poster=")
-			assert.Contains(t, href, "&archived=true")
-		})
-		assert.True(t, called)
-	})
-}
-
 func TestRepoSubmoduleView(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-		repo, _, f := tests.CreateDeclarativeRepo(t, user2, "", []unit_model.Type{unit_model.TypeCode}, nil, nil)
-		defer f()
+		t.Run("FromGit", func(t *testing.T) {
+			repo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					"README.md": forgery.MapFile("some explanation"), // file is expected in doGitClone
+				},
+			})
 
-		// Clone the repository, add a submodule and push it.
-		dstPath := t.TempDir()
+			// Clone the repository, add a submodule and push it.
+			dstPath := t.TempDir()
 
-		uClone := *u
-		uClone.Path = repo.FullName()
-		uClone.User = url.UserPassword(user2.Name, userPassword)
+			uClone := *u
+			uClone.Path = repo.FullName()
+			uClone.User = url.UserPassword(user2.Name, userPassword)
 
-		t.Run("Clone", doGitClone(dstPath, &uClone))
+			t.Run("Clone", doGitClone(dstPath, &uClone))
 
-		_, _, err := git.NewCommand(git.DefaultContext, "submodule", "add").AddDynamicArguments(u.JoinPath("/user2/repo1").String()).RunStdString(&git.RunOpts{Dir: dstPath})
-		require.NoError(t, err)
+			_, _, err := git.NewCommand(git.DefaultContext, "submodule", "add").AddDynamicArguments(u.JoinPath("/user2/repo1").String()).RunStdString(&git.RunOpts{Dir: dstPath})
+			require.NoError(t, err)
 
-		_, _, err = git.NewCommand(git.DefaultContext, "add", "repo1", ".gitmodules").RunStdString(&git.RunOpts{Dir: dstPath})
-		require.NoError(t, err)
+			_, _, err = git.NewCommand(git.DefaultContext, "add", "repo1", ".gitmodules").RunStdString(&git.RunOpts{Dir: dstPath})
+			require.NoError(t, err)
 
-		_, _, err = git.NewCommand(git.DefaultContext, "commit", "-m", "add submodule").RunStdString(&git.RunOpts{Dir: dstPath})
-		require.NoError(t, err)
+			_, _, err = git.NewCommand(git.DefaultContext, "commit", "-m", "add submodule").RunStdString(&git.RunOpts{Dir: dstPath})
+			require.NoError(t, err)
 
-		_, _, err = git.NewCommand(git.DefaultContext, "push").RunStdString(&git.RunOpts{Dir: dstPath})
-		require.NoError(t, err)
+			_, _, err = git.NewCommand(git.DefaultContext, "push").RunStdString(&git.RunOpts{Dir: dstPath})
+			require.NoError(t, err)
 
-		// Check that the submodule entry exist and the link is correct.
-		req := NewRequest(t, "GET", "/"+repo.FullName())
-		resp := MakeRequest(t, req, http.StatusOK)
+			// Check that the submodule entry exist and the link is correct.
+			req := NewRequest(t, "GET", "/"+repo.FullName())
+			resp := MakeRequest(t, req, http.StatusOK)
 
-		htmlDoc := NewHTMLParser(t, resp.Body)
-		htmlDoc.AssertElement(t, fmt.Sprintf(`tr[data-entryname="repo1"] a[href="%s"]`, u.JoinPath("/user2/repo1").String()), true)
+			htmlDoc := NewHTMLParser(t, resp.Body)
+			htmlDoc.AssertElement(t, fmt.Sprintf(`tr[data-entryname="repo1"] a[href="%s"]`, u.JoinPath("/user2/repo1").String()), true)
 
-		// Check that a link to the submodule returns a redirect and that the redirect link is correct.
-		req = NewRequest(t, "GET", "/"+repo.FullName()+"/src/branch/"+repo.DefaultBranch+"/repo1")
-		resp = MakeRequest(t, req, http.StatusSeeOther)
+			// Check that a link to the submodule returns a redirect and that the redirect link is correct.
+			req = NewRequest(t, "GET", "/"+repo.FullName()+"/src/branch/"+repo.DefaultBranch+"/repo1")
+			resp = MakeRequest(t, req, http.StatusSeeOther)
 
-		assert.Equal(t, u.JoinPath("/user2/repo1").String(), resp.Header().Get("Location"))
+			assert.Equal(t, u.JoinPath("/user2/repo1").String(), resp.Header().Get("Location"))
+		})
+
+		t.Run("Declarative", func(t *testing.T) {
+			repo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					".gitmodules": forgery.MapFile(`[submodule "relative-module"]
+  path = relative-module
+  url = https://git.example.org/submodule.git
+`),
+					"relative-module": forgery.MapSubmodule("95601d16476a"),
+				},
+			})
+
+			// Check that the submodule entry exist and the link is correct.
+			req := NewRequest(t, "GET", "/"+repo.FullName())
+			resp := MakeRequest(t, req, http.StatusOK)
+
+			expectedDst := "https://git.example.org/submodule"
+			htmlDoc := NewHTMLParser(t, resp.Body)
+
+			href, ok := htmlDoc.Find(`tr[data-entryname="relative-module"] a`).Attr("href")
+			assert.True(t, ok, "could not find entry 'relative-module' in file list")
+			assert.Equal(t, expectedDst, href)
+
+			// Check that a link to the submodule returns a redirect and that the redirect link is correct.
+			req = NewRequest(t, "GET", "/"+repo.FullName()+"/src/branch/"+repo.DefaultBranch+"/relative-module")
+			resp = MakeRequest(t, req, http.StatusSeeOther)
+
+			assert.Equal(t, expectedDst, resp.Header().Get("Location"))
+		})
+
+		t.Run("SubmodulesFileTooBig", func(t *testing.T) {
+			repo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					".gitmodules": forgery.MapFile(strings.Repeat("#", git.MaxGitmodulesFileSize-5) + // ensure that the partial read is invalid
+						`
+[submodule "relative-module"]
+  path = relative-module
+  url = https://git.example.org/submodule.git
+`),
+					"relative-module": forgery.MapSubmodule("95601d16476a"),
+				},
+			})
+
+			// Check that the submodule entry exist and the link is correct.
+			req := NewRequest(t, "GET", "/"+repo.FullName())
+			resp := MakeRequest(t, req, http.StatusOK)
+
+			htmlDoc := NewHTMLParser(t, resp.Body)
+
+			_, ok := htmlDoc.Find(`tr[data-entryname="relative-module"] td.name a`).Attr("href")
+			assert.False(t, ok, "should not find a link to 'relative-module' in file list")
+
+			// Check that a link to the submodule returns a redirect and that the redirect link is correct.
+			req = NewRequest(t, "GET", "/"+repo.FullName()+"/src/branch/"+repo.DefaultBranch+"/relative-module")
+			resp = MakeRequest(t, req, http.StatusSeeOther)
+
+			assert.Equal(t, "/"+repo.FullName()+"/src/branch/"+repo.DefaultBranch+"/", resp.Header().Get("Location"))
+
+			// Check that a warning is present
+			req = NewRequest(t, "GET", "/"+repo.FullName()+"/src/branch/"+repo.DefaultBranch+"/.gitmodules")
+			resp = MakeRequest(t, req, http.StatusOK)
+
+			htmlDoc = NewHTMLParser(t, resp.Body)
+
+			warn, err := htmlDoc.Find(`.non-diff-file-content .warning`).Html()
+			require.NoError(t, err)
+			assert.NotEmpty(t, warn)
+		})
 	})
 }
 
@@ -1442,4 +1312,38 @@ func TestBlameDirectory(t *testing.T) {
 	// Blame is not allowed
 	req = NewRequest(t, "GET", "/user2/repo59/blame/branch/master/deep")
 	MakeRequest(t, req, http.StatusNotFound)
+}
+
+func TestInitInstructions(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session := loginUser(t, user.Name)
+
+	forEachObjectFormat(t, func(t *testing.T, objectFormat git.ObjectFormat) {
+		defer tests.PrintCurrentTest(t)()
+
+		var init string
+		if objectFormat == git.Sha1ObjectFormat {
+			init = "git init"
+		} else {
+			init = fmt.Sprintf("git init --object-format=%s", objectFormat.Name())
+		}
+
+		repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+			ObjectFormat: objectFormat,
+		})
+
+		portMatcher := regexp.MustCompile(`localhost:\d+`)
+		resp := session.MakeRequest(t, NewRequest(t, "GET", "/"+repo.FullName()), http.StatusOK)
+
+		htmlDoc := NewHTMLParser(t, resp.Body)
+		assert.Equal(t, fmt.Sprintf(`touch README.md
+%s
+git switch -c main
+git add README.md
+git commit -m "first commit"
+git remote add origin http://localhost/user2/%s.git
+git push -u origin main`, init, repo.Name), portMatcher.ReplaceAllString(htmlDoc.Find(".empty-repo-guide code").First().Text(), "localhost"))
+	})
 }

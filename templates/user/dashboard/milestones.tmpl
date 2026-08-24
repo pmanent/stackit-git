@@ -53,11 +53,12 @@
 						{{template "shared/search/combo" dict "Value" $.Keyword}}
 					</form>
 					<!-- Sort -->
-					<div class="list-header-sort ui dropdown type jump item">
-						<span class="text">
-							{{ctx.Locale.Tr "repo.issues.filter_sort"}}
-						</span>
-						{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+					<div class="ui secondary menu tw-mt-0">
+						<div class="list-header-sort ui dropdown type jump item">
+							<span class="text">
+								{{ctx.Locale.Tr "repo.issues.filter_sort"}}
+							</span>
+							{{svg "octicon-triangle-down" 14 "dropdown icon"}}
 						<div class="menu">
 							<a class="{{if or (eq .SortType "closestduedate") (not .SortType)}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=closestduedate&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.earliest_due_data"}}</a>
 							<a class="{{if eq .SortType "furthestduedate"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=furthestduedate&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.latest_due_date"}}</a>
@@ -67,6 +68,7 @@
 							<a class="{{if eq .SortType "leastissues"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=leastissues&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.least_issues"}}</a>
 							<a class="{{if eq .SortType "name"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=name&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.name"}}</a>
 						</div>
+					</div>
 					</div>
 				</div>
 				<div class="milestone-list">
@@ -114,7 +116,7 @@
 											{{ctx.Locale.Tr "repo.milestones.closed" $closedDate}}
 										{{else}}
 											{{if .DeadlineString}}
-												<span{{if .IsOverdue}} class="text red"{{end}}>
+												<span class="flex-text-inline {{if .IsOverdue}}text red{{end}}">
 													{{svg "octicon-calendar" 14}}
 													{{DateUtils.AbsoluteShort (.DeadlineString|DateUtils.ParseLegacy)}}
 												</span>
@@ -125,17 +127,6 @@
 										{{end}}
 									</div>
 								</div>
-								{{if and (or $.CanWriteIssues $.CanWritePulls) (not $.Repository.IsArchived)}}
-									<div class="group">
-										<a class="flex-text-inline" href="{{$.Link}}/{{.ID}}/edit">{{svg "octicon-pencil" 14}}{{ctx.Locale.Tr "repo.issues.label_edit"}}</a>
-										{{if .IsClosed}}
-											<a class="link-action flex-text-inline" href data-url="{{$.Link}}/{{.ID}}/open">{{svg "octicon-check" 14}}{{ctx.Locale.Tr "repo.milestones.open"}}</a>
-										{{else}}
-											<a class="link-action flex-text-inline" href data-url="{{$.Link}}/{{.ID}}/close">{{svg "octicon-x" 14}}{{ctx.Locale.Tr "repo.milestones.close"}}</a>
-										{{end}}
-										<a class="delete-button flex-text-inline" href="#" data-url="{{$.RepoLink}}/milestones/delete" data-id="{{.ID}}">{{svg "octicon-trash" 14}}{{ctx.Locale.Tr "repo.issues.label_delete"}}</a>
-									</div>
-								{{end}}
 							</div>
 							{{if .Content}}
 								<div class="markup content">

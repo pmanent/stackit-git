@@ -30,7 +30,7 @@ func AssignForm(form any, data map[string]any) {
 	typ := reflect.TypeOf(form)
 	val := reflect.ValueOf(form)
 
-	for typ.Kind() == reflect.Ptr {
+	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 		val = val.Elem()
 	}
@@ -51,7 +51,7 @@ func AssignForm(form any, data map[string]any) {
 }
 
 func getRuleBody(field reflect.StructField, prefix string) string {
-	for _, rule := range strings.Split(field.Tag.Get("binding"), ";") {
+	for rule := range strings.SplitSeq(field.Tag.Get("binding"), ";") {
 		if strings.HasPrefix(rule, prefix) {
 			return rule[len(prefix) : len(rule)-1]
 		}
@@ -79,6 +79,11 @@ func GetInclude(field reflect.StructField) string {
 	return getRuleBody(field, "Include(")
 }
 
+func GetRange(field reflect.StructField) (string, string) {
+	min, max, _ := strings.Cut(getRuleBody(field, "Range("), ",")
+	return min, max
+}
+
 // Validate populates the data with validation error (if any).
 func Validate(errs binding.Errors, data map[string]any, f any, l translation.Locale) binding.Errors {
 	if errs.Len() == 0 {
@@ -94,7 +99,7 @@ func Validate(errs binding.Errors, data map[string]any, f any, l translation.Loc
 
 	typ := reflect.TypeOf(f)
 
-	if typ.Kind() == reflect.Ptr {
+	if typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 
@@ -131,6 +136,9 @@ func Validate(errs binding.Errors, data map[string]any, f any, l translation.Loc
 				data["ErrorMsg"] = trName + l.TrString("form.url_error", errs[0].Message)
 			case binding.ERR_INCLUDE:
 				data["ErrorMsg"] = trName + l.TrString("form.include_error", GetInclude(field))
+			case binding.ERR_RANGE:
+				min, max := GetRange(field)
+				data["ErrorMsg"] = trName + l.TrString("alert.range_error", l.PrettyNumber(min), l.PrettyNumber(max))
 			case validation.ErrGlobPattern:
 				data["ErrorMsg"] = trName + l.TrString("form.glob_pattern_error", errs[0].Message)
 			case validation.ErrRegexPattern:

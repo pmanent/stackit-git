@@ -4,12 +4,15 @@
 package setting
 
 import (
+	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"forgejo.org/modules/auth/password/hash"
 	"forgejo.org/modules/generate"
+	"forgejo.org/modules/jwtx"
 	"forgejo.org/modules/keying"
 	"forgejo.org/modules/log"
 )
@@ -20,6 +23,7 @@ var (
 	SecretKey                          string
 	InternalToken                      string // internal access token
 	LogInRememberDays                  int
+	GlobalTwoFactorRequirement         TwoFactorRequirementType
 	CookieRememberName                 string
 	ReverseProxyAuthUser               string
 	ReverseProxyAuthEmail              string
@@ -36,9 +40,32 @@ var (
 	PasswordCheckPwn                   bool
 	SuccessfulTokensCacheSize          int
 	DisableQueryAuthToken              bool
-	CSRFCookieName                     = "_csrf"
-	CSRFCookieHTTPOnly                 = true
 )
+
+/*
+ * key loading is a two-stage process to avoid complications for unit tests:
+ *
+ * For symmetric keys, we want to add a random key to the configuration. We would
+ * not want to change the configuration after loading has completed to maintain
+ * isolation. So from this perspective, we would want to initialize keys only
+ * during setting.load...From()
+ *
+ * For asymmetric keys, we want to create a random private key _file_.
+ * Doing so during the setting load phase, however, creates key files for unit
+ * tests, because they usually complete the full settings load phase, but do not
+ * initialize modules which they do not need. Depending on the test case, it
+ * might not provide a writable AppDataPath, or it would leave private key files
+ * in the source tree. All of this can be avoided with
+ * specifically adjusting the ini loaded for unit tests, but adds considerable
+ * friction.
+ *
+ * So to avoid all this, we split key loading in two phases:
+ * - settings parse the config and save missing symmetric keys
+ * - module init takes the parsed config, creates missing asymmetric keys and
+ *   creates the actual signingkey objects
+ *
+ * jwtx.SigningKeyCfg and jwtx.KeyCfg are used for handover
+ */
 
 // loadSecret load the secret from ini by uriKey or verbatimKey, only one of them could be set
 // If the secret is loaded from uriKey (file), the file should be non-empty, to guarantee the behavior stable and clear.
@@ -54,16 +81,29 @@ func loadSecret(sec ConfigSection, uriKey, verbatimKey string) string {
 	if uri == "" {
 		return verbatim
 	}
+	verbatim, err := loadSecretFromURI(uri)
+	if err == nil {
+		return verbatim
+	}
+	log.Fatal("%s: %w", uriKey, err)
+	// unreached
+	return ""
+}
 
+func loadSecretFromURI(uri string) (string, error) {
 	tempURI, err := url.Parse(uri)
 	if err != nil {
-		log.Fatal("Failed to parse %s (%s): %v", uriKey, uri, err)
+		return "", fmt.Errorf("Failed to parse %s: %v", uri, err)
 	}
 	switch tempURI.Scheme {
 	case "file":
-		buf, err := os.ReadFile(tempURI.RequestURI())
+		path := tempURI.RequestURI()
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(AppDataPath, path)
+		}
+		buf, err := os.ReadFile(path)
 		if err != nil {
-			log.Fatal("Failed to read %s (%s): %v", uriKey, tempURI.RequestURI(), err)
+			return "", fmt.Errorf("Failed to read %s: %v", path, err)
 		}
 		val := strings.TrimSpace(string(buf))
 		if val == "" {
@@ -71,15 +111,133 @@ func loadSecret(sec ConfigSection, uriKey, verbatimKey string) string {
 			// For example: if INTERNAL_TOKEN_URI=file:///empty-file,
 			// Then if the token is re-generated during installation and saved to INTERNAL_TOKEN
 			// Then INTERNAL_TOKEN and INTERNAL_TOKEN_URI both exist, that's a fatal error (they shouldn't)
-			log.Fatal("Failed to read %s (%s): the file is empty", uriKey, tempURI.RequestURI())
+			return "", fmt.Errorf("Failed to read %s: the file is empty", path)
 		}
-		return val
+		return val, nil
 
 	// only file URIs are allowed
 	default:
-		log.Fatal("Unsupported URI-Scheme %q (%q = %q)", tempURI.Scheme, uriKey, uri)
-		return ""
+		return "", fmt.Errorf("Unsupported URI-Scheme %q in %q", tempURI.Scheme, uri)
 	}
+}
+
+// createSymmeticSigningKey creates a new symmetric signing key and saves it to
+// the setting named cfgSecret (usually [PFX_]SECRET) in section cfgSection
+func createSymmeticSigningKeyCfg(rootCfg ConfigProvider, cfgSection, cfgSecret string) (*[]byte, error) {
+	jwtSecretBytes, jwtSecretBase64 := generate.NewJwtSecret()
+	saveCfg, err := rootCfg.PrepareSaving()
+	if err == nil {
+		rootCfg.Section(cfgSection).Key(cfgSecret).SetValue(jwtSecretBase64)
+		saveCfg.Section(cfgSection).Key(cfgSecret).SetValue(jwtSecretBase64)
+		err = saveCfg.Save()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("save %s.%s failed: %v", cfgSection, cfgSecret, err)
+	}
+	return &jwtSecretBytes, nil
+}
+
+// loadSymmeticSigningKey loads a signing key and creates it unless present
+// loads from [pfx]SECRET_URI
+// loads from or saves to [pfx]SECRET
+// in section sec
+func loadSymmeticSigningKeyCfg(rootCfg ConfigProvider, sec ConfigSection, pfx string) (*[]byte, error) {
+	cfgSecretURI := pfx + "SECRET_URI"
+	cfgSecret := pfx + "SECRET"
+
+	secretBase64 := loadSecret(sec, cfgSecretURI, cfgSecret)
+	secret, err := generate.DecodeJwtSecret(secretBase64)
+	if err == nil {
+		return &secret, nil
+	}
+
+	log.Info("[%s] %s or %s failed loading: %v - creating new key", sec.Name(), cfgSecret, cfgSecretURI, err)
+	return createSymmeticSigningKeyCfg(rootCfg, sec.Name(), cfgSecret)
+}
+
+// loadAsymmeticSigningKey loads a signing key from [pfx]SIGNING_PRIVATE_KEY_FILE
+// or creates it if it does not exist
+func loadAsymmeticSigningKeyPath(sec ConfigSection, pfx, defaultFile string) *string {
+	cfgFile := pfx + "SIGNING_PRIVATE_KEY_FILE"
+	keyPath := sec.Key(cfgFile).MustString(defaultFile)
+	if !filepath.IsAbs(keyPath) {
+		keyPath = filepath.Join(AppDataPath, keyPath)
+	}
+	return &keyPath
+}
+
+type checkKeyCfg func(rootCfg ConfigProvider, cfgSection, pfx string) error
+
+func onlyAsymmetric() checkKeyCfg {
+	return func(rootCfg ConfigProvider, cfgSection, pfx string) error {
+		sec := rootCfg.Section(cfgSection)
+		cfgAlg := pfx + "SIGNING_ALGORITHM"
+
+		if sec.HasKey(cfgAlg) {
+			alg := sec.Key(cfgAlg).String()
+			if !jwtx.IsValidAsymmetricAlgorithm(alg) {
+				return fmt.Errorf("Unexpected algorithm: %s = %s, needs to be one of %v",
+					cfgAlg, alg, jwtx.ValidAsymmetricAlgorithms)
+			}
+		}
+
+		noCfg := []string{
+			pfx + "SECRET_URI",
+			pfx + "SECRET",
+		}
+
+		for _, cfg := range noCfg {
+			if sec.HasKey(cfg) {
+				return fmt.Errorf("Invalid config key: %s - must be removed", cfg)
+			}
+		}
+
+		return nil
+	}
+}
+
+// loadSigningKey() loads a or creates signing key based on settings in section cfgSection
+// [pfx]SIGNING_ALGORITHM determines the algorithm
+// [pfx]SECRET is a literal secret for symmetric algorithms
+// [pfx]SECRET_URI is the uri of a secret for symmetric algorithms
+// [pfx]SIGNING_PRIVATE_KEY_FILE is a file with a private key for asymmetric algorithms
+//
+// [pfx]SECRET might get written to literally in the config if needed but not present
+
+func loadSigningKeyCfg(rootCfg ConfigProvider, cfgSection, pfx, defaultAlg, defaultPrivateKeyFile string, checks ...checkKeyCfg) (*jwtx.SigningKeyCfg, error) {
+	for _, check := range checks {
+		err := check(rootCfg, cfgSection, pfx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	sec := rootCfg.Section(cfgSection)
+	cfgAlg := pfx + "SIGNING_ALGORITHM"
+
+	algorithm := sec.Key(cfgAlg).MustString(defaultAlg)
+
+	cfg := jwtx.SigningKeyCfg{Algorithm: algorithm}
+	var err error
+
+	if jwtx.IsValidSymmetricAlgorithm(algorithm) {
+		cfg.SecretBytes, err = loadSymmeticSigningKeyCfg(rootCfg, sec, pfx)
+	} else if jwtx.IsValidAsymmetricAlgorithm(algorithm) {
+		cfg.PrivateKeyPath = loadAsymmeticSigningKeyPath(sec, pfx, defaultPrivateKeyFile)
+	} else {
+		err = fmt.Errorf("invalid algorithm: %s = %s", cfgAlg, algorithm)
+	}
+
+	return &cfg, err
+}
+
+func loadKeyCfg(rootCfg ConfigProvider, cfgSection, pfx, defaultAlg, defaultPrivateKeyFile string, checks ...checkKeyCfg) (*jwtx.KeyCfg, error) {
+	signing, err := loadSigningKeyCfg(rootCfg, cfgSection, pfx, defaultAlg, defaultPrivateKeyFile, checks...)
+	if err != nil {
+		err = fmt.Errorf("[%s] %v", cfgSection, err)
+		return nil, err
+	}
+	return &jwtx.KeyCfg{Signing: signing}, nil
 }
 
 // generateSaveInternalToken generates and saves the internal token to app.ini
@@ -113,7 +271,9 @@ func loadSecurityFrom(rootCfg ConfigProvider) {
 	}
 	keying.Init([]byte(SecretKey))
 
-	CookieRememberName = sec.Key("COOKIE_REMEMBER_NAME").MustString("gitea_incredible")
+	GlobalTwoFactorRequirement = NewTwoFactorRequirementType(sec.Key("GLOBAL_TWO_FACTOR_REQUIREMENT").String())
+
+	CookieRememberName = sec.Key("COOKIE_REMEMBER_NAME").MustString("persistent")
 
 	ReverseProxyAuthUser = sec.Key("REVERSE_PROXY_AUTHENTICATION_USER").MustString("X-WEBAUTH-USER")
 	ReverseProxyAuthEmail = sec.Key("REVERSE_PROXY_AUTHENTICATION_EMAIL").MustString("X-WEBAUTH-EMAIL")
@@ -138,7 +298,6 @@ func loadSecurityFrom(rootCfg ConfigProvider) {
 		log.Fatal("The provided password hash algorithm was invalid: %s", sec.Key("PASSWORD_HASH_ALGO").MustString(""))
 	}
 
-	CSRFCookieHTTPOnly = sec.Key("CSRF_COOKIE_HTTP_ONLY").MustBool(true)
 	PasswordCheckPwn = sec.Key("PASSWORD_CHECK_PWN").MustBool(false)
 	SuccessfulTokensCacheSize = sec.Key("SUCCESSFUL_TOKENS_CACHE_SIZE").MustInt(20)
 
@@ -168,6 +327,42 @@ func loadSecurityFrom(rootCfg ConfigProvider) {
 
 	// warn if the setting is set to false explicitly
 	if sectionHasDisableQueryAuthToken && !DisableQueryAuthToken {
-		log.Warn("Enabling Query API Auth tokens is not recommended. DISABLE_QUERY_AUTH_TOKEN will default to true in gitea 1.23 and will be removed in gitea 1.24.")
+		log.Warn("Enabling Query API Auth tokens is not recommended. DISABLE_QUERY_AUTH_TOKEN will be removed in Forgejo v13.0.0.")
 	}
+}
+
+type TwoFactorRequirementType string
+
+// llu:TrKeysSuffix admin.config.global_2fa_requirement.
+const (
+	NoneTwoFactorRequirement  TwoFactorRequirementType = "none"
+	AllTwoFactorRequirement   TwoFactorRequirementType = "all"
+	AdminTwoFactorRequirement TwoFactorRequirementType = "admin"
+)
+
+func NewTwoFactorRequirementType(twoFactorRequirement string) TwoFactorRequirementType {
+	switch twoFactorRequirement {
+	case AllTwoFactorRequirement.String():
+		return AllTwoFactorRequirement
+	case AdminTwoFactorRequirement.String():
+		return AdminTwoFactorRequirement
+	default:
+		return NoneTwoFactorRequirement
+	}
+}
+
+func (r TwoFactorRequirementType) String() string {
+	return string(r)
+}
+
+func (r TwoFactorRequirementType) IsNone() bool {
+	return r == NoneTwoFactorRequirement
+}
+
+func (r TwoFactorRequirementType) IsAll() bool {
+	return r == AllTwoFactorRequirement
+}
+
+func (r TwoFactorRequirementType) IsAdmin() bool {
+	return r == AdminTwoFactorRequirement
 }

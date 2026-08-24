@@ -51,10 +51,12 @@
 							{{else if $.Reponame}}
 								{{$commitShaLink = (printf "%s/commit/%s" $commitRepoLink (PathEscape .ID.String))}}
 							{{end}}
-							<a {{if $commitShaLink}}href="{{$commitShaLink}}"{{end}} class="{{$class}}">
-								<span class="shortsha">{{ShortSha .ID.String}}</span>
-								{{if .Signature}}{{template "repo/shabox_badge" dict "root" $ "verification" .Verification}}{{end}}
-							</a>
+							{{template "repo/shabox" (dict
+								"sha1" .ID.String
+								"commitLink" $commitShaLink
+								"signature" .Signature
+								"verification" .Verification
+							)}}
 						</td>
 						<td class="message">
 							<span class="message-wrapper">
@@ -62,6 +64,9 @@
 								<span class="commit-summary {{if gt .ParentCount 1}} grey text{{end}}" title="{{.Summary}}">{{.Summary | RenderEmoji $.Context}}</span>
 							{{else}}
 								{{$commitLink:= printf "%s/commit/%s" $commitRepoLink (PathEscape .ID.String)}}
+								{{if $.PageIsPullCommits}}
+									{{$commitLink = (printf "%s/pulls/%d/commits/%s" $commitRepoLink $.Issue.Index (PathEscape .ID.String))}}
+								{{end}}
 								<span class="commit-summary {{if gt .ParentCount 1}} grey text{{end}}" title="{{.Summary}}">{{RenderCommitMessageLinkSubject $.Context .Message $commitLink ($.Repository.ComposeMetas ctx)}}</span>
 							{{end}}
 							</span>
@@ -69,6 +74,14 @@
 							<button class="ui button js-toggle-commit-body ellipsis-button" aria-expanded="false">...</button>
 							{{end}}
 							{{template "repo/commit_statuses" dict "Status" .Status "Statuses" .Statuses}}
+							{{if $.CommitTagsMap}}
+								{{$tags := index $.CommitTagsMap .ID.String}}
+								{{if $tags}}
+									{{range $tags}}
+										{{- template "repo/tag/name" dict "RepoLink" $.Repository.Link "TagName" .TagName "IsRelease" (not .IsTag) -}}
+									{{end}}
+								{{end}}
+							{{end}}
 							{{if IsMultilineCommitMessage .Message}}
 							<pre class="commit-body tw-hidden">{{RenderCommitBody $.Context .Message ($.Repository.ComposeMetas ctx)}}</pre>
 							{{end}}

@@ -13,11 +13,11 @@ import (
 	user_service "forgejo.org/services/user"
 )
 
-// UpdateAvatar updates the Avatar of an User
+// UpdateAvatar updates doer's avatar
 func UpdateAvatar(ctx *context.APIContext) {
 	// swagger:operation POST /user/avatar user userUpdateAvatar
 	// ---
-	// summary: Update Avatar
+	// summary: Update avatar of the current user
 	// produces:
 	// - application/json
 	// parameters:
@@ -40,7 +40,7 @@ func UpdateAvatar(ctx *context.APIContext) {
 		return
 	}
 
-	err = user_service.UploadAvatar(ctx, ctx.Doer, content)
+	err = user_service.UploadAvatar(ctx, ctx.Doer(), content)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "UploadAvatar", err)
 		return
@@ -49,11 +49,11 @@ func UpdateAvatar(ctx *context.APIContext) {
 	ctx.Status(http.StatusNoContent)
 }
 
-// DeleteAvatar deletes the Avatar of an User
+// DeleteAvatar deletes doer's avatar
 func DeleteAvatar(ctx *context.APIContext) {
 	// swagger:operation DELETE /user/avatar user userDeleteAvatar
 	// ---
-	// summary: Delete Avatar
+	// summary: Delete avatar of the current user. It will be replaced by a default one
 	// produces:
 	// - application/json
 	// responses:
@@ -63,7 +63,7 @@ func DeleteAvatar(ctx *context.APIContext) {
 	//     "$ref": "#/responses/unauthorized"
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
-	err := user_service.DeleteAvatar(ctx, ctx.Doer)
+	err := user_service.DeleteAvatar(ctx, ctx.Doer())
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "DeleteAvatar", err)
 		return

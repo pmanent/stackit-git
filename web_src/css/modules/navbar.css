@@ -8,17 +8,12 @@
   padding: 0 10px;
 }
 
-#navbar,
-#navbar .navbar-left,
-#navbar .navbar-right {
-  min-height: 49px; /* +1px border-bottom */
-}
-
 #navbar .navbar-left,
 #navbar .navbar-right {
   margin: 0;
   display: flex;
   align-items: center;
+  min-height: 48px;
 }
 
 #navbar-logo {
@@ -33,22 +28,26 @@
   display: flex;
 }
 
-#navbar > .menu > .item {
-  color: var(--color-nav-text);
-}
-
 #navbar .dropdown .item {
   justify-content: stretch;
 }
 
 #navbar a.item:hover, #navbar a.item:focus,
+#navbar details.dropdown > summary:is(:hover, :focus),
+#navbar details.dropdown[open] > summary,
 #navbar button.item:hover, #navbar button.item:focus {
   background: var(--color-nav-hover-bg);
 }
 
 #navbar .secondary.menu > .item > .svg,
 #navbar .right.menu > .item > .svg {
-  margin-right: 0;
+  margin-inline-end: 0;
+}
+
+/* icon with notification counter - positioned relative container */
+#navbar .notification-icon-relative {
+  position: relative;
+  display: flex;
 }
 
 @media (max-width: 767.98px) {
@@ -70,7 +69,7 @@
   }
   #navbar .navbar-mobile-right {
     display: flex;
-    margin-left: auto !important;
+    margin-inline-start: auto !important;
     width: auto !important;
   }
   #navbar .navbar-mobile-right > .item {
@@ -80,6 +79,7 @@
   /* show items if the navbar is open */
   #navbar.navbar-menu-open {
     padding-bottom: 8px;
+    gap: .35714286em;
   }
   #navbar.navbar-menu-open,
   #navbar.navbar-menu-open .navbar-right {
@@ -94,6 +94,21 @@
     width: 100%;
     margin: 0;
   }
+  #navbar details.dropdown {
+    display: none;
+  }
+  #navbar.navbar-menu-open details.dropdown {
+    display: block;
+    width: 100%;
+    > summary {
+      width: 100%;
+      justify-content: start;
+    }
+    > .content {
+      width: 100%;
+    }
+  }
+
   #navbar.navbar-menu-open .navbar-left #navbar-logo {
     justify-content: flex-start;
     width: auto;
@@ -104,8 +119,18 @@
     min-height: 48px;
   }
   #navbar #mobile-notifications-icon {
-    margin-right: 6px !important;
+    margin-inline-end: 6px !important;
   }
+}
+
+#navbar details.dropdown summary {
+  padding-inline-start: 0.75rem;
+  /* The min height is dictated by the largest dropdown, which is the one that has an avatar in the opener */
+  min-height: 38px;
+}
+
+#navbar details.dropdown .dropdown-icon {
+  display: contents;
 }
 
 #navbar a.item .notification_count {
@@ -126,7 +151,7 @@
   background: var(--color-primary);
   border: 2px solid var(--color-nav-bg);
   position: absolute;
-  left: 6px;
+  inset-inline-start: 6px;
   top: -9px;
   min-width: 17px;
   height: 17px;

@@ -17,7 +17,6 @@ import (
 	"forgejo.org/tests"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func testAPIGetBranch(t *testing.T, branchName string, exists bool) {
@@ -26,13 +25,13 @@ func testAPIGetBranch(t *testing.T, branchName string, exists bool) {
 		AddTokenAuth(token)
 	resp := MakeRequest(t, req, NoExpectedStatus)
 	if !exists {
-		assert.EqualValues(t, http.StatusNotFound, resp.Code)
+		assert.Equal(t, http.StatusNotFound, resp.Code)
 		return
 	}
-	assert.EqualValues(t, http.StatusOK, resp.Code)
+	assert.Equal(t, http.StatusOK, resp.Code)
 	var branch api.Branch
 	DecodeJSON(t, resp, &branch)
-	assert.EqualValues(t, branchName, branch.Name)
+	assert.Equal(t, branchName, branch.Name)
 	assert.True(t, branch.UserCanPush)
 	assert.True(t, branch.UserCanMerge)
 }
@@ -46,7 +45,7 @@ func testAPIGetBranchProtection(t *testing.T, branchName string, expectedHTTPSta
 	if resp.Code == http.StatusOK {
 		var branchProtection api.BranchProtection
 		DecodeJSON(t, resp, &branchProtection)
-		assert.EqualValues(t, branchName, branchProtection.RuleName)
+		assert.Equal(t, branchName, branchProtection.RuleName)
 		return &branchProtection
 	}
 	return nil
@@ -62,7 +61,7 @@ func testAPICreateBranchProtection(t *testing.T, branchName string, expectedHTTP
 	if resp.Code == http.StatusCreated {
 		var branchProtection api.BranchProtection
 		DecodeJSON(t, resp, &branchProtection)
-		assert.EqualValues(t, branchName, branchProtection.RuleName)
+		assert.Equal(t, branchName, branchProtection.RuleName)
 	}
 }
 
@@ -75,7 +74,7 @@ func testAPIEditBranchProtection(t *testing.T, branchName string, body *api.Bran
 	if resp.Code == http.StatusOK {
 		var branchProtection api.BranchProtection
 		DecodeJSON(t, resp, &branchProtection)
-		assert.EqualValues(t, branchName, branchProtection.RuleName)
+		assert.Equal(t, branchName, branchProtection.RuleName)
 	}
 }
 
@@ -109,7 +108,7 @@ func TestAPIGetBranch(t *testing.T) {
 }
 
 func TestAPICreateBranch(t *testing.T) {
-	onGiteaRun(t, testAPICreateBranches)
+	onApplicationRun(t, testAPICreateBranches)
 }
 
 func testAPICreateBranches(t *testing.T, giteaURL *url.URL) {
@@ -183,14 +182,14 @@ func testAPICreateBranch(t testing.TB, session *TestSession, user, repo, oldBran
 	DecodeJSON(t, resp, &branch)
 
 	if resp.Result().StatusCode == http.StatusCreated {
-		assert.EqualValues(t, newBranch, branch.Name)
+		assert.Equal(t, newBranch, branch.Name)
 	}
 
 	return resp.Result().StatusCode == status
 }
 
 func TestAPIUpdateBranch(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, _ *url.URL) {
+	onApplicationRun(t, func(t *testing.T, _ *url.URL) {
 		t.Run("UpdateBranchWithEmptyRepo", func(t *testing.T) {
 			testAPIUpdateBranch(t, "user10", "repo6", "master", "test", http.StatusNotFound)
 		})
@@ -266,7 +265,7 @@ func TestAPIBranchProtection(t *testing.T) {
 }
 
 func TestAPICreateBranchWithSyncBranches(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, giteaURL *url.URL) {
+	onApplicationRun(t, func(t *testing.T, giteaURL *url.URL) {
 		unittest.AssertCount(t, &git_model.Branch{RepoID: 1}, 4)
 
 		// make a broke repository with no branch on database
@@ -279,4 +278,23 @@ func TestAPICreateBranchWithSyncBranches(t *testing.T) {
 
 		unittest.AssertExistsIf(t, true, &git_model.Branch{RepoID: 1, Name: "new_branch"})
 	})
+}
+
+func TestAPIGetAllBranchesOfEmptyRepo(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	session := loginUser(t, "user2")
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser, auth_model.AccessTokenScopeWriteRepository)
+
+	createReq := NewRequestWithJSON(t, "POST", "/api/v1/user/repos", &api.CreateRepoOption{
+		Name:     "emptyrepo",
+		AutoInit: false,
+	}).AddTokenAuth(token)
+	MakeRequest(t, createReq, http.StatusCreated)
+
+	req := NewRequest(t, "GET", "/api/v1/repos/user2/emptyrepo/branches").
+		AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+
+	assert.Equal(t, "[]\n", resp.Body.String())
 }

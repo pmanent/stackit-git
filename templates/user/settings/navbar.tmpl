@@ -2,6 +2,7 @@
 <!-- Instead, edit its "custom" counterpart that lives in: -->
 <!-- /custom/templates/user/settings/navbar.tmpl -->
 
+{{if not .HideNavbarLinks}}
 <div class="flex-container-nav">
 	<div class="ui fluid vertical menu">
 		<div class="header item">{{ctx.Locale.Tr "user.settings"}}</div>
@@ -19,6 +20,9 @@
 		</a>
 		<a class="{{if .PageIsSettingsApplications}}active {{end}}item" href="{{AppSubUrl}}/user/settings/applications">
 			{{ctx.Locale.Tr "settings.applications"}}
+		</a>
+		<a class="{{if .PageIsSettingsAuthorizedIntegrations}}active {{end}}item" href="{{AppSubUrl}}/user/settings/authorized-integrations">
+			{{ctx.Locale.Tr "settings.authorized_integrations"}}
 		</a>
 		<a class="{{if .PageIsSettingsKeys}}active {{end}}item" href="{{AppSubUrl}}/user/settings/keys">
 			{{ctx.Locale.Tr "settings.ssh_gpg_keys"}}
@@ -65,3 +69,4 @@
 		</a>
 	</div>
 </div>
+{{end}}

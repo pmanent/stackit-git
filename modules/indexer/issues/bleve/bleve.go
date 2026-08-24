@@ -9,10 +9,10 @@ import (
 	indexer_internal "forgejo.org/modules/indexer/internal"
 	inner_bleve "forgejo.org/modules/indexer/internal/bleve"
 	"forgejo.org/modules/indexer/issues/internal"
+	"forgejo.org/modules/optional"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
-	"github.com/blevesearch/bleve/v2/analysis/token/camelcase"
 	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
 	"github.com/blevesearch/bleve/v2/analysis/token/unicodenorm"
 	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
@@ -23,7 +23,7 @@ import (
 const (
 	issueIndexerAnalyzer      = "issueIndexer"
 	issueIndexerDocType       = "issueIndexerDocType"
-	issueIndexerLatestVersion = 4
+	issueIndexerLatestVersion = 7
 )
 
 const unicodeNormalizeName = "unicodeNormalize"
@@ -69,6 +69,7 @@ func generateIssueIndexMapping() (mapping.IndexMapping, error) {
 
 	docMapping.AddFieldMappingsAt("is_public", boolFieldMapping)
 
+	docMapping.AddFieldMappingsAt("index", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("title", textFieldMapping)
 	docMapping.AddFieldMappingsAt("content", textFieldMapping)
 	docMapping.AddFieldMappingsAt("comments", textFieldMapping)
@@ -81,7 +82,7 @@ func generateIssueIndexMapping() (mapping.IndexMapping, error) {
 	docMapping.AddFieldMappingsAt("project_id", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("project_board_id", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("poster_id", numberFieldMapping)
-	docMapping.AddFieldMappingsAt("assignee_id", numberFieldMapping)
+	docMapping.AddFieldMappingsAt("assignee_ids", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("mention_ids", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("reviewed_ids", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("review_requested_ids", numberFieldMapping)
@@ -98,7 +99,7 @@ func generateIssueIndexMapping() (mapping.IndexMapping, error) {
 		"type":          custom.Name,
 		"char_filters":  []string{},
 		"tokenizer":     unicode.Name,
-		"token_filters": []string{unicodeNormalizeName, camelcase.Name, lowercase.Name},
+		"token_filters": []string{unicodeNormalizeName, lowercase.Name},
 	}); err != nil {
 		return nil, err
 	}
@@ -150,36 +151,52 @@ func (b *Indexer) Delete(_ context.Context, ids ...int64) error {
 	return batch.Flush()
 }
 
+func termQuery(token internal.Token) query.Query {
+	innerQ := bleve.NewDisjunctionQuery(
+		inner_bleve.MatchPhraseQuery(token.Term, "title", issueIndexerAnalyzer, token.Fuzzy, 2.0),
+		inner_bleve.MatchPhraseQuery(token.Term, "content", issueIndexerAnalyzer, token.Fuzzy, 1.0),
+		inner_bleve.MatchPhraseQuery(token.Term, "comments", issueIndexerAnalyzer, token.Fuzzy, 1.0))
+
+	if issueID, err := token.ParseIssueReference(); err == nil {
+		idQuery := inner_bleve.NumericEqualityQuery(issueID, "index")
+		idQuery.SetBoost(20.0)
+		innerQ.AddQuery(idQuery)
+	}
+	return innerQ
+}
+
+// Create a boolean query with the provided tokens (if any)
+func keywordQuery(tokens []internal.Token) *query.BooleanQuery {
+	q := bleve.NewBooleanQuery()
+
+	// If there is only a single term the user is likely looking for
+	// a MUST rather than a SHOULD
+	if len(tokens) == 1 && tokens[0].Kind != internal.BoolOptNot {
+		q.AddMust(termQuery(tokens[0]))
+		return q
+	}
+
+	for _, token := range tokens {
+		innerQ := termQuery(token)
+		switch token.Kind {
+		case internal.BoolOptMust:
+			q.AddMust(innerQ)
+		case internal.BoolOptShould:
+			q.AddShould(innerQ)
+		case internal.BoolOptNot:
+			q.AddMustNot(innerQ)
+		}
+	}
+
+	return q
+}
+
 // Search searches for issues by given conditions.
 // Returns the matching issue IDs
 func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (*internal.SearchResult, error) {
-	var queries []query.Query
+	q := keywordQuery(options.Tokens)
 
-	tokens, err := options.Tokens()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(tokens) > 0 {
-		q := bleve.NewBooleanQuery()
-		for _, token := range tokens {
-			innerQ := bleve.NewDisjunctionQuery(
-				inner_bleve.MatchPhraseQuery(token.Term, "title", issueIndexerAnalyzer, token.Fuzzy),
-				inner_bleve.MatchPhraseQuery(token.Term, "content", issueIndexerAnalyzer, token.Fuzzy),
-				inner_bleve.MatchPhraseQuery(token.Term, "comments", issueIndexerAnalyzer, token.Fuzzy))
-
-			switch token.Kind {
-			case internal.BoolOptMust:
-				q.AddMust(innerQ)
-			case internal.BoolOptShould:
-				q.AddShould(innerQ)
-			case internal.BoolOptNot:
-				q.AddMustNot(innerQ)
-			}
-		}
-		queries = append(queries, q)
-	}
-
+	var filters []query.Query
 	if len(options.RepoIDs) > 0 || options.AllPublic {
 		var repoQueries []query.Query
 		for _, repoID := range options.RepoIDs {
@@ -188,40 +205,44 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 		if options.AllPublic {
 			repoQueries = append(repoQueries, inner_bleve.BoolFieldQuery(true, "is_public"))
 		}
-		queries = append(queries, bleve.NewDisjunctionQuery(repoQueries...))
+		filters = append(filters, bleve.NewDisjunctionQuery(repoQueries...))
 	}
 
-	if options.IsPull.Has() {
-		queries = append(queries, inner_bleve.BoolFieldQuery(options.IsPull.Value(), "is_pull"))
+	if has, value := options.PriorityRepoID.Get(); has {
+		eq := inner_bleve.NumericEqualityQuery(value, "repo_id")
+		eq.SetBoost(10.0)
+		meh := bleve.NewMatchAllQuery()
+		meh.SetBoost(0)
+		q.AddShould(bleve.NewDisjunctionQuery(eq, meh))
 	}
-	if options.IsClosed.Has() {
-		queries = append(queries, inner_bleve.BoolFieldQuery(options.IsClosed.Value(), "is_closed"))
+
+	if has, value := options.IsPull.Get(); has {
+		filters = append(filters, inner_bleve.BoolFieldQuery(value, "is_pull"))
+	}
+	if has, value := options.IsClosed.Get(); has {
+		filters = append(filters, inner_bleve.BoolFieldQuery(value, "is_closed"))
 	}
 
 	if options.NoLabelOnly {
-		queries = append(queries, inner_bleve.BoolFieldQuery(true, "no_label"))
+		filters = append(filters, inner_bleve.BoolFieldQuery(true, "no_label"))
 	} else {
 		if len(options.IncludedLabelIDs) > 0 {
 			var includeQueries []query.Query
 			for _, labelID := range options.IncludedLabelIDs {
 				includeQueries = append(includeQueries, inner_bleve.NumericEqualityQuery(labelID, "label_ids"))
 			}
-			queries = append(queries, bleve.NewConjunctionQuery(includeQueries...))
+			filters = append(filters, includeQueries...)
 		} else if len(options.IncludedAnyLabelIDs) > 0 {
 			var includeQueries []query.Query
 			for _, labelID := range options.IncludedAnyLabelIDs {
 				includeQueries = append(includeQueries, inner_bleve.NumericEqualityQuery(labelID, "label_ids"))
 			}
-			queries = append(queries, bleve.NewDisjunctionQuery(includeQueries...))
+			filters = append(filters, bleve.NewDisjunctionQuery(includeQueries...))
 		}
 		if len(options.ExcludedLabelIDs) > 0 {
-			var excludeQueries []query.Query
 			for _, labelID := range options.ExcludedLabelIDs {
-				q := bleve.NewBooleanQuery()
 				q.AddMustNot(inner_bleve.NumericEqualityQuery(labelID, "label_ids"))
-				excludeQueries = append(excludeQueries, q)
 			}
-			queries = append(queries, bleve.NewConjunctionQuery(excludeQueries...))
 		}
 	}
 
@@ -230,48 +251,41 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 		for _, milestoneID := range options.MilestoneIDs {
 			milestoneQueries = append(milestoneQueries, inner_bleve.NumericEqualityQuery(milestoneID, "milestone_id"))
 		}
-		queries = append(queries, bleve.NewDisjunctionQuery(milestoneQueries...))
+		filters = append(filters, bleve.NewDisjunctionQuery(milestoneQueries...))
 	}
 
-	if options.ProjectID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.ProjectID.Value(), "project_id"))
-	}
-	if options.ProjectColumnID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.ProjectColumnID.Value(), "project_board_id"))
-	}
-
-	if options.PosterID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.PosterID.Value(), "poster_id"))
-	}
-
-	if options.AssigneeID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.AssigneeID.Value(), "assignee_id"))
-	}
-
-	if options.MentionID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.MentionID.Value(), "mention_ids"))
-	}
-
-	if options.ReviewedID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.ReviewedID.Value(), "reviewed_ids"))
-	}
-	if options.ReviewRequestedID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.ReviewRequestedID.Value(), "review_requested_ids"))
-	}
-
-	if options.SubscriberID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.SubscriberID.Value(), "subscriber_ids"))
+	for key, val := range map[string]optional.Option[int64]{
+		"project_id":           options.ProjectID,
+		"project_board_id":     options.ProjectColumnID,
+		"poster_id":            options.PosterID,
+		"assignee_ids":         options.AssigneeID,
+		"mention_ids":          options.MentionID,
+		"reviewed_ids":         options.ReviewedID,
+		"review_requested_ids": options.ReviewRequestedID,
+		"subscriber_ids":       options.SubscriberID,
+	} {
+		if has, value := val.Get(); has {
+			filters = append(filters, inner_bleve.NumericEqualityQuery(value, key))
+		}
 	}
 
 	if options.UpdatedAfterUnix.Has() || options.UpdatedBeforeUnix.Has() {
-		queries = append(queries, inner_bleve.NumericRangeInclusiveQuery(
+		filters = append(filters, inner_bleve.NumericRangeInclusiveQuery(
 			options.UpdatedAfterUnix,
 			options.UpdatedBeforeUnix,
 			"updated_unix"))
 	}
 
-	var indexerQuery query.Query = bleve.NewConjunctionQuery(queries...)
-	if len(queries) == 0 {
+	switch len(filters) {
+	case 0:
+		break
+	case 1:
+		q.Filter = filters[0]
+	default:
+		q.Filter = bleve.NewConjunctionQuery(filters...)
+	}
+	var indexerQuery query.Query = q
+	if q.Must == nil && q.MustNot == nil && q.Should == nil && len(filters) == 0 {
 		indexerQuery = bleve.NewMatchAllQuery()
 	}
 

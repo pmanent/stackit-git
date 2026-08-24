@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"forgejo.org/models/db"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 )
@@ -20,6 +21,9 @@ type AuthorizationPurpose string
 var (
 	// Used to store long term authorization tokens.
 	LongTermAuthorization AuthorizationPurpose = "long_term_authorization"
+
+	// Long-term token for OAuth2/OIDC sign-ins; bounces through the IdP rather than auto-logging in.
+	LongTermAuthorizationSSO AuthorizationPurpose = "long_term_authorization_sso"
 
 	// Used to activate a user account.
 	UserActivation AuthorizationPurpose = "user_activation"
@@ -36,10 +40,11 @@ func EmailActivation(email string) AuthorizationPurpose {
 // AuthorizationToken represents a authorization token to a user.
 type AuthorizationToken struct {
 	ID              int64  `xorm:"pk autoincr"`
-	UID             int64  `xorm:"INDEX"`
+	UID             int64  `xorm:"INDEX REFERENCES(user, id)"`
 	LookupKey       string `xorm:"INDEX UNIQUE"`
 	HashedValidator string
-	Purpose         AuthorizationPurpose `xorm:"NOT NULL DEFAULT 'long_term_authorization'"`
+	Purpose         AuthorizationPurpose   `xorm:"NOT NULL DEFAULT 'long_term_authorization'"`
+	LoginSourceID   optional.Option[int64] `xorm:"INDEX REFERENCES(login_source, id)"`
 	Expiry          timeutil.TimeStamp
 }
 
@@ -60,13 +65,10 @@ func (authToken *AuthorizationToken) IsExpired() bool {
 // GenerateAuthToken generates a new authentication token for the given user.
 // It returns the lookup key and validator values that should be passed to the
 // user via a long-term cookie.
-func GenerateAuthToken(ctx context.Context, userID int64, expiry timeutil.TimeStamp, purpose AuthorizationPurpose) (lookupKey, validator string, err error) {
+func GenerateAuthToken(ctx context.Context, userID int64, loginSourceID optional.Option[int64], expiry timeutil.TimeStamp, purpose AuthorizationPurpose) (lookupKey, validator string, err error) {
 	// Request 64 random bytes. The first 32 bytes will be used for the lookupKey
 	// and the other 32 bytes will be used for the validator.
-	rBytes, err := util.CryptoRandomBytes(64)
-	if err != nil {
-		return "", "", err
-	}
+	rBytes := util.CryptoRandomBytes(64)
 	hexEncoded := hex.EncodeToString(rBytes)
 	validator, lookupKey = hexEncoded[64:], hexEncoded[:64]
 
@@ -76,6 +78,7 @@ func GenerateAuthToken(ctx context.Context, userID int64, expiry timeutil.TimeSt
 		LookupKey:       lookupKey,
 		HashedValidator: HashValidator(rBytes[32:]),
 		Purpose:         purpose,
+		LoginSourceID:   loginSourceID,
 	})
 	return lookupKey, validator, err
 }

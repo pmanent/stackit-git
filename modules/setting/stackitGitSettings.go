@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"forgejo.org/modules/log"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -22,10 +23,10 @@ var (
 var StackitGit = struct {
 	// Login Page settings
 	EnableUserPassSignIn            bool
-	OrganizationId                  string
-	ProjectId                       string
+	OrganizationID                  string
+	ProjectID                       string
 	AdminPermissions                string
-	InstanceId                      string
+	InstanceID                      string
 	AdminProjects                   string
 	LimitDiskStorageSpace           string
 	LimitDiskStorageSpaceQuantity   resource.Quantity
@@ -38,10 +39,10 @@ var StackitGit = struct {
 func loadStackitGitSettingsFrom(rootCfg ConfigProvider) {
 	sec := rootCfg.Section("stackitgitsettings")
 	StackitGit.EnableUserPassSignIn = sec.Key("ENABLE_USER_PASS_SIGNIN").MustBool(false)
-	StackitGit.OrganizationId = sec.Key("ORGANIZATIONID").MustString("")
-	StackitGit.ProjectId = sec.Key("PROJECTID").MustString("")
+	StackitGit.OrganizationID = sec.Key("ORGANIZATIONID").MustString("")
+	StackitGit.ProjectID = sec.Key("PROJECTID").MustString("")
 	StackitGit.AdminPermissions = sec.Key("ADMIN_PERMISSIONS").MustString("")
-	StackitGit.InstanceId = sec.Key("INSTANCEID").MustString("")
+	StackitGit.InstanceID = sec.Key("INSTANCEID").MustString("")
 	StackitGit.LimitDiskStorageSpace = sec.Key("LIMIT_DISK_STORAGE_SPACE").MustString(DefaultLimitDiskStorageSpace)
 	StackitGit.LimitObjectStorageSpace = sec.Key("LIMIT_OBJECT_STORAGE_SPACE").MustString(DefaultLimitObjectStorageSpace)
 

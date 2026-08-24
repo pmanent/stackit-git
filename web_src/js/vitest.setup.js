@@ -1,11 +1,21 @@
+import $ from 'jquery';
+
+$.fn.dropdown = () => undefined;
+
 window.__webpack_public_path__ = '';
 
+const originalConsoleError = console.error;
+console.error = (...args) => {
+  if (typeof args[0] === 'string' && args[0].includes("Failed to create chart: can't acquire context from the given item")) return;
+  originalConsoleError.apply(console, args);
+};
+
 window.config = {
-  csrfToken: 'test-csrf-token-123456',
   pageData: {},
   i18n: {},
-  customEmojis: {},
+  customEmojis: new Set(['forgejo', 'frogejo', 'blobnom']),
   appSubUrl: '',
+  assetUrlPrefix: '/assets',
   mentionValues: [
     {key: 'user1 User 1', value: 'user1', name: 'user1', fullname: 'User 1', avatar: 'https://avatar1.com'},
     {key: 'user2 User 2', value: 'user2', name: 'user2', fullname: 'User 2', avatar: 'https://avatar2.com'},

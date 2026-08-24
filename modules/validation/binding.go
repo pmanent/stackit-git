@@ -27,12 +27,17 @@ const (
 	ErrUsername = "UsernameError"
 	// ErrInvalidGroupTeamMap is returned when a group team mapping is invalid
 	ErrInvalidGroupTeamMap = "InvalidGroupTeamMap"
+	// ErrInvalidDynGroupMaps is returned when dynamic group team mappings are invalid
+	ErrInvalidDynGroupMaps = "InvalidDynGroupMaps"
+	// ErrInvalidQuotaGroupMap is returned when a quota group mapping is invalid
+	ErrInvalidQuotaGroupMap = "InvalidQuotaGroupMap"
 	// ErrEmail is returned when an email address is invalid
 	ErrEmail = "Email"
 )
 
 // AddBindingRules adds additional binding rules
 func AddBindingRules() {
+	addValidDynGroupMapsRule()
 	addGitRefNameBindingRule()
 	addValidURLListBindingRule()
 	addValidURLBindingRule()
@@ -42,6 +47,7 @@ func AddBindingRules() {
 	addGlobOrRegexPatternRule()
 	addUsernamePatternRule()
 	addValidGroupTeamMapRule()
+	addValidQuotaGroupMapRule()
 	addEmailBindingRules()
 }
 
@@ -217,6 +223,40 @@ func addValidGroupTeamMapRule() {
 	})
 }
 
+func addValidDynGroupMapsRule() {
+	binding.AddRule(&binding.Rule{
+		IsMatch: func(rule string) bool {
+			return rule == "ValidDynGroupMaps"
+		},
+		IsValid: func(errs binding.Errors, name string, val any) (bool, binding.Errors) {
+			_, err := auth.UnmarshalDynGroupMappings(fmt.Sprintf("%v", val))
+			if err != nil {
+				errs.Add([]string{name}, ErrInvalidDynGroupMaps, err.Error())
+				return false, errs
+			}
+
+			return true, errs
+		},
+	})
+}
+
+func addValidQuotaGroupMapRule() {
+	binding.AddRule(&binding.Rule{
+		IsMatch: func(rule string) bool {
+			return rule == "ValidQuotaGroupMap"
+		},
+		IsValid: func(errs binding.Errors, name string, val any) (bool, binding.Errors) {
+			_, err := auth.UnmarshalQuotaGroupMapping(fmt.Sprintf("%v", val))
+			if err != nil {
+				errs.Add([]string{name}, ErrInvalidQuotaGroupMap, err.Error())
+				return false, errs
+			}
+
+			return true, errs
+		},
+	})
+}
+
 func addEmailBindingRules() {
 	binding.AddRule(&binding.Rule{
 		IsMatch: func(rule string) bool {
@@ -246,17 +286,17 @@ func addEmailBindingRules() {
 }
 
 func portOnly(hostport string) string {
-	colon := strings.IndexByte(hostport, ':')
-	if colon == -1 {
+	_, after, ok := strings.Cut(hostport, ":")
+	if !ok {
 		return ""
 	}
-	if i := strings.Index(hostport, "]:"); i != -1 {
-		return hostport[i+len("]:"):]
+	if _, after, ok := strings.Cut(hostport, "]:"); ok {
+		return after
 	}
 	if strings.Contains(hostport, "]") {
 		return ""
 	}
-	return hostport[colon+len(":"):]
+	return after
 }
 
 func validPort(p string) bool {

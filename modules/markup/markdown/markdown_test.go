@@ -1,4 +1,5 @@
 // Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package markdown_test
@@ -123,6 +124,32 @@ func TestRender_Images(t *testing.T) {
 	test(
 		"[!["+title+"]("+url+")]("+href+")",
 		`<p><a href="`+href+`" rel="nofollow"><img src="`+result+`" alt="`+title+`"/></a></p>`)
+}
+
+func TestRender_Buttons(t *testing.T) {
+	setting.AppURL = AppURL
+
+	test := func(input, expected string) {
+		buffer, err := markdown.RenderString(&markup.RenderContext{
+			Ctx: git.DefaultContext,
+			Links: markup.Links{
+				Base: FullURL,
+			},
+		}, input)
+		require.NoError(t, err)
+		assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(string(buffer)))
+	}
+
+	test(
+		"<button>Test</button>",
+		`<p><button type="button">Test</button></p>`)
+
+	test(
+		`<button class="toggle-escape-button btn interact-bg">Test</button>`,
+		`<p><button type="button" class="toggle-escape-button btn interact-bg">Test</button></p>`)
+	test(
+		`<button type="submit" class="toggle-escape-button btn interact-bg">Test</button>`,
+		`<p><button type="button" class="toggle-escape-button btn interact-bg">Test</button></p>`)
 }
 
 func testAnswers(baseURLContent, baseURLImages string) []string {
@@ -292,7 +319,7 @@ func TestTotal_RenderWiki(t *testing.T) {
 
 	answers := testAnswers(util.URLJoin(FullURL, "wiki"), util.URLJoin(FullURL, "wiki", "raw"))
 
-	for i := 0; i < len(sameCases); i++ {
+	for i := range sameCases {
 		line, err := markdown.RenderString(&markup.RenderContext{
 			Ctx: git.DefaultContext,
 			Links: markup.Links{
@@ -336,7 +363,7 @@ func TestTotal_RenderString(t *testing.T) {
 
 	answers := testAnswers(util.URLJoin(FullURL, "src", "master"), util.URLJoin(FullURL, "media", "master"))
 
-	for i := 0; i < len(sameCases); i++ {
+	for i := range sameCases {
 		line, err := markdown.RenderString(&markup.RenderContext{
 			Ctx: git.DefaultContext,
 			Links: markup.Links{
@@ -561,6 +588,14 @@ func TestMathBlock(t *testing.T) {
 			"test $$a$$",
 			`<p>test <code class="language-math display is-loading">a</code></p>` + nl,
 		},
+		{
+			`\[
+[\triangle ABC] = \sqrt{s(s-a)(s-b)(s-c)}
+\]`,
+			`<p>[<br/>
+[\triangle ABC] = \sqrt{s(s-a)(s-b)(s-c)}<br/>
+]</p>` + nl,
+		},
 	}
 
 	for _, test := range testcases {
@@ -568,6 +603,32 @@ func TestMathBlock(t *testing.T) {
 		require.NoError(t, err, "Unexpected error in testcase: %q", test.testcase)
 		assert.Equal(t, template.HTML(test.expected), res, "Unexpected result in testcase %q", test.testcase)
 	}
+
+	t.Run("Wiki context", func(t *testing.T) {
+		testcases := []struct {
+			testcase string
+			expected string
+		}{
+			{
+				"$a$",
+				`<p><code class="language-math is-loading">a</code></p>` + nl,
+			},
+			{
+				`\[
+[\triangle ABC] = \sqrt{s(s-a)(s-b)(s-c)}
+\]`,
+				`<pre class="code-block is-loading"><code class="chroma language-math display">
+[\triangle ABC] = \sqrt{s(s-a)(s-b)(s-c)}
+</code></pre>` + nl,
+			},
+		}
+
+		for _, test := range testcases {
+			res, err := markdown.RenderString(&markup.RenderContext{Ctx: git.DefaultContext, IsWiki: true}, test.testcase)
+			require.NoError(t, err, "Unexpected error in testcase: %q", test.testcase)
+			assert.Equal(t, template.HTML(test.expected), res, "Unexpected result in testcase %q", test.testcase)
+		}
+	})
 }
 
 func TestFootnote(t *testing.T) {
@@ -768,6 +829,49 @@ Citation needed[^0].`,
 	}
 }
 
+func TestFootnoteWithScope(t *testing.T) {
+	testcases := []struct {
+		testcase string
+		expected string
+	}{
+		{
+			`Citation needed[^0].
+[^0]: Source`,
+			`<p>Citation needed<sup id="fnref:user-content-0-comment-999"><a href="#fn:user-content-0-comment-999" rel="nofollow">1</a></sup>.</p>
+<div>
+<hr/>
+<ol>
+<li id="fn:user-content-0-comment-999">
+<p>Source <a href="#fnref:user-content-0-comment-999" rel="nofollow">↩︎</a></p>
+</li>
+</ol>
+</div>
+`,
+		}, {
+			`[^0]: Source
+
+Citation needed[^0].`,
+			`<p>Citation needed<sup id="fnref:user-content-0-comment-999"><a href="#fn:user-content-0-comment-999" rel="nofollow">1</a></sup>.</p>
+<div>
+<hr/>
+<ol>
+<li id="fn:user-content-0-comment-999">
+<p>Source <a href="#fnref:user-content-0-comment-999" rel="nofollow">↩︎</a></p>
+</li>
+</ol>
+</div>
+`,
+		},
+	}
+
+	for _, test := range testcases {
+		metas := map[string]string{"scope": "comment-999"}
+		res, err := markdown.RenderString(&markup.RenderContext{Ctx: git.DefaultContext, Metas: metas}, test.testcase)
+		require.NoError(t, err, "Unexpected error in testcase: %q", test.testcase)
+		assert.Equal(t, test.expected, string(res), "Unexpected result in testcase %q", test.testcase)
+	}
+}
+
 func TestTaskList(t *testing.T) {
 	testcases := []struct {
 		testcase string
@@ -803,6 +907,27 @@ foo: bar
 		require.NoError(t, err, "Unexpected error in testcase: %q", test.testcase)
 		assert.Equal(t, template.HTML(test.expected), res, "Unexpected result in testcase %q", test.testcase)
 	}
+}
+
+func TestRenderCheckList(t *testing.T) {
+	input := `- [ ] a
+- [x] b
+1. [x] a
+2. [ ] b
+5. [ ] e`
+	expected := `<ul>
+<li class="task-list-item"><input type="checkbox" disabled="" data-source-position="2"/>a</li>
+<li class="task-list-item"><input type="checkbox" disabled="" data-source-position="10" checked=""/>b</li>
+</ul>
+<ol>
+<li class="task-list-item"><input type="checkbox" disabled="" data-source-position="19" checked=""/>a</li>
+<li class="task-list-item"><input type="checkbox" disabled="" data-source-position="28"/>b</li>
+<li class="task-list-item"><input type="checkbox" disabled="" data-source-position="37"/>e</li>
+</ol>
+`
+	res, err := markdown.RenderString(&markup.RenderContext{Ctx: git.DefaultContext}, input)
+	require.NoError(t, err)
+	assert.Equal(t, template.HTML(expected), res)
 }
 
 func TestRenderLinks(t *testing.T) {
@@ -1362,4 +1487,62 @@ func TestCallout(t *testing.T) {
 	test("> [!WARNING]\n> Bad stuff is brewing here", `<blockquote class="attention-header attention-warning"><p class="attention-title"><strong class="attention-warning">Warning</strong></p>
 <p>Bad stuff is brewing here</p>
 </blockquote>`)
+}
+
+func TestCodeblockLanguageTransformation(t *testing.T) {
+	test := func(input, expected string) {
+		buffer, err := markdown.RenderString(&markup.RenderContext{Ctx: git.DefaultContext}, input)
+		require.NoError(t, err)
+		assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(string(buffer)))
+	}
+
+	// No transformation
+	test(
+		"```rust\n"+
+			"fn main() {}\n"+
+			"```",
+		`<pre class="code-block"><code class="chroma language-rust display"><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{}</span><span class="w">
+</span></code></pre>`)
+
+	// Comma stripped
+	test(
+		"```rust,ignore\n"+
+			"fn main() {}\n"+
+			"```",
+		`<pre class="code-block"><code class="chroma language-rust display"><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{}</span><span class="w">
+</span></code></pre>`)
+
+	// Pandoc stripping
+	// https://pandoc.org/MANUAL.html#extension-fenced_code_attributes
+	test(
+		"```haskell {.numberLines}\n"+
+			"qsort []     = []\n"+
+			"qsort (x:xs) = qsort (filter (< x) xs) ++ [x] ++\n"+
+			"               qsort (filter (>= x) xs)\n"+
+			"```",
+		`<pre class="code-block"><code class="chroma language-haskell display"><span class="nf">qsort</span> <span class="kt">[]</span>     <span class="ow">=</span> <span class="kt">[]</span>
+<span class="nf">qsort</span> <span class="p">(</span><span class="n">x</span><span class="kt">:</span><span class="n">xs</span><span class="p">)</span> <span class="ow">=</span> <span class="n">qsort</span> <span class="p">(</span><span class="n">filter</span> <span class="p">(</span><span class="o">&lt;</span> <span class="n">x</span><span class="p">)</span> <span class="n">xs</span><span class="p">)</span> <span class="o">++</span> <span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">++</span>
+               <span class="n">qsort</span> <span class="p">(</span><span class="n">filter</span> <span class="p">(</span><span class="o">&gt;=</span> <span class="n">x</span><span class="p">)</span> <span class="n">xs</span><span class="p">)</span>
+</code></pre>`)
+
+	// Pandoc language extracting
+	// https://pandoc.org/MANUAL.html#extension-fenced_code_attributes
+	test(
+		"```   { #mycode .numberLines .haskell startFrom=\"100\" }   \n"+
+			"qsort []     = []\n"+
+			"qsort (x:xs) = qsort (filter (< x) xs) ++ [x] ++\n"+
+			"               qsort (filter (>= x) xs)\n"+
+			"```",
+		`<pre class="code-block"><code class="chroma language-haskell display"><span class="nf">qsort</span> <span class="kt">[]</span>     <span class="ow">=</span> <span class="kt">[]</span>
+<span class="nf">qsort</span> <span class="p">(</span><span class="n">x</span><span class="kt">:</span><span class="n">xs</span><span class="p">)</span> <span class="ow">=</span> <span class="n">qsort</span> <span class="p">(</span><span class="n">filter</span> <span class="p">(</span><span class="o">&lt;</span> <span class="n">x</span><span class="p">)</span> <span class="n">xs</span><span class="p">)</span> <span class="o">++</span> <span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">++</span>
+               <span class="n">qsort</span> <span class="p">(</span><span class="n">filter</span> <span class="p">(</span><span class="o">&gt;=</span> <span class="n">x</span><span class="p">)</span> <span class="n">xs</span><span class="p">)</span>
+</code></pre>`)
+
+	// No language identifier
+	test(
+		"```\n"+
+			"fn main() {}\n"+
+			"```",
+		`<pre class="code-block"><code class="chroma language-text display">fn main() {}
+</code></pre>`)
 }

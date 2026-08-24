@@ -5,7 +5,6 @@ package convert
 
 import (
 	"context"
-	"net/url"
 
 	activities_model "forgejo.org/models/activities"
 	"forgejo.org/models/perm"
@@ -17,7 +16,7 @@ import (
 func ToNotificationThread(ctx context.Context, n *activities_model.Notification) *api.NotificationThread {
 	result := &api.NotificationThread{
 		ID:        n.ID,
-		Unread:    !(n.Status == activities_model.NotificationStatusRead || n.Status == activities_model.NotificationStatusPinned),
+		Unread:    n.Status != activities_model.NotificationStatusRead && n.Status != activities_model.NotificationStatusPinned,
 		Pinned:    n.Status == activities_model.NotificationStatusPinned,
 		UpdatedAt: n.UpdatedUnix.AsTime(),
 		URL:       n.APIURL(),
@@ -66,14 +65,6 @@ func ToNotificationThread(ctx context.Context, n *activities_model.Notification)
 				n.Issue.PullRequest.HasMerged {
 				result.Subject.State = "merged"
 			}
-		}
-	case activities_model.NotificationSourceCommit:
-		url := n.Repository.HTMLURL() + "/commit/" + url.PathEscape(n.CommitID)
-		result.Subject = &api.NotificationSubject{
-			Type:    api.NotifySubjectCommit,
-			Title:   n.CommitID,
-			URL:     url,
-			HTMLURL: url,
 		}
 	case activities_model.NotificationSourceRepository:
 		result.Subject = &api.NotificationSubject{

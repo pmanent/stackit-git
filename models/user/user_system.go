@@ -12,6 +12,13 @@ import (
 	"forgejo.org/modules/structs"
 )
 
+// IsSystem returns true if the user has a fixed
+// negative ID, is never stored in the database and
+// is generated on the fly when needed.
+func (u *User) IsSystem() bool {
+	return u.IsGhost() || u.IsActions()
+}
+
 const (
 	GhostUserID        = -1
 	GhostUserName      = "Ghost"
@@ -73,30 +80,30 @@ func (u *User) IsActions() bool {
 }
 
 const (
-	APActorUserID   = -3
-	APActorUserName = "actor"
-	APActorEmail    = "noreply@forgejo.org"
+	APServerActorUserID   = -3
+	APServerActorUserName = "actor"
+	APServerActorEmail    = "noreply@forgejo.org"
 )
 
-func NewAPActorUser() *User {
+func NewAPServerActor() *User {
 	return &User{
-		ID:               APActorUserID,
-		Name:             APActorUserName,
-		LowerName:        APActorUserName,
+		ID:               APServerActorUserID,
+		Name:             APServerActorUserName,
+		LowerName:        APServerActorUserName,
 		IsActive:         true,
-		Email:            APActorEmail,
+		Email:            APServerActorEmail,
 		KeepEmailPrivate: true,
-		LoginName:        APActorUserName,
+		LoginName:        APServerActorUserName,
 		Type:             UserTypeIndividual,
 		Visibility:       structs.VisibleTypePublic,
 	}
 }
 
-func APActorUserAPActorID() string {
+func APServerActorID() string {
 	path, _ := url.JoinPath(setting.AppURL, "/api/v1/activitypub/actor")
 	return path
 }
 
-func (u *User) IsAPActor() bool {
-	return u != nil && u.ID == APActorUserID
+func (u *User) IsAPServerActor() bool {
+	return u != nil && u.ID == APServerActorUserID
 }

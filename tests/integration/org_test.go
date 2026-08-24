@@ -1,4 +1,5 @@
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package integration
@@ -46,12 +47,20 @@ func TestOrgRepos(t *testing.T) {
 
 				sel := htmlDoc.doc.Find("a.name")
 				assert.Len(t, repos, len(sel.Nodes))
-				for i := 0; i < len(repos); i++ {
-					assert.EqualValues(t, repos[i], strings.TrimSpace(sel.Eq(i).Text()))
+				for i := range repos {
+					assert.Equal(t, repos[i], strings.TrimSpace(sel.Eq(i).Text()))
 				}
 			}
 		})
 	}
+}
+
+func TestPublicOrgHome(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	// Verify that in org pages, default theme get properly assigned to guest users
+	page := NewHTMLParser(t, MakeRequest(t, NewRequest(t, "GET", "/org41"), http.StatusOK).Body)
+	page.AssertElement(t, "html head link[rel='stylesheet'][href^='/assets/css/theme-forgejo-auto.css']", true)
 }
 
 func TestLimitedOrg(t *testing.T) {
@@ -260,7 +269,6 @@ func TestOwnerTeamUnit(t *testing.T) {
 	unittest.AssertExistsAndLoadBean(t, &organization.TeamUnit{TeamID: 1, Type: unit.TypeIssues, AccessMode: perm.AccessModeOwner})
 
 	req := NewRequestWithValues(t, "GET", fmt.Sprintf("/org/%s/teams/owners/edit", org.Name), map[string]string{
-		"_csrf":       GetCSRF(t, session, fmt.Sprintf("/org/%s/teams/owners/edit", org.Name)),
 		"team_name":   "Owners",
 		"Description": "Just a description",
 	})
@@ -296,4 +304,37 @@ func TestOrgNewMigrationButton(t *testing.T) {
 
 		htmlDoc.AssertElement(t, migrateSelector, true)
 	})
+}
+
+func TestTeamWithoutPermissionToShowTable(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	org := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3, Type: user_model.UserTypeOrganization})
+	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
+	session := loginUser(t, user.Name)
+
+	// set all units to "No access"
+	req := NewRequestWithValues(t, "POST", fmt.Sprintf("/org/%s/teams/%s/edit", org.Name, team.Name), map[string]string{
+		"team_name":   team.Name,
+		"description": "",
+		"repo_access": "all",
+		"permission":  "read",
+		"unit_1":      "0",
+		"unit_2":      "0",
+		"unit_3":      "0",
+		"unit_4":      "0",
+		"unit_5":      "0",
+		"unit_8":      "0",
+		"unit_9":      "0",
+		"unit_10":     "0",
+	})
+	session.MakeRequest(t, req, http.StatusSeeOther)
+
+	req = NewRequest(t, "GET", fmt.Sprintf("/org/%s/teams/%s/edit", org.Name, team.Name))
+	resp := session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc := NewHTMLParser(t, resp.Body)
+
+	_, checked := htmlDoc.Find(`input[name="permission"][value="read"]`).Attr("checked")
+	assert.True(t, checked)
 }

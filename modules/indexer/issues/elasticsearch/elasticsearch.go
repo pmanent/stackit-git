@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	issueIndexerLatestVersion = 1
+	issueIndexerLatestVersion = 3
 	// multi-match-types, currently only 2 types are used
 	// Reference: https://www.elastic.co/guide/en/elasticsearch/reference/7.0/query-dsl-multi-match-query.html#multi-match-types
 	esMultiMatchTypeBestFields   = "best_fields"
@@ -56,7 +56,8 @@ const (
 			"repo_id": { "type": "long", "index": true },
 			"is_public": { "type": "boolean", "index": true },
 
-			"title": {  "type": "text", "index": true },
+			"index": { "type": "long", "index": true },
+			"title": { "type": "text", "index": true },
 			"content": { "type": "text", "index": true },
 			"comments": { "type" : "text", "index": true },
 
@@ -68,7 +69,7 @@ const (
 			"project_id": { "type": "long", "index": true },
 			"project_board_id": { "type": "long", "index": true },
 			"poster_id": { "type": "long", "index": true },
-			"assignee_id": { "type": "long", "index": true },
+			"assignee_ids": { "type": "long", "index": true },
 			"mention_ids": { "type": "long", "index": true },
 			"reviewed_ids": { "type": "long", "index": true },
 			"review_requested_ids": { "type": "long", "index": true },
@@ -148,29 +149,28 @@ func (b *Indexer) Delete(ctx context.Context, ids ...int64) error {
 func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (*internal.SearchResult, error) {
 	query := elastic.NewBoolQuery()
 
-	tokens, err := options.Tokens()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(tokens) > 0 {
+	if len(options.Tokens) != 0 {
 		q := elastic.NewBoolQuery()
-		for _, token := range tokens {
-			innerQ := elastic.NewMultiMatchQuery(token.Term, "title", "content", "comments")
+		for _, token := range options.Tokens {
+			innerQ := elastic.NewMultiMatchQuery(token.Term, "content", "comments").FieldWithBoost("title", 2.0).TieBreaker(0.5)
 			if token.Fuzzy {
 				// If the term is not a phrase use fuzziness set to AUTO
 				innerQ = innerQ.Type(esMultiMatchTypeBestFields).Fuzziness(esFuzzyAuto)
 			} else {
 				innerQ = innerQ.Type(esMultiMatchTypePhrasePrefix)
 			}
-
+			var eitherQ elastic.Query = innerQ
+			if issueID, err := token.ParseIssueReference(); err == nil {
+				indexQ := elastic.NewTermQuery("index", issueID).Boost(20)
+				eitherQ = elastic.NewDisMaxQuery().Query(indexQ).Query(innerQ).TieBreaker(0.5)
+			}
 			switch token.Kind {
 			case internal.BoolOptMust:
-				q.Must(innerQ)
+				q.Must(eitherQ)
 			case internal.BoolOptShould:
-				q.Should(innerQ)
+				q.Should(eitherQ)
 			case internal.BoolOptNot:
-				q.MustNot(innerQ)
+				q.MustNot(eitherQ)
 			}
 		}
 		query.Must(q)
@@ -184,12 +184,16 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 		}
 		query.Must(q)
 	}
-
-	if options.IsPull.Has() {
-		query.Must(elastic.NewTermQuery("is_pull", options.IsPull.Value()))
+	if has, value := options.PriorityRepoID.Get(); has {
+		q := elastic.NewTermQuery("repo_id", value).Boost(10)
+		query.Should(q)
 	}
-	if options.IsClosed.Has() {
-		query.Must(elastic.NewTermQuery("is_closed", options.IsClosed.Value()))
+
+	if has, value := options.IsPull.Get(); has {
+		query.Must(elastic.NewTermQuery("is_pull", value))
+	}
+	if has, value := options.IsClosed.Get(); has {
+		query.Must(elastic.NewTermQuery("is_closed", value))
 	}
 
 	if options.NoLabelOnly {
@@ -217,43 +221,43 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 		query.Must(elastic.NewTermsQuery("milestone_id", toAnySlice(options.MilestoneIDs)...))
 	}
 
-	if options.ProjectID.Has() {
-		query.Must(elastic.NewTermQuery("project_id", options.ProjectID.Value()))
+	if has, value := options.ProjectID.Get(); has {
+		query.Must(elastic.NewTermQuery("project_id", value))
 	}
-	if options.ProjectColumnID.Has() {
-		query.Must(elastic.NewTermQuery("project_board_id", options.ProjectColumnID.Value()))
-	}
-
-	if options.PosterID.Has() {
-		query.Must(elastic.NewTermQuery("poster_id", options.PosterID.Value()))
+	if has, value := options.ProjectColumnID.Get(); has {
+		query.Must(elastic.NewTermQuery("project_board_id", value))
 	}
 
-	if options.AssigneeID.Has() {
-		query.Must(elastic.NewTermQuery("assignee_id", options.AssigneeID.Value()))
+	if has, value := options.PosterID.Get(); has {
+		query.Must(elastic.NewTermQuery("poster_id", value))
 	}
 
-	if options.MentionID.Has() {
-		query.Must(elastic.NewTermQuery("mention_ids", options.MentionID.Value()))
+	if has, value := options.AssigneeID.Get(); has {
+		query.Must(elastic.NewTermQuery("assignee_ids", value))
 	}
 
-	if options.ReviewedID.Has() {
-		query.Must(elastic.NewTermQuery("reviewed_ids", options.ReviewedID.Value()))
-	}
-	if options.ReviewRequestedID.Has() {
-		query.Must(elastic.NewTermQuery("review_requested_ids", options.ReviewRequestedID.Value()))
+	if has, value := options.MentionID.Get(); has {
+		query.Must(elastic.NewTermQuery("mention_ids", value))
 	}
 
-	if options.SubscriberID.Has() {
-		query.Must(elastic.NewTermQuery("subscriber_ids", options.SubscriberID.Value()))
+	if has, value := options.ReviewedID.Get(); has {
+		query.Must(elastic.NewTermQuery("reviewed_ids", value))
+	}
+	if has, value := options.ReviewRequestedID.Get(); has {
+		query.Must(elastic.NewTermQuery("review_requested_ids", value))
+	}
+
+	if has, value := options.SubscriberID.Get(); has {
+		query.Must(elastic.NewTermQuery("subscriber_ids", value))
 	}
 
 	if options.UpdatedAfterUnix.Has() || options.UpdatedBeforeUnix.Has() {
 		q := elastic.NewRangeQuery("updated_unix")
-		if options.UpdatedAfterUnix.Has() {
-			q.Gte(options.UpdatedAfterUnix.Value())
+		if has, value := options.UpdatedAfterUnix.Get(); has {
+			q.Gte(value)
 		}
-		if options.UpdatedBeforeUnix.Has() {
-			q.Lte(options.UpdatedBeforeUnix.Value())
+		if has, value := options.UpdatedBeforeUnix.Get(); has {
+			q.Lte(value)
 		}
 		query.Must(q)
 	}

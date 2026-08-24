@@ -6,6 +6,7 @@ package asymkey
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash"
 	"strings"
@@ -35,6 +36,7 @@ type ObjectVerification struct {
 	TrustStatus    string
 }
 
+// llu:TrKeys
 const (
 	// BadSignature is used as the reason when the signature has a KeyID that is in the db
 	// but no key that has that ID verifies the signature. This is a suspicious failure.
@@ -44,6 +46,8 @@ const (
 	BadDefaultSignature = "gpg.error.probable_bad_default_signature"
 	// NoKeyFound is used as the reason when no key can be found to verify the signature.
 	NoKeyFound = "gpg.error.no_gpg_keys_found"
+	// NotSigned is used as the reason when the commit is not signed.
+	NotSigned = "gpg.error.not_signed_commit"
 )
 
 type GitObject struct {
@@ -101,8 +105,8 @@ func ParseObjectWithSignature(ctx context.Context, c *GitObject) *ObjectVerifica
 	if c.Signature == nil {
 		return &ObjectVerification{
 			CommittingUser: committer,
-			Verified:       false,                         // Default value
-			Reason:         "gpg.error.not_signed_commit", // Default value
+			Verified:       false,     // Default value
+			Reason:         NotSigned, // Default value
 		}
 	}
 
@@ -201,7 +205,7 @@ func ParseObjectWithSignature(ctx context.Context, c *GitObject) *ObjectVerifica
 		}
 	}
 
-	if setting.Repository.Signing.SigningKey != "" && setting.Repository.Signing.SigningKey != "default" && setting.Repository.Signing.SigningKey != "none" {
+	if setting.Repository.Signing.Format == "openpgp" && setting.Repository.Signing.SigningKey != "" && setting.Repository.Signing.SigningKey != "default" && setting.Repository.Signing.SigningKey != "none" {
 		// OK we should try the default key
 		gpgSettings := git.GPGSettings{
 			Sign:  true,
@@ -314,7 +318,7 @@ func verifyWithGPGSettings(ctx context.Context, gpgSettings *git.GPGSettings, si
 func verifySign(s *packet.Signature, h hash.Hash, k *GPGKey) error {
 	// Check if key can sign
 	if !k.CanSign {
-		return fmt.Errorf("key can not sign")
+		return errors.New("key can not sign")
 	}
 	// Decode key
 	pkey, err := base64DecPubKey(k.Content)

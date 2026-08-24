@@ -20,11 +20,14 @@ func TestMigrate_InsertReleases(t *testing.T) {
 		UUID: "a0eebc91-9c0c-4ef7-bb6e-6bb9bd380a12",
 	}
 	r := &Release{
+		RepoID:      1001,
 		Attachments: []*Attachment{a},
 	}
 
 	err := InsertReleases(db.DefaultContext, r)
 	require.NoError(t, err)
+
+	assert.EqualValues(t, 1001, unittest.AssertExistsAndLoadBean(t, &Attachment{UUID: "a0eebc91-9c0c-4ef7-bb6e-6bb9bd380a12"}).RepoID)
 }
 
 func TestReleaseLoadRepo(t *testing.T) {
@@ -48,4 +51,17 @@ func TestReleaseDisplayName(t *testing.T) {
 
 	release.Title = "Title"
 	assert.Equal(t, "Title", release.DisplayName())
+}
+
+func Test_FindTagsByCommitIDs(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	sha1Rels, err := FindTagsByCommitIDs(db.DefaultContext, 1, "65f1bf27bc3bf70f64657658635e66094edbcb4d")
+	require.NoError(t, err)
+	assert.Len(t, sha1Rels, 1)
+	rels := sha1Rels["65f1bf27bc3bf70f64657658635e66094edbcb4d"]
+	assert.Len(t, rels, 3)
+	assert.Equal(t, "v1.1", rels[0].TagName)
+	assert.Equal(t, "delete-tag", rels[1].TagName)
+	assert.Equal(t, "v1.0", rels[2].TagName)
 }

@@ -29,12 +29,12 @@ func TestPackageMaven(t *testing.T) {
 
 	groupID := "com.gitea"
 	artifactID := "test-project"
-	packageName := groupID + "-" + artifactID
+	packageName := groupID + ":" + artifactID
 	packageVersion := "1.0.1"
 	packageDescription := "Test Description"
 
 	root := fmt.Sprintf("/api/packages/%s/maven/%s/%s", user.Name, strings.ReplaceAll(groupID, ".", "/"), artifactID)
-	filename := fmt.Sprintf("%s-%s.jar", packageName, packageVersion)
+	filename := fmt.Sprintf("%s:%s.jar", packageName, packageVersion)
 
 	putFile := func(t *testing.T, path, content string, expectedStatus int) {
 		req := NewRequestWithBody(t, "PUT", root+path, strings.NewReader(content)).
@@ -249,10 +249,24 @@ func TestPackageMaven(t *testing.T) {
 
 		partialVersion := packageVersion + "-PARTIAL"
 		putFile(t, fmt.Sprintf("/%s/%s", partialVersion, filename), "test", http.StatusCreated)
-		pkgUIURL := fmt.Sprintf("/%s/-/packages/maven/%s-%s/%s", user.Name, groupID, artifactID, partialVersion)
+		pkgUIURL := fmt.Sprintf("/%s/-/packages/maven/%s:%s/%s", user.Name, groupID, artifactID, partialVersion)
 		req := NewRequest(t, "GET", pkgUIURL)
 		resp := MakeRequest(t, req, http.StatusOK)
 		assert.NotContains(t, resp.Body.String(), "Internal server error")
+	})
+
+	t.Run("Invalid credentials", func(t *testing.T) {
+		req := NewRequest(t, "HEAD", fmt.Sprintf("%s/%s/%s", root, packageVersion, filename))
+		req.SetBasicAuth(user.Name, "invalid")
+		resp := MakeRequest(t, req, http.StatusUnauthorized)
+
+		// Verify that headers from other package endpoints do not leak into the Maven registry. That Forgejo responds
+		// with 401 Unauthorized without including any WWW-Authenticate header is *wrong*, though.
+		assert.Empty(t, resp.Header().Values("WWW-Authenticate"))
+
+		// Verify that the request would work with correct credentials.
+		req.AddBasicAuth(user.Name)
+		MakeRequest(t, req, http.StatusOK)
 	})
 }
 
@@ -277,7 +291,7 @@ func TestPackageMavenConcurrent(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 
 		var wg sync.WaitGroup
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			wg.Add(1)
 			go func(i int) {
 				putFile(t, fmt.Sprintf("/%s/%s.jar", packageVersion, strconv.Itoa(i)), "test", http.StatusCreated)

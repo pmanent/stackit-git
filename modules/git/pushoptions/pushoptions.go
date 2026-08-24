@@ -4,6 +4,7 @@
 package pushoptions
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
@@ -51,7 +52,7 @@ func NewFromMap(o *map[string]string) Interface {
 
 func (o *gitPushOptions) ReadEnv() Interface {
 	if pushCount, err := strconv.Atoi(os.Getenv(EnvCount)); err == nil {
-		for idx := 0; idx < pushCount; idx++ {
+		for idx := range pushCount {
 			_ = o.Parse(os.Getenv(fmt.Sprintf(EnvFormat, idx)))
 		}
 	}
@@ -64,12 +65,8 @@ func (o *gitPushOptions) Parse(data string) bool {
 		value = "true"
 	}
 	switch Key(key) {
-	case RepoPrivate:
-	case RepoTemplate:
-	case AgitTopic:
-	case AgitForcePush:
-	case AgitTitle:
-	case AgitDescription:
+	case RepoPrivate, RepoTemplate, AgitTopic, AgitForcePush, AgitTitle, AgitDescription:
+		break
 	default:
 		return false
 	}
@@ -109,5 +106,22 @@ func (o gitPushOptions) GetBool(key Key, def bool) bool {
 
 func (o gitPushOptions) GetString(key Key) (string, bool) {
 	val, ok := o[string(key)]
-	return val, ok
+	if !ok {
+		return "", false
+	}
+
+	// If the value is prefixed with `{base64}` then everything after that is very
+	// likely to be encoded via base64.
+	base64Value, found := strings.CutPrefix(val, "{base64}")
+	if !found {
+		return val, true
+	}
+
+	value, err := base64.StdEncoding.DecodeString(base64Value)
+	if err != nil {
+		// Not valid base64? Return the original value.
+		return val, true
+	}
+
+	return string(value), true
 }

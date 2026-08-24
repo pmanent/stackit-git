@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -67,7 +66,7 @@ func GetMinioDiskUsage() (map[string]map[string]uint64, error) {
 		currentMinioStorage, ok := msValue.(*MinioStorage)
 		if !ok {
 			message := "Could not assert ObjectStorage to *MinioStorage"
-			fmt.Println(message)
+			log.Error(message)
 			return minioDiskUsage, errors.New(message)
 		}
 

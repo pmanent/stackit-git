@@ -4,8 +4,6 @@
 package integration
 
 import (
-	"encoding/base64"
-	"fmt"
 	"net/url"
 	"os"
 	"testing"
@@ -14,14 +12,11 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
-	"forgejo.org/modules/process"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
 	"forgejo.org/tests"
 
-	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +43,7 @@ func TestGPGGit(t *testing.T) {
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: username})
 	baseAPITestContext := NewAPITestContext(t, username, "repo1")
 
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		u.Path = baseAPITestContext.GitPath()
 
 		t.Run("Unsigned-Initial", func(t *testing.T) {
@@ -265,45 +260,5 @@ func TestGPGGit(t *testing.T) {
 	})
 }
 
-func crudActionCreateFile(_ *testing.T, ctx APITestContext, user *user_model.User, from, to, path string, callback ...func(*testing.T, api.FileResponse)) func(*testing.T) {
-	return doAPICreateFile(ctx, path, &api.CreateFileOptions{
-		FileOptions: api.FileOptions{
-			BranchName:    from,
-			NewBranchName: to,
-			Message:       fmt.Sprintf("from:%s to:%s path:%s", from, to, path),
-			Author: api.Identity{
-				Name:  user.FullName,
-				Email: user.Email,
-			},
-			Committer: api.Identity{
-				Name:  user.FullName,
-				Email: user.Email,
-			},
-		},
-		ContentBase64: base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("This is new text for %s", path))),
-	}, callback...)
-}
-
-func importTestingKey() (*openpgp.Entity, error) {
-	if _, _, err := process.GetManager().Exec("gpg --import tests/integration/private-testing.key", "gpg", "--import", "tests/integration/private-testing.key"); err != nil {
-		return nil, err
-	}
-	keyringFile, err := os.Open("tests/integration/private-testing.key")
-	if err != nil {
-		return nil, err
-	}
-	defer keyringFile.Close()
-
-	block, err := armor.Decode(keyringFile)
-	if err != nil {
-		return nil, err
-	}
-
-	keyring, err := openpgp.ReadKeyRing(block.Body)
-	if err != nil {
-		return nil, fmt.Errorf("Keyring access failed: '%w'", err)
-	}
-
-	// There should only be one entity in this file.
-	return keyring[0], nil
-}
+// crudActionCreateFile and importTestingKey live in signing_git_test.go as of v12;
+// gpg_git_test.go (this file) reuses them rather than declaring duplicates.

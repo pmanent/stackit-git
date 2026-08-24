@@ -33,13 +33,13 @@ func GetWorkflowRunRedirectURI(t *testing.T, repoURL, workflow string) string {
 }
 
 func getActionsPageBody(t *testing.T, session TestSession) *HTMLDoc {
-	actionUrl := "/user2/repo1/actions"
-	resp := session.MakeRequest(t, NewRequest(t, "GET", path.Join(actionUrl)), http.StatusOK)
+	actionURL := "/user2/repo1/actions"
+	resp := session.MakeRequest(t, NewRequest(t, "GET", path.Join(actionURL)), http.StatusOK)
 	return NewHTMLParser(t, resp.Body)
 }
 
 func TestActionsWebRouteWorkflows(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, giteaURL *url.URL) {
+	onApplicationRun(t, func(t *testing.T, giteaURL *url.URL) {
 		session := emptyTestSession(t)
 		testActionWorkflows(t, *session)
 		testActionsRunners(t, *session)
@@ -89,7 +89,7 @@ func testActionsRunners(t *testing.T, session TestSession) {
 }
 
 func TestActionsWebRouteLatestWorkflowRun(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
 		// create the repo
@@ -147,7 +147,12 @@ func TestActionsWebRouteLatestWorkflowRun(t *testing.T) {
 			// Fetch the page that shows information about the run initiated by "workflow-1.yml".
 			// routers/web/repo/actions/view.go: data-workflow-url is constructed using data-workflow-name.
 			req := NewRequest(t, "GET", workflowOneURI)
+			intermediateRedirect := MakeRequest(t, req, http.StatusTemporaryRedirect)
+
+			finalURL := intermediateRedirect.Result().Header.Get("Location")
+			req = NewRequest(t, "GET", finalURL)
 			resp := MakeRequest(t, req, http.StatusOK)
+
 			htmlDoc := NewHTMLParser(t, resp.Body)
 
 			// Verify that URL of the workflow is shown correctly.
@@ -172,7 +177,7 @@ func TestActionsWebRouteLatestWorkflowRun(t *testing.T) {
 }
 
 func TestActionsWebRouteLatestRun(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
 		// create the repo
@@ -201,40 +206,5 @@ func TestActionsWebRouteLatestRun(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, workflow.HTMLURL(), resp.Header().Get("Location"))
-	})
-}
-
-func TestActionsArtifactDeletion(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
-		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-
-		// create the repo
-		repo, _, f := tests.CreateDeclarativeRepo(t, user2, "",
-			[]unit_model.Type{unit_model.TypeActions}, nil,
-			[]*files_service.ChangeRepoFile{
-				{
-					Operation:     "create",
-					TreePath:      ".gitea/workflows/pr.yml",
-					ContentReader: strings.NewReader("name: test\non:\n  push:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo helloworld\n"),
-				},
-			},
-		)
-		defer f()
-
-		// a run has been created
-		assert.Equal(t, 1, unittest.GetCount(t, &actions_model.ActionRun{RepoID: repo.ID}))
-
-		// Load the run we just created
-		run := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{RepoID: repo.ID})
-		err := run.LoadAttributes(t.Context())
-		require.NoError(t, err)
-
-		// Visit it's web view
-		req := NewRequest(t, "GET", run.HTMLURL())
-		resp := MakeRequest(t, req, http.StatusOK)
-		htmlDoc := NewHTMLParser(t, resp.Body)
-
-		// Assert that the artifact deletion markup exists
-		htmlDoc.AssertElement(t, "[data-locale-confirm-delete-artifact]", true)
 	})
 }

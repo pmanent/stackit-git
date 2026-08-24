@@ -20,8 +20,8 @@ type ResourceIndex struct {
 }
 
 var (
-	// ErrResouceOutdated represents an error when request resource outdated
-	ErrResouceOutdated = errors.New("resource outdated")
+	// ErrResourceOutdated represents an error when request resource outdated
+	ErrResourceOutdated = errors.New("resource outdated")
 	// ErrGetResourceIndexFailed represents an error when resource index retries 3 times
 	ErrGetResourceIndexFailed = errors.New("get resource index failed")
 )
@@ -72,14 +72,19 @@ func postgresGetNextResourceIndex(ctx context.Context, tableName string, groupID
 }
 
 func mysqlGetNextResourceIndex(ctx context.Context, tableName string, groupID int64) (int64, error) {
-	if _, err := GetEngine(ctx).Exec(fmt.Sprintf("INSERT INTO %s (group_id, max_index) "+
-		"VALUES (?,1) ON DUPLICATE KEY UPDATE max_index = max_index+1",
-		tableName), groupID); err != nil {
+	res, err := GetEngine(ctx).Query(fmt.Sprintf("INSERT INTO %s (group_id, max_index) "+
+		"VALUES (?,1) ON DUPLICATE KEY UPDATE max_index = max_index+1 /*M!100500 RETURNING max_index */",
+		tableName), groupID)
+	if err != nil {
 		return 0, err
 	}
 
+	if len(res) > 0 {
+		return strconv.ParseInt(string(res[0]["max_index"]), 10, 64)
+	}
+
 	var idx int64
-	_, err := GetEngine(ctx).SQL(fmt.Sprintf("SELECT max_index FROM %s WHERE group_id = ?", tableName), groupID).Get(&idx)
+	_, err = GetEngine(ctx).SQL(fmt.Sprintf("SELECT max_index FROM %s WHERE group_id = ?", tableName), groupID).Get(&idx)
 	if err != nil {
 		return 0, err
 	}

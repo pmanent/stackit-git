@@ -212,11 +212,6 @@
   --color-orange-badge: #ea580c;
   --color-orange-badge-bg: #ea580c22;
   --color-orange-badge-hover-bg: #ea580c44;
-  --color-git: #f05133;
-  /* Icon colors (PR/Issue/...) */
-  --color-icon-green: var(--color-green-light);
-  --color-icon-red: var(--color-red-light);
-  --color-icon-purple: var(--color-purple-light);
   /* target-based colors */
   --color-body: #fff;
   --color-box-header: var(--zinc-100);
@@ -241,9 +236,11 @@
   --color-light-mimic-enabled: rgba(0, 0, 0, calc(6 / 255 * 222 / 255 / var(--opacity-disabled)));
   --color-light-border: #0000001d;
   --color-hover: #e4e4e4aa;
-  --color-active: #d4d4d8aa;
+  --color-active: #e2e2e5;
   --color-menu: var(--zinc-100);
   --color-card: var(--zinc-50);
+  --fancy-card-bg: var(--zinc-100);
+  --fancy-card-border: var(--zinc-200);
   --color-markup-table-row: #ffffff06;
   --color-markup-code-block: var(--zinc-150);
   --color-markup-code-inline: var(--zinc-200);
@@ -266,7 +263,6 @@
   --color-tooltip-bg: #000000f0;
   --color-nav-bg: var(--zinc-100);
   --color-nav-hover-bg: var(--zinc-300);
-  --color-nav-text: var(--color-text);
   --color-secondary-nav-bg: var(--color-body);
   --color-label-text: var(--color-text);
   --color-label-bg: #cacaca7b;
@@ -278,9 +274,17 @@
   --color-highlight-fg: var(--color-primary-light-4);
   --color-highlight-bg: var(--color-primary-light-6);
   --color-overlay-backdrop: #080808c0;
+  --color-selection-bg: var(--steel-450);
+  --color-selection-fg: var(--color-white);
   /* pattern colors for gradient */
   --checkerboard-color-1: #ffffff;
   --checkerboard-color-2: #e5e5e5;
+  --color-indicator-offline: #52525b;
+  --color-indicator-offline-20: #52525b33;
+  --color-indicator-idle: #16a34a;
+  --color-indicator-idle-20: #16a34a33;
+  --color-indicator-active: #2185d0;
+  --color-indicator-active-20: #2185d033;
   accent-color: var(--color-accent);
   color-scheme: light;
 }
@@ -297,18 +301,13 @@
 .ui.primary.labels .label {
   background-color: var(--color-primary-dark-1) !important;
 }
-.repository.view.issue .comment-list .code-comment + .code-comment {
-  margin: 1.25rem 0 !important;
-  padding-top: 1.25rem !important;
-  border-top-color: var(--zinc-250) !important;
-}
 .ui.labeled.icon.buttons > .button > .icon,
 .ui.labeled.icon.button > .icon {
   background-color: var(--color-shadow) !important;
 }
 #review-box .review-comments-counter {
   background-color: var(--color-label-bg) !important;
-  margin-left: 0.5em;
+  margin-inline-start: 0.5em;
 }
 .ui.basic.labels .primary.label,
 .ui.ui.ui.basic.primary.label {
@@ -317,8 +316,4 @@
 .ui.yellow.label.pending-label {
   background: var(--color-warning-bg) !important;
   color: var(--color-text-dark) !important;
-}
-::selection {
-  background: var(--steel-450) !important;
-  color: var(--color-white) !important;
 }

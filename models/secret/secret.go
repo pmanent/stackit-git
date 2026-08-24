@@ -6,18 +6,23 @@ package secret
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
-	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
-	actions_module "forgejo.org/modules/actions"
+	"forgejo.org/modules/keying"
 	"forgejo.org/modules/log"
-	secret_module "forgejo.org/modules/secret"
-	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
 	"xorm.io/builder"
+)
+
+var (
+	namePattern            = regexp.MustCompile("(?i)^[A-Z_][A-Z0-9_]*$")
+	forbiddenPrefixPattern = regexp.MustCompile("(?i)^(FORGEJO_|GITEA_|GITHUB_|[0-9])")
+
+	ErrInvalidName = util.NewInvalidArgumentErrorf("invalid secret name")
 )
 
 // Secret represents a secret
@@ -39,7 +44,7 @@ type Secret struct {
 	OwnerID     int64              `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL"`
 	RepoID      int64              `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
 	Name        string             `xorm:"UNIQUE(owner_repo_name) NOT NULL"`
-	Data        string             `xorm:"LONGTEXT"` // encrypted data
+	Data        []byte             `xorm:"BLOB"` // encrypted data
 	CreatedUnix timeutil.TimeStamp `xorm:"created NOT NULL"`
 }
 
@@ -66,18 +71,25 @@ func InsertEncryptedSecret(ctx context.Context, ownerID, repoID int64, name, dat
 	if ownerID == 0 && repoID == 0 {
 		return nil, fmt.Errorf("%w: ownerID and repoID cannot be both zero, global secrets are not supported", util.ErrInvalidArgument)
 	}
-
-	encrypted, err := secret_module.EncryptSecret(setting.SecretKey, data)
-	if err != nil {
+	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+
 	secret := &Secret{
 		OwnerID: ownerID,
 		RepoID:  repoID,
 		Name:    strings.ToUpper(name),
-		Data:    encrypted,
 	}
-	return secret, db.Insert(ctx, secret)
+
+	return secret, db.WithTx(ctx, func(ctx context.Context) error {
+		if err := db.Insert(ctx, secret); err != nil {
+			return err
+		}
+
+		secret.SetData(data)
+		_, err := db.GetEngine(ctx).ID(secret.ID).Cols("data").Update(secret)
+		return err
+	})
 }
 
 func init() {
@@ -113,56 +125,90 @@ func (opts FindSecretsOptions) ToConds() builder.Cond {
 	return cond
 }
 
-// UpdateSecret changes org or user reop secret.
-func UpdateSecret(ctx context.Context, secretID int64, data string) error {
-	encrypted, err := secret_module.EncryptSecret(setting.SecretKey, data)
+func (s *Secret) SetData(data string) {
+	normalizedData := util.ReserveLineBreakForTextarea(data)
+	s.Data = keying.ActionSecret.Encrypt([]byte(normalizedData), keying.ColumnAndID("data", s.ID))
+}
+
+func (s *Secret) GetDecryptedData() (string, error) {
+	key := keying.ActionSecret
+	v, err := key.Decrypt(s.Data, keying.ColumnAndID("data", s.ID))
 	if err != nil {
-		return err
+		return "", fmt.Errorf("unable to decrypt secret[id=%d,name=%q]: %w", s.ID, s.Name, err)
 	}
 
-	s := &Secret{
-		Data: encrypted,
+	return string(v), nil
+}
+
+func GetSecretByID(ctx context.Context, ownerID, repoID, id int64) (*Secret, error) {
+	query := db.GetEngine(ctx).Where("id=?", id)
+
+	if repoID > 0 {
+		query = query.And(builder.Eq{"repo_id": repoID})
+	} else if ownerID > 0 {
+		query = query.And(builder.Eq{"owner_id": ownerID})
+	} else {
+		return nil, fmt.Errorf("ownerID and repoID cannot be simultaneously 0")
 	}
-	affected, err := db.GetEngine(ctx).ID(secretID).Cols("data").Update(s)
-	if affected != 1 {
-		return ErrSecretNotFound{}
+
+	var secret Secret
+	has, err := query.Get(&secret)
+
+	if err != nil {
+		return nil, err
+	} else if !has {
+		return nil, fmt.Errorf("secret with ID %d: %w", id, util.ErrNotExist)
 	}
+	return &secret, nil
+}
+
+func UpdateSecret(ctx context.Context, secret *Secret, columns ...string) error {
+	e := db.GetEngine(ctx)
+
+	if err := ValidateName(secret.Name); err != nil {
+		return err
+	}
+	secret.Name = strings.ToUpper(secret.Name)
+
+	var err error
+	if len(columns) == 0 {
+		_, err = e.ID(secret.ID).AllCols().Update(secret)
+	} else {
+		_, err = e.ID(secret.ID).Cols(columns...).Update(secret)
+	}
+
 	return err
 }
 
-func GetSecretsOfTask(ctx context.Context, task *actions_model.ActionTask) (map[string]string, error) {
+func FetchActionSecrets(ctx context.Context, ownerID, repoID int64) (map[string]string, error) {
 	secrets := map[string]string{}
 
-	secrets["GITHUB_TOKEN"] = task.Token
-	secrets["GITEA_TOKEN"] = task.Token
-	secrets["FORGEJO_TOKEN"] = task.Token
-
-	if task.Job.Run.IsForkPullRequest && task.Job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget {
-		// ignore secrets for fork pull request, except GITHUB_TOKEN, GITEA_TOKEN and FORGEJO_TOKEN which are automatically generated.
-		// for the tasks triggered by pull_request_target event, they could access the secrets because they will run in the context of the base branch
-		// see the documentation: https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request_target
-		return secrets, nil
-	}
-
-	ownerSecrets, err := db.Find[Secret](ctx, FindSecretsOptions{OwnerID: task.Job.Run.Repo.OwnerID})
+	ownerSecrets, err := db.Find[Secret](ctx, FindSecretsOptions{OwnerID: ownerID})
 	if err != nil {
-		log.Error("find secrets of owner %v: %v", task.Job.Run.Repo.OwnerID, err)
+		log.Error("find secrets of owner %v: %v", ownerID, err)
 		return nil, err
 	}
-	repoSecrets, err := db.Find[Secret](ctx, FindSecretsOptions{RepoID: task.Job.Run.RepoID})
+	repoSecrets, err := db.Find[Secret](ctx, FindSecretsOptions{RepoID: repoID})
 	if err != nil {
-		log.Error("find secrets of repo %v: %v", task.Job.Run.RepoID, err)
+		log.Error("find secrets of repo %v: %v", repoID, err)
 		return nil, err
 	}
 
 	for _, secret := range append(ownerSecrets, repoSecrets...) {
-		v, err := secret_module.DecryptSecret(setting.SecretKey, secret.Data)
+		decryptedData, err := secret.GetDecryptedData()
 		if err != nil {
-			log.Error("decrypt secret %v %q: %v", secret.ID, secret.Name, err)
+			log.Error("%v", err)
 			return nil, err
 		}
-		secrets[secret.Name] = v
+		secrets[secret.Name] = decryptedData
 	}
 
 	return secrets, nil
+}
+
+func ValidateName(name string) error {
+	if !namePattern.MatchString(name) || forbiddenPrefixPattern.MatchString(name) {
+		return ErrInvalidName
+	}
+	return nil
 }

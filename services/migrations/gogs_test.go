@@ -25,7 +25,7 @@ func TestGogsDownloadRepo(t *testing.T) {
 	resp, err := http.Get("https://try.gogs.io/lunnytest/TESTREPO")
 	if err != nil || resp.StatusCode/100 != 2 {
 		// skip and don't run test
-		t.Skipf("visit test repo failed, ignored")
+		t.Skip("visit test repo failed, ignored")
 		return
 	}
 
@@ -215,9 +215,9 @@ func TestGogsDownloaderFactory_New(t *testing.T) {
 			}
 
 			assert.IsType(t, &GogsDownloader{}, got)
-			assert.EqualValues(t, tt.baseURL, got.(*GogsDownloader).baseURL)
-			assert.EqualValues(t, tt.repoOwner, got.(*GogsDownloader).repoOwner)
-			assert.EqualValues(t, tt.repoName, got.(*GogsDownloader).repoName)
+			assert.Equal(t, tt.baseURL, got.(*GogsDownloader).baseURL)
+			assert.Equal(t, tt.repoOwner, got.(*GogsDownloader).repoOwner)
+			assert.Equal(t, tt.repoName, got.(*GogsDownloader).repoName)
 		})
 	}
 }

@@ -1,19 +1,18 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
 // Copyright 2020 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors.
 // SPDX-License-Identifier: MIT
 
 package context
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
@@ -26,6 +25,7 @@ import (
 	"forgejo.org/modules/web"
 	"forgejo.org/modules/web/middleware"
 	web_types "forgejo.org/modules/web/types"
+	"forgejo.org/services/auth"
 
 	"code.forgejo.org/go-chi/cache"
 	"code.forgejo.org/go-chi/session"
@@ -41,21 +41,20 @@ type Render interface {
 type Context struct {
 	*Base
 
-	TemplateContext TemplateContext
+	TemplateContext *templates.Context
 
 	Render   Render
 	PageData map[string]any // data used by JavaScript modules in one page, it's `window.config.pageData`
 
 	Cache   cache.Cache
-	Csrf    CSRFProtector
 	Flash   *middleware.Flash
 	Session session.Store
 
 	Link string // current request URL (without query string)
 
-	Doer        *user_model.User // current signed-in user
-	IsSigned    bool
-	IsBasicAuth bool
+	Doer           *user_model.User // current signed-in user
+	IsSigned       bool
+	Authentication auth.AuthenticationResult
 
 	ContextUser *user_model.User // the user which is being visited, in most cases it differs from Doer
 
@@ -63,8 +62,6 @@ type Context struct {
 	Org     *Organization
 	Package *Package
 }
-
-type TemplateContext map[string]any
 
 func init() {
 	web.RegisterResponseStatusProvider[*Context](func(req *http.Request) web_types.ResponseStatusProvider {
@@ -98,10 +95,11 @@ func GetValidateContext(req *http.Request) (ctx *ValidateContext) {
 	return ctx
 }
 
-func NewTemplateContextForWeb(ctx *Context) TemplateContext {
-	tmplCtx := NewTemplateContext(ctx)
-	tmplCtx["Locale"] = ctx.Base.Locale
-	tmplCtx["AvatarUtils"] = templates.NewAvatarUtils(ctx)
+func NewTemplateContextForWeb(ctx *Context) *templates.Context {
+	tmplCtx := templates.NewContext(ctx)
+	tmplCtx.Locale = ctx.Locale
+	tmplCtx.AvatarUtils = templates.NewAvatarUtils(ctx)
+	tmplCtx.Data = ctx.Data
 	return tmplCtx
 }
 
@@ -115,27 +113,29 @@ func NewWebContext(base *Base, render Render, session session.Store) *Context {
 		Link:  setting.AppSubURL + strings.TrimSuffix(base.Req.URL.EscapedPath(), "/"),
 		Repo:  &Repository{PullRequest: &PullRequest{}},
 		Org:   &Organization{},
+
+		Authentication: &auth.UnauthenticatedResult{},
 	}
 	ctx.TemplateContext = NewTemplateContextForWeb(ctx)
 	ctx.Flash = &middleware.Flash{DataStore: ctx, Values: url.Values{}}
 	return ctx
 }
 
+func (ctx *Context) AddPluralStringsToPageData(keys []string) {
+	for _, key := range keys {
+		array, fallback := ctx.Locale.TrPluralStringAllForms(key)
+
+		ctx.PageData["PLURALSTRINGS_LANG"].(map[string][]string)[key] = array
+
+		if fallback != nil {
+			ctx.PageData["PLURALSTRINGS_FALLBACK"].(map[string][]string)[key] = fallback
+		}
+	}
+}
+
 // Contexter initializes a classic context for a request.
 func Contexter() func(next http.Handler) http.Handler {
 	rnd := templates.HTMLRenderer()
-	csrfOpts := CsrfOptions{
-		Secret:         hex.EncodeToString(setting.GetGeneralTokenSigningSecret()),
-		Cookie:         setting.CSRFCookieName,
-		Secure:         setting.SessionConfig.Secure,
-		CookieHTTPOnly: setting.CSRFCookieHTTPOnly,
-		CookieDomain:   setting.SessionConfig.Domain,
-		CookiePath:     setting.SessionConfig.CookiePath,
-		SameSite:       setting.SessionConfig.SameSite,
-	}
-	if !setting.IsProd {
-		CsrfTokenRegenerationInterval = 5 * time.Second // in dev, re-generate the tokens more aggressively for debug purpose
-	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
 			base, baseCleanUp := NewBaseContext(resp, req)
@@ -146,15 +146,15 @@ func Contexter() func(next http.Handler) http.Handler {
 			ctx.Data["Context"] = ctx // TODO: use "ctx" in template and remove this
 			ctx.Data["CurrentURL"] = setting.AppSubURL + req.URL.RequestURI()
 			ctx.Data["Link"] = ctx.Link
+			ctx.Data["ValidSiteURLSchemes"] = setting.Service.ValidSiteURLSchemes
+			ctx.Data["ValidSiteURLPattern"] = setting.ValidSiteURLPattern()
 
 			// PageData is passed by reference, and it will be rendered to `window.config.pageData` in `head.tmpl` for JavaScript modules
 			ctx.PageData = map[string]any{}
 			ctx.Data["PageData"] = ctx.PageData
 
-			ctx.Base.AppendContextValue(WebContextKey, ctx)
-			ctx.Base.AppendContextValueFunc(gitrepo.RepositoryContextKey, func() any { return ctx.Repo.GitRepo })
-
-			ctx.Csrf = NewCSRFProtector(csrfOpts)
+			ctx.AppendContextValue(WebContextKey, ctx)
+			ctx.AppendContextValueFunc(gitrepo.RepositoryContextKey, func() any { return ctx.Repo.GitRepo })
 
 			// Get the last flash message from cookie
 			lastFlashCookie := middleware.GetSiteCookie(ctx.Req, CookieNameFlash)
@@ -179,15 +179,7 @@ func Contexter() func(next http.Handler) http.Handler {
 				}
 			})
 
-			// If request sends files, parse them here otherwise the Query() can't be parsed and the CsrfToken will be invalid.
-			if ctx.Req.Method == "POST" && strings.Contains(ctx.Req.Header.Get("Content-Type"), "multipart/form-data") {
-				if err := ctx.Req.ParseMultipartForm(32 << 20); err != nil && !strings.Contains(err.Error(), "EOF") { // 32MB max size
-					ctx.ServerError("ParseMultipartForm", err)
-					return
-				}
-			}
-
-			httpcache.SetCacheControlInHeader(ctx.Resp.Header(), 0, "no-transform")
+			httpcache.SetCacheControlInHeader(ctx.Resp.Header(), 0)
 			ctx.Resp.Header().Set(`X-Frame-Options`, setting.CORSConfig.XFrameOptions)
 
 			ctx.Data["SystemConfig"] = setting.Config()
@@ -197,8 +189,7 @@ func Contexter() func(next http.Handler) http.Handler {
 			ctx.Data["DisableStars"] = setting.Repository.DisableStars
 			ctx.Data["DisableForks"] = setting.Repository.DisableForks
 			ctx.Data["EnableActions"] = setting.Actions.Enabled
-
-			ctx.Data["ManifestData"] = setting.ManifestData
+			ctx.Data["EnableFederation"] = setting.Federation.Enabled
 
 			ctx.Data["UnitWikiGlobalDisabled"] = unit.TypeWiki.UnitGlobalDisabled()
 			ctx.Data["UnitIssuesGlobalDisabled"] = unit.TypeIssues.UnitGlobalDisabled()
@@ -207,6 +198,26 @@ func Contexter() func(next http.Handler) http.Handler {
 			ctx.Data["UnitActionsGlobalDisabled"] = unit.TypeActions.UnitGlobalDisabled()
 
 			ctx.Data["AllLangs"] = translation.AllLangs()
+
+			ctx.PageData["PLURAL_RULE_LANG"] = translation.GetPluralRule(ctx.Locale)
+			ctx.PageData["PLURAL_RULE_FALLBACK"] = translation.GetDefaultPluralRule()
+			ctx.PageData["PLURALSTRINGS_LANG"] = map[string][]string{}
+			ctx.PageData["PLURALSTRINGS_FALLBACK"] = map[string][]string{}
+
+			ctx.AddPluralStringsToPageData([]string{"relativetime.mins", "relativetime.hours", "relativetime.days", "relativetime.weeks", "relativetime.months", "relativetime.years"})
+			ctx.AddPluralStringsToPageData([]string{"relativetime.duration.secs", "relativetime.duration.mins", "relativetime.duration.hours", "relativetime.duration.days", "relativetime.duration.weeks", "relativetime.duration.months", "relativetime.duration.years"})
+
+			ctx.PageData["DATETIMESTRINGS"] = map[string]string{
+				"FUTURE": ctx.Locale.TrString("relativetime.future"),
+				"NOW":    ctx.Locale.TrString("relativetime.now"),
+			}
+			for _, key := range []string{"relativetime.1day", "relativetime.1week", "relativetime.1month", "relativetime.1year"} {
+				// These keys are used for special-casing some time words. We only add keys that are actually translated, so that we
+				// can fall back to the generic pluralized time word in the correct language if the special case is untranslated.
+				if ctx.Locale.HasKey(key) {
+					ctx.PageData["DATETIMESTRINGS"].(map[string]string)[key] = ctx.Locale.TrString(key)
+				}
+			}
 
 			next.ServeHTTP(ctx.Resp, ctx.Req)
 		})

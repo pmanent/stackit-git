@@ -21,7 +21,7 @@ func TestLabel_CalOpenIssues(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	label := unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 1})
 	label.CalOpenIssues()
-	assert.EqualValues(t, 2, label.NumOpenIssues)
+	assert.Equal(t, 2, label.NumOpenIssues)
 }
 
 func TestLabel_LoadSelectedLabelsAfterClick(t *testing.T) {
@@ -32,18 +32,27 @@ func TestLabel_LoadSelectedLabelsAfterClick(t *testing.T) {
 
 	// First test : with negative and scope
 	label.LoadSelectedLabelsAfterClick([]int64{1, -8}, []string{"", "scope"})
+	// Flips to positive to include after click
+	assert.Equal(t, "1,8", label.QueryString)
+	assert.True(t, label.IsSelected)
+	assert.True(t, label.IsExcluded)
+
+	// Second test : with positive and scope
+	label.LoadSelectedLabelsAfterClick([]int64{1, 8}, []string{"", "scope"})
 	assert.Equal(t, "1", label.QueryString)
 	assert.True(t, label.IsSelected)
 
-	// Second test : with duplicates
+	// Third test : with duplicates
 	label.LoadSelectedLabelsAfterClick([]int64{1, 7, 1, 7, 7}, []string{"", "scope", "", "scope", "scope"})
 	assert.Equal(t, "1,8", label.QueryString)
 	assert.False(t, label.IsSelected)
+	assert.False(t, label.IsExcluded)
 
-	// Third test : empty set
+	// Fourth test : empty set
 	label.LoadSelectedLabelsAfterClick([]int64{}, []string{})
 	assert.False(t, label.IsSelected)
 	assert.Equal(t, "8", label.QueryString)
+	assert.False(t, label.IsExcluded)
 }
 
 func TestLabel_ExclusiveScope(t *testing.T) {
@@ -156,7 +165,7 @@ func TestGetLabelsByRepoID(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, labels, len(expectedIssueIDs))
 		for i, label := range labels {
-			assert.EqualValues(t, expectedIssueIDs[i], label.ID)
+			assert.Equal(t, expectedIssueIDs[i], label.ID)
 		}
 	}
 	testSuccess(1, "leastissues", []int64{2, 1})
@@ -223,7 +232,7 @@ func TestGetLabelsByOrgID(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, labels, len(expectedIssueIDs))
 		for i, label := range labels {
-			assert.EqualValues(t, expectedIssueIDs[i], label.ID)
+			assert.Equal(t, expectedIssueIDs[i], label.ID)
 		}
 	}
 	testSuccess(3, "leastissues", []int64{3, 4})
@@ -269,10 +278,10 @@ func TestUpdateLabel(t *testing.T) {
 	label.Name = update.Name
 	require.NoError(t, issues_model.UpdateLabel(db.DefaultContext, update))
 	newLabel := unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 1})
-	assert.EqualValues(t, label.ID, newLabel.ID)
-	assert.EqualValues(t, label.Color, newLabel.Color)
-	assert.EqualValues(t, label.Name, newLabel.Name)
-	assert.EqualValues(t, label.Description, newLabel.Description)
+	assert.Equal(t, label.ID, newLabel.ID)
+	assert.Equal(t, label.Color, newLabel.Color)
+	assert.Equal(t, label.Name, newLabel.Name)
+	assert.Equal(t, label.Description, newLabel.Description)
 	assert.EqualValues(t, 0, newLabel.ArchivedUnix)
 	unittest.CheckConsistencyFor(t, &issues_model.Label{}, &repo_model.Repository{})
 }
@@ -314,8 +323,9 @@ func TestNewIssueLabel(t *testing.T) {
 		LabelID:  label.ID,
 		Content:  "1",
 	})
+	unittest.FlushAsyncCalcs(t)
 	label = unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 2})
-	assert.EqualValues(t, prevNumIssues+1, label.NumIssues)
+	assert.Equal(t, prevNumIssues+1, label.NumIssues)
 
 	// re-add existing IssueLabel
 	require.NoError(t, issues_model.NewIssueLabel(db.DefaultContext, issue, label, doer))
@@ -366,13 +376,14 @@ func TestNewIssueLabels(t *testing.T) {
 		LabelID:  label1.ID,
 		Content:  "1",
 	})
+	unittest.FlushAsyncCalcs(t)
 	unittest.AssertExistsAndLoadBean(t, &issues_model.IssueLabel{IssueID: issue.ID, LabelID: label1.ID})
 	label1 = unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 1})
-	assert.EqualValues(t, 3, label1.NumIssues)
-	assert.EqualValues(t, 1, label1.NumClosedIssues)
+	assert.Equal(t, 3, label1.NumIssues)
+	assert.Equal(t, 1, label1.NumClosedIssues)
 	label2 = unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 2})
-	assert.EqualValues(t, 1, label2.NumIssues)
-	assert.EqualValues(t, 1, label2.NumClosedIssues)
+	assert.Equal(t, 1, label2.NumIssues)
+	assert.Equal(t, 1, label2.NumClosedIssues)
 
 	// corner case: test empty slice
 	require.NoError(t, issues_model.NewIssueLabels(db.DefaultContext, issue, []*issues_model.Label{}, doer))
@@ -409,9 +420,10 @@ func TestDeleteIssueLabel(t *testing.T) {
 			IssueID:  issueID,
 			LabelID:  labelID,
 		}, `content=""`)
+		unittest.FlushAsyncCalcs(t)
 		label = unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: labelID})
-		assert.EqualValues(t, expectedNumIssues, label.NumIssues)
-		assert.EqualValues(t, expectedNumClosedIssues, label.NumClosedIssues)
+		assert.Equal(t, expectedNumIssues, label.NumIssues)
+		assert.Equal(t, expectedNumClosedIssues, label.NumClosedIssues)
 	}
 	testSuccess(1, 1, 2)
 	testSuccess(2, 5, 2)

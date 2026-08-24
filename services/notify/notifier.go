@@ -6,6 +6,7 @@ package notify
 import (
 	"context"
 
+	actions_model "forgejo.org/models/actions"
 	issues_model "forgejo.org/models/issues"
 	packages_model "forgejo.org/models/packages"
 	repo_model "forgejo.org/models/repo"
@@ -15,6 +16,8 @@ import (
 )
 
 // Notifier defines an interface to notify receiver
+//
+//mockery:generate: true
 type Notifier interface {
 	Run()
 
@@ -76,4 +79,6 @@ type Notifier interface {
 	PackageDelete(ctx context.Context, doer *user_model.User, pd *packages_model.PackageDescriptor)
 
 	ChangeDefaultBranch(ctx context.Context, repo *repo_model.Repository)
+
+	ActionRunNowDone(ctx context.Context, run *actions_model.ActionRun, priorStatus actions_model.Status, lastRun *actions_model.ActionRun)
 }

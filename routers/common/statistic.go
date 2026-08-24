@@ -12,7 +12,7 @@ func getMaxUsageSize(ctx *context.Context) {
 	dataStats, _ := activities_model.GetBucketStatistic(ctx)
 	diskSpaceUsage, objectStorageSpaceUsage := dataStats.DiskStorageData, dataStats.ObjectStorageData
 	currentDiskPercentage := diskSpaceUsage.Percentage
-	var maxPercentage float64 = 0
+	var maxPercentage float64
 
 	for _, v1 := range objectStorageSpaceUsage {
 		for _, v := range v1 {

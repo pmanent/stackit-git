@@ -13,12 +13,14 @@ import (
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/actions"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/log"
+	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
 	actions_service "forgejo.org/services/actions"
 
-	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
-	"code.gitea.io/actions-proto-go/runner/v1/runnerv1connect"
+	runnerv1 "code.forgejo.org/forgejo/actions-proto/runner/v1"
+	"code.forgejo.org/forgejo/actions-proto/runner/v1/runnerv1connect"
 	"connectrpc.com/connect"
 	gouuid "github.com/google/uuid"
 )
@@ -27,7 +29,7 @@ func NewRunnerServiceHandler() (string, http.Handler) {
 	return runnerv1connect.NewRunnerServiceHandler(
 		&Service{},
 		connect.WithCompressMinBytes(1024),
-		connect.WithInterceptors(withHttpErrorStatusCodes, withRunner),
+		connect.WithInterceptors(withHTTPErrorStatusCodes, withRunner),
 	)
 }
 
@@ -35,10 +37,11 @@ var _ runnerv1connect.RunnerServiceClient = (*Service)(nil)
 
 type Service struct {
 	runnerv1connect.UnimplementedRunnerServiceHandler
+	runnerRequestKeyMutexMap cache.MutexMap
 }
 
 // Register for new runner.
-func (s *Service) Register(
+func (*Service) Register(
 	ctx context.Context,
 	req *connect.Request[runnerv1.RegisterRequest],
 ) (*connect.Response[runnerv1.RegisterResponse], error) {
@@ -55,14 +58,14 @@ func (s *Service) Register(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("runner registration token has been invalidated, please use the latest one"))
 	}
 
-	if runnerToken.OwnerID > 0 {
-		if _, err := user_model.GetUserByID(ctx, runnerToken.OwnerID); err != nil {
+	if has, ownerID := runnerToken.OwnerID.Get(); has {
+		if _, err := user_model.GetUserByID(ctx, ownerID); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, errors.New("owner of the token not found"))
 		}
 	}
 
-	if runnerToken.RepoID > 0 {
-		if _, err := repo_model.GetRepositoryByID(ctx, runnerToken.RepoID); err != nil {
+	if has, repoID := runnerToken.RepoID.Get(); has {
+		if _, err := repo_model.GetRepositoryByID(ctx, repoID); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, errors.New("repository of the token not found"))
 		}
 	}
@@ -74,14 +77,13 @@ func (s *Service) Register(
 	runner := &actions_model.ActionRunner{
 		UUID:        gouuid.New().String(),
 		Name:        name,
-		OwnerID:     runnerToken.OwnerID,
-		RepoID:      runnerToken.RepoID,
+		OwnerID:     runnerToken.OwnerID.ValueOrDefault(0),
+		RepoID:      runnerToken.RepoID.ValueOrDefault(0),
 		Version:     req.Msg.Version,
 		AgentLabels: labels,
+		Ephemeral:   req.Msg.Ephemeral,
 	}
-	if err := runner.GenerateToken(); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, errors.New("can't generate token"))
-	}
+	runner.GenerateToken()
 
 	// create new runner
 	if err := actions_model.CreateRunner(ctx, runner); err != nil {
@@ -96,19 +98,20 @@ func (s *Service) Register(
 
 	res := connect.NewResponse(&runnerv1.RegisterResponse{
 		Runner: &runnerv1.Runner{
-			Id:      runner.ID,
-			Uuid:    runner.UUID,
-			Token:   runner.Token,
-			Name:    runner.Name,
-			Version: runner.Version,
-			Labels:  runner.AgentLabels,
+			Id:        runner.ID,
+			Uuid:      runner.UUID,
+			Token:     runner.Token,
+			Name:      runner.Name,
+			Version:   runner.Version,
+			Labels:    runner.AgentLabels,
+			Ephemeral: runner.Ephemeral,
 		},
 	})
 
 	return res, nil
 }
 
-func (s *Service) Declare(
+func (*Service) Declare(
 	ctx context.Context,
 	req *connect.Request[runnerv1.DeclareRequest],
 ) (*connect.Response[runnerv1.DeclareResponse], error) {
@@ -121,12 +124,13 @@ func (s *Service) Declare(
 
 	return connect.NewResponse(&runnerv1.DeclareResponse{
 		Runner: &runnerv1.Runner{
-			Id:      runner.ID,
-			Uuid:    runner.UUID,
-			Token:   runner.Token,
-			Name:    runner.Name,
-			Version: runner.Version,
-			Labels:  runner.AgentLabels,
+			Id:        runner.ID,
+			Uuid:      runner.UUID,
+			Token:     runner.Token,
+			Name:      runner.Name,
+			Version:   runner.Version,
+			Labels:    runner.AgentLabels,
+			Ephemeral: runner.Ephemeral,
 		},
 	}), nil
 }
@@ -138,47 +142,143 @@ func (s *Service) FetchTask(
 ) (*connect.Response[runnerv1.FetchTaskResponse], error) {
 	runner := GetRunner(ctx)
 
-	var task *runnerv1.Task
-	tasksVersion := req.Msg.TasksVersion // task version from runner
-	latestVersion, err := actions_model.GetTasksVersionByScope(ctx, runner.OwnerID, runner.RepoID)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("query tasks version failed: %w", err))
-	} else if latestVersion == 0 {
-		if err := actions_model.IncreaseTaskVersion(ctx, runner.OwnerID, runner.RepoID); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fail to increase task version: %w", err))
+	requestKey := getRequestKey(ctx)
+	if requestKey != nil {
+		// It's possible for Forgejo to receive multiple concurrent requests for a given request key if the client made
+		// a request (A), request (A) took longer than the client's HTTP timeout, request (A) continues to run on
+		// Forgejo, and the client sends request (B).  In that case, we need to protect against reading from the
+		// database and sending only *some* of the tasks for the request key back to the runner, as they get assigned
+		// and committed to the database from request (A), but while request (A) is still running and request (B) is
+		// received.  To do this, we lock on the request key with a MutexMap.
+		//
+		// The lock must be held for the entirety of `FetchTask`, so even if the request key isn't used to recover
+		// tasks, the lock is held while new tasks are picked.
+		locked, cleanup := s.runnerRequestKeyMutexMap.TryLock(*requestKey)
+		defer cleanup()
+		if !locked {
+			// Another goroutine is currently processing some work for this request key.  Provide an error to the
+			// client.  This will allow the client to retry with the same request key at its typical fetch interval.
+			return nil, connect.NewError(connect.CodeInternal, errors.New("request key is currently locked; retry soon"))
 		}
-		// if we don't increase the value of `latestVersion` here,
-		// the response of FetchTask will return tasksVersion as zero.
-		// and the runner will treat it as an old version of Gitea.
-		latestVersion++
+
+		recoveredTasks, err := recoverTasks(ctx, runner, *requestKey)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		} else if len(recoveredTasks) > 0 {
+			resp := &runnerv1.FetchTaskResponse{
+				Task:            recoveredTasks[0],
+				TasksVersion:    0,
+				AdditionalTasks: recoveredTasks[1:],
+			}
+			return connect.NewResponse(resp), nil
+		}
 	}
 
-	if tasksVersion != latestVersion {
+	latestVersion, err := getLatestTasksVersion(ctx, runner.OwnerID, runner.RepoID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	var task *runnerv1.Task
+	var additionalTasks []*runnerv1.Task
+	if req.Msg.TasksVersion != latestVersion {
 		// if the task version in request is not equal to the version in db,
 		// it means there may still be some tasks not be assigned.
 		// try to pick a task for the runner that send the request.
-		if t, ok, err := actions_service.PickTask(ctx, runner); err != nil {
-			log.Error("pick task failed: %v", err)
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("pick task: %w", err))
-		} else if ok {
+		if t, err := actions_service.PickTask(ctx, runner, requestKey, nil); err != nil {
+			if !(actions_service.IsNoTaskAvailable(err)) {
+				log.Error("pick task failed: %v", err)
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("pick task: %w", err))
+			}
+		} else {
 			task = t
+
+			taskCapacity := req.Msg.GetTaskCapacity()
+			taskCapacity-- // remove 1 for the task already fetched as `task`
+			for taskCapacity > 0 {
+				t, err := actions_service.PickTask(ctx, runner, requestKey, nil)
+				if err != nil {
+					if !(actions_service.IsNoTaskAvailable(err)) {
+						// Don't return an error to the client/runner -- we've already assigned one-or-more tasks to the runner
+						// and if we don't return them, they can't be picked up by another runner and will become zombie tasks.
+						// Log the error and return the tasks we've assigned so far.
+						log.Error("pick task failed: %v", err)
+					}
+					break
+				}
+
+				additionalTasks = append(additionalTasks, t)
+				taskCapacity--
+			}
 		}
 	}
 	res := connect.NewResponse(&runnerv1.FetchTaskResponse{
-		Task:         task,
+		Task:            task,
+		TasksVersion:    latestVersion,
+		AdditionalTasks: additionalTasks,
+	})
+	return res, nil
+}
+
+func (*Service) FetchSingleTask(
+	ctx context.Context,
+	req *connect.Request[runnerv1.FetchSingleTaskRequest],
+) (*connect.Response[runnerv1.FetchSingleTaskResponse], error) {
+	runner := GetRunner(ctx)
+
+	requestKey := getRequestKey(ctx)
+	if requestKey != nil {
+		recoveredTasks, err := recoverTasks(ctx, runner, *requestKey)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		} else if len(recoveredTasks) == 1 {
+			resp := &runnerv1.FetchSingleTaskResponse{
+				TasksVersion: 0,
+				Task:         recoveredTasks[0],
+			}
+			return connect.NewResponse(resp), nil
+		} else if len(recoveredTasks) > 1 {
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("cannot recover %d tasks because runner requested only one", len(recoveredTasks)))
+		}
+	}
+
+	latestVersion, err := getLatestTasksVersion(ctx, runner.OwnerID, runner.RepoID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	var task *runnerv1.Task
+	if req.Msg.TasksVersion != latestVersion {
+		var handle *string
+		if req.Msg.Handle != nil && *req.Msg.Handle != "" {
+			handle = req.Msg.Handle
+		}
+
+		if t, err := actions_service.PickTask(ctx, runner, requestKey, handle); err != nil {
+			if !(actions_service.IsNoTaskAvailable(err)) {
+				log.Error("pick task failed: %v", err)
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("pick task: %w", err))
+			}
+		} else {
+			task = t
+		}
+	}
+	res := connect.NewResponse(&runnerv1.FetchSingleTaskResponse{
 		TasksVersion: latestVersion,
+		Task:         task,
 	})
 	return res, nil
 }
 
 // UpdateTask updates the task status.
-func (s *Service) UpdateTask(
+func (*Service) UpdateTask(
 	ctx context.Context,
 	req *connect.Request[runnerv1.UpdateTaskRequest],
 ) (*connect.Response[runnerv1.UpdateTaskResponse], error) {
 	runner := GetRunner(ctx)
 
-	task, err := actions_model.UpdateTaskByState(ctx, runner.ID, req.Msg.State)
+	task, err := actions_service.UpdateTaskByState(ctx, runner.ID, req.Msg.State)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update task: %w", err))
 	}
@@ -224,6 +324,23 @@ func (s *Service) UpdateTask(
 		if err := actions_service.EmitJobsIfReady(task.Job.RunID); err != nil {
 			log.Error("Emit ready jobs of run %d: %v", task.Job.RunID, err)
 		}
+		// Reaching a finalized result for a task can cause other tasks in the same concurrency group to become
+		// unblocked. Increasing task version here allows all applicable runners to requery to the DB for that state.
+		// Because it is only useful for that condition, and it has system performance risks, only enable it when
+		// concurrency group queuing is enabled.
+		if setting.Actions.ConcurrencyGroupQueueEnabled {
+			if err := actions_model.IncreaseTaskVersion(ctx, runner.OwnerID, runner.RepoID); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fail to increase task version: %w", err))
+			}
+		}
+
+		if runner.Ephemeral {
+			err := actions_model.DeleteRunner(ctx, runner)
+			if err != nil {
+				log.Error("failed to delete ephemeral runner %v, %w", task.RunnerID, err)
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete ephemeral runner %v, %w", task.RunnerID, err))
+			}
+		}
 	}
 
 	return connect.NewResponse(&runnerv1.UpdateTaskResponse{
@@ -236,7 +353,7 @@ func (s *Service) UpdateTask(
 }
 
 // UpdateLog uploads log of the task.
-func (s *Service) UpdateLog(
+func (*Service) UpdateLog(
 	ctx context.Context,
 	req *connect.Request[runnerv1.UpdateLogRequest],
 ) (*connect.Response[runnerv1.UpdateLogResponse], error) {
@@ -291,4 +408,41 @@ func (s *Service) UpdateLog(
 	}
 
 	return res, nil
+}
+
+func recoverTasks(ctx context.Context, runner *actions_model.ActionRunner, requestKey string) ([]*runnerv1.Task, error) {
+	// Search for previous tasks is based upon both the runner and the request key in order to reduce the security
+	// risk. If a request key is leaked (eg. it appears in a log file, log file gets published in a bug report) it
+	// could be used indefinitely to retrieve the associated task(s), so requiring the correctly authenticated
+	// runner reduces that risk.
+	recoveredTasks, err := actions_model.GetTasksByRunnerRequestKey(ctx, runner, requestKey)
+	if err != nil {
+		return nil, fmt.Errorf("query by request key failed: %w", err)
+	} else if len(recoveredTasks) > 0 {
+		// Recovered tasks from a repeat request key
+		tasks, err := actions_service.RecoverTasks(ctx, recoveredTasks)
+		if err != nil {
+			return nil, fmt.Errorf("recover tasks failed: %w", err)
+		}
+		return tasks, nil
+	}
+
+	return []*runnerv1.Task{}, nil
+}
+
+func getLatestTasksVersion(ctx context.Context, ownerID, repoID int64) (int64, error) {
+	latestVersion, err := actions_model.GetTasksVersionByScope(ctx, ownerID, repoID)
+	if err != nil {
+		return 0, fmt.Errorf("query tasks version failed: %w", err)
+	} else if latestVersion == 0 {
+		if err := actions_model.IncreaseTaskVersion(ctx, ownerID, repoID); err != nil {
+			return 0, fmt.Errorf("fail to increase task version: %w", err)
+		}
+		// if we don't increase the value of `latestVersion` here,
+		// the response of FetchTask will return tasksVersion as zero.
+		// and the runner will treat it as an old version of Gitea.
+		latestVersion++
+	}
+
+	return latestVersion, nil
 }

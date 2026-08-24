@@ -46,10 +46,7 @@ func Branches(ctx *context.Context) {
 	ctx.Data["PageIsViewCode"] = true
 	ctx.Data["PageIsBranches"] = true
 
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 	pageSize := setting.Git.BranchesRangeSize
 
 	kw := ctx.FormString("q")
@@ -69,11 +66,6 @@ func Branches(ctx *context.Context) {
 	if err != nil {
 		ctx.ServerError("LoadBranches", err)
 		return
-	}
-	if !ctx.Repo.CanRead(unit.TypeActions) {
-		for key := range commitStatuses {
-			git_model.CommitStatusesHideActionsURL(ctx, commitStatuses[key])
-		}
 	}
 
 	commitStatus := make(map[string]*git_model.CommitStatus)

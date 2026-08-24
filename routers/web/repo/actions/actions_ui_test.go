@@ -20,17 +20,17 @@ var (
 	sidebarSelector         = "#sidebar_section"
 	workflowSidebarSelector = "#workflow_sidebar"
 	mainSelector            = "#main_section"
-	mockedWorkflows         = []map[string]interface{}{
+	mockedWorkflows         = []map[string]any{
 		{
 			"ErrMsg": "",
-			"Entry": map[string]interface{}{
+			"Entry": map[string]any{
 				"ID":   "019a3707-02f3-776c-9253-e3c997275009",
 				"Name": "demo.yml",
 			},
 		},
 		{
 			"ErrMsg": "",
-			"Entry": map[string]interface{}{
+			"Entry": map[string]any{
 				"ID":   "019a3707-22f3-776c-9253-e3c997275009",
 				"Name": "test.yml",
 			},
@@ -41,9 +41,9 @@ var (
 func baseTest(t *testing.T, ctx *context.Context) {
 	t.Run("Core test", func(t *testing.T) {
 		List(ctx)
-		rawHtml, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
+		rawHTML, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
 		require.NoError(t, err)
-		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHtml)
+		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHTML)
 
 		t.Run("Check core HTML elemens exists", func(t *testing.T) {
 			doc.AssertElementExists(t, sidebarSelector)
@@ -56,23 +56,23 @@ func baseTest(t *testing.T, ctx *context.Context) {
 func noWorkflowsTest(t *testing.T, ctx *context.Context) {
 	t.Run("No workflows test", func(t *testing.T) {
 		List(ctx)
-		rawHtml, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
+		rawHTML, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
 		require.NoError(t, err)
-		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHtml)
+		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHTML)
 
 		t.Run("No workflows", func(t *testing.T) {
-			workflow_main_section := doc.Find(mainSelector)
-			workflow_sidebar_title := doc.Find(workflowSidebarSelector).Children().First().Text()
-			workflow_sidebar_item := doc.Find(workflowSidebarSelector).Children().Last().Text()
+			workflowMainSection := doc.Find(mainSelector)
+			workflowSidebarTitle := doc.Find(workflowSidebarSelector).Children().First().Text()
+			workflowSidebarItem := doc.Find(workflowSidebarSelector).Children().Last().Text()
 			t.Run("Check sidebar HTML elements", func(t *testing.T) {
 				doc.AssertElementCount(t, workflowSidebarSelector, 1)
 				doc.AssertElementChildCount(t, workflowSidebarSelector, 2)
-				assert.Contains(t, workflow_sidebar_title, "actions.runs.all_workflows")
-				assert.Contains(t, workflow_sidebar_item, "actions.runs.workflows.empty")
+				assert.Contains(t, workflowSidebarTitle, "actions.runs.all_workflows")
+				assert.Contains(t, workflowSidebarItem, "actions.runs.workflows.empty")
 			})
 
 			t.Run("Check Quick guide is visible", func(t *testing.T) {
-				htmltest.AssertElementContains(t, workflow_main_section, "h4", "repo.quick_guide")
+				htmltest.AssertElementContains(t, workflowMainSection, "h4", "repo.quick_guide")
 			})
 		})
 	})
@@ -81,16 +81,16 @@ func noWorkflowsTest(t *testing.T, ctx *context.Context) {
 func noRunnersTest(t *testing.T, ctx *context.Context) {
 	t.Run("No runners test", func(t *testing.T) {
 		List(ctx)
-		rawHtml, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
+		rawHTML, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
 		require.NoError(t, err)
-		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHtml)
+		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHTML)
 
 		t.Run("Check main HTML elements", func(t *testing.T) {
-			workflow_main_section := doc.Find(mainSelector)
+			workflowMainSection := doc.Find(mainSelector)
 			doc.AssertElementCount(t, mainSelector, 1)
 
 			t.Run("Check Enable Stackit Runners is visible", func(t *testing.T) {
-				htmltest.AssertElementContains(t, workflow_main_section, "h4", "actions.runs.enable_stackit_runners")
+				htmltest.AssertElementContains(t, workflowMainSection, "h4", "actions.runs.enable_stackit_runners")
 			})
 		})
 	})
@@ -106,28 +106,27 @@ func withStackitRunnersNotUsedTest(t *testing.T, ctx *context.Context) {
 		ctx.Data["HasStackitRunner"] = true
 		ctx.Data["HasStackitRunnerUsed"] = false
 
-		rawHtml, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
+		rawHTML, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
 		require.NoError(t, err)
-		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHtml)
+		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHTML)
 
 		t.Run("Check main HTML elements", func(t *testing.T) {
-			workflow_main_section := doc.Find(mainSelector)
+			workflowMainSection := doc.Find(mainSelector)
 			doc.AssertElementCount(t, mainSelector, 1)
 
 			t.Run("Check Quick guide is not visible", func(t *testing.T) {
-				htmltest.AssertElementNotContains(t, workflow_main_section, "h4", "repo.quick_guide")
+				htmltest.AssertElementNotContains(t, workflowMainSection, "h4", "repo.quick_guide")
 			})
 
 			t.Run("Check Enable Stackit Runners is not visible", func(t *testing.T) {
-				htmltest.AssertElementNotContains(t, workflow_main_section, "h4", "actions.runs.enable_stackit_runners")
+				htmltest.AssertElementNotContains(t, workflowMainSection, "h4", "actions.runs.enable_stackit_runners")
 			})
 
 			t.Run("Check start using runners is visible", func(t *testing.T) {
-				htmltest.AssertElementContains(t, workflow_main_section, "h4", "start_using_stackit_runners")
+				htmltest.AssertElementContains(t, workflowMainSection, "h4", "start_using_stackit_runners")
 			})
 		})
 	})
-
 }
 
 func withWorkflowsTest(t *testing.T, ctx *context.Context) {
@@ -137,26 +136,26 @@ func withWorkflowsTest(t *testing.T, ctx *context.Context) {
 		ctx.Data["workflows"] = mockedWorkflows
 		ctx.Data["HasWorkflows"] = true
 
-		rawHtml, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
+		rawHTML, err := ctx.RenderToHTML("repo/actions/list", ctx.Data)
 
 		require.NoError(t, err)
-		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHtml)
+		doc := htmltest.NewHTMLParserFromTemplateHTML(t, rawHTML)
 
 		t.Run("With workflows", func(t *testing.T) {
-			workflow_main_section := doc.Find(mainSelector)
-			workflow_sidebar_title := doc.Find(workflowSidebarSelector).Children().First().Text()
-			workflow_sidebar_item_demo := doc.Find(workflowSidebarSelector).Children().Eq(1).Text()
-			workflow_sidebar_item_test := doc.Find(workflowSidebarSelector).Children().Eq(2).Text()
+			workflowMainSection := doc.Find(mainSelector)
+			workflowSidebarTitle := doc.Find(workflowSidebarSelector).Children().First().Text()
+			workflowSidebarItemDemo := doc.Find(workflowSidebarSelector).Children().Eq(1).Text()
+			workflowSidebarItemTest := doc.Find(workflowSidebarSelector).Children().Eq(2).Text()
 			t.Run("Check sidebar HTML elements", func(t *testing.T) {
 				doc.AssertElementCount(t, workflowSidebarSelector, 1)
 				doc.AssertElementChildCount(t, workflowSidebarSelector, 3)
-				assert.Contains(t, workflow_sidebar_title, "actions.runs.all_workflows")
-				assert.Contains(t, workflow_sidebar_item_demo, "demo.yml")
-				assert.Contains(t, workflow_sidebar_item_test, "test.yml")
+				assert.Contains(t, workflowSidebarTitle, "actions.runs.all_workflows")
+				assert.Contains(t, workflowSidebarItemDemo, "demo.yml")
+				assert.Contains(t, workflowSidebarItemTest, "test.yml")
 			})
 
 			t.Run("Check Quick guide is not visible", func(t *testing.T) {
-				htmltest.AssertElementNotContains(t, workflow_main_section, "h4", "repo.quick_guide")
+				htmltest.AssertElementNotContains(t, workflowMainSection, "h4", "repo.quick_guide")
 			})
 		})
 	})

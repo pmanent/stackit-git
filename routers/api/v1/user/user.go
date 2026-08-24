@@ -33,6 +33,11 @@ func Search(ctx *context.APIContext) {
 	//   description: ID of the user to search for
 	//   type: integer
 	//   format: int64
+	// - name: sort
+	//   in: query
+	//   description: sort order of results
+	//   type: string
+	//   enum: [oldest, newest, alphabetically, reversealphabetically, recentupdate, leastupdate]
 	// - name: page
 	//   in: query
 	//   description: page number of results to return (1-based)
@@ -46,6 +51,7 @@ func Search(ctx *context.APIContext) {
 	//     description: "SearchResults of a successful search"
 	//     schema:
 	//       type: object
+	//       title: "UserSearchResults"
 	//       properties:
 	//         ok:
 	//           type: boolean
@@ -70,17 +76,18 @@ func Search(ctx *context.APIContext) {
 		users = []*user_model.User{user_model.NewActionsUser()}
 	default:
 		var visible []structs.VisibleType
-		if ctx.PublicOnly {
+		if ctx.PublicOnly() {
 			visible = []structs.VisibleType{structs.VisibleTypePublic}
 		}
 		users, maxResults, err = user_model.SearchUsers(ctx, &user_model.SearchUserOptions{
-			Actor:         ctx.Doer,
+			Actor:         ctx.Doer(),
 			Keyword:       ctx.FormTrim("q"),
 			UID:           uid,
 			Type:          user_model.UserTypeIndividual,
 			SearchByEmail: true,
 			Visible:       visible,
 			ListOptions:   listOptions,
+			OrderBy:       utils.GetDbSearchOrder(ctx),
 		})
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, map[string]any{
@@ -96,7 +103,7 @@ func Search(ctx *context.APIContext) {
 
 	ctx.JSON(http.StatusOK, map[string]any{
 		"ok":   true,
-		"data": convert.ToUsers(ctx, ctx.Doer, users),
+		"data": convert.ToUsers(ctx, ctx.Doer(), users),
 	})
 }
 
@@ -119,12 +126,12 @@ func GetInfo(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	if !user_model.IsUserVisibleToViewer(ctx, ctx.ContextUser, ctx.Doer) {
+	if !user_model.IsUserVisibleToViewer(ctx, ctx.User(), ctx.Doer()) {
 		// fake ErrUserNotExist error message to not leak information about existence
 		ctx.NotFound("GetUserByName", user_model.ErrUserNotExist{Name: ctx.Params(":username")})
 		return
 	}
-	ctx.JSON(http.StatusOK, convert.ToUser(ctx, ctx.ContextUser, ctx.Doer))
+	ctx.JSON(http.StatusOK, convert.ToUser(ctx, ctx.User(), ctx.Doer()))
 }
 
 // GetAuthenticatedUser get current user's information
@@ -142,7 +149,7 @@ func GetAuthenticatedUser(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	ctx.JSON(http.StatusOK, convert.ToUser(ctx, ctx.Doer, ctx.Doer))
+	ctx.JSON(http.StatusOK, convert.ToUser(ctx, ctx.Doer(), ctx.Doer()))
 }
 
 // GetUserHeatmapData is the handler to get a users heatmap
@@ -164,7 +171,7 @@ func GetUserHeatmapData(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	heatmap, err := activities_model.GetUserHeatmapDataByUser(ctx, ctx.ContextUser, ctx.Doer)
+	heatmap, err := activities_model.GetUserHeatmapDataByUser(ctx, ctx.User(), ctx.Doer())
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "GetUserHeatmapDataByUser", err)
 		return
@@ -207,12 +214,12 @@ func ListUserActivityFeeds(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	includePrivate := ctx.IsSigned && (ctx.Doer.IsAdmin || ctx.Doer.ID == ctx.ContextUser.ID)
+	includePrivate := ctx.IsSigned() && (ctx.IsUserSiteAdmin() || ctx.Doer().ID == ctx.User().ID)
 	listOptions := utils.GetListOptions(ctx)
 
 	opts := activities_model.GetFeedsOptions{
-		RequestedUser:   ctx.ContextUser,
-		Actor:           ctx.Doer,
+		RequestedUser:   ctx.User(),
+		Actor:           ctx.Doer(),
 		IncludePrivate:  includePrivate,
 		OnlyPerformedBy: ctx.FormBool("only-performed-by"),
 		Date:            ctx.FormString("date"),
@@ -226,7 +233,7 @@ func ListUserActivityFeeds(ctx *context.APIContext) {
 	}
 	ctx.SetTotalCountHeader(count)
 
-	ctx.JSON(http.StatusOK, convert.ToActivities(ctx, feeds, ctx.Doer))
+	ctx.JSON(http.StatusOK, convert.ToActivities(ctx, feeds, ctx.Doer()))
 }
 
 // ListBlockedUsers list the authenticated user's blocked users.
@@ -253,14 +260,14 @@ func ListBlockedUsers(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	utils.ListUserBlockedUsers(ctx, ctx.Doer)
+	utils.ListUserBlockedUsers(ctx, ctx.Doer())
 }
 
 // BlockUser blocks a user from the doer.
 func BlockUser(ctx *context.APIContext) {
 	// swagger:operation PUT /user/block/{username} user userBlockUser
 	// ---
-	// summary: Blocks a user from the doer.
+	// summary: Blocks a user from the doer
 	// produces:
 	// - application/json
 	// parameters:
@@ -281,19 +288,19 @@ func BlockUser(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
-	if ctx.ContextUser.IsOrganization() {
-		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("%s is an organization not a user", ctx.ContextUser.Name))
+	if ctx.User().IsOrganization() {
+		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("%s is an organization not a user", ctx.User().Name))
 		return
 	}
 
-	utils.BlockUser(ctx, ctx.Doer, ctx.ContextUser)
+	utils.BlockUser(ctx, ctx.Doer(), ctx.User())
 }
 
 // UnblockUser unblocks a user from the doer.
 func UnblockUser(ctx *context.APIContext) {
 	// swagger:operation PUT /user/unblock/{username} user userUnblockUser
 	// ---
-	// summary: Unblocks a user from the doer.
+	// summary: Unblocks a user from the doer
 	// produces:
 	// - application/json
 	// parameters:
@@ -314,10 +321,10 @@ func UnblockUser(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
-	if ctx.ContextUser.IsOrganization() {
-		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("%s is an organization not a user", ctx.ContextUser.Name))
+	if ctx.User().IsOrganization() {
+		ctx.Error(http.StatusUnprocessableEntity, "", fmt.Errorf("%s is an organization not a user", ctx.User().Name))
 		return
 	}
 
-	utils.UnblockUser(ctx, ctx.Doer, ctx.ContextUser)
+	utils.UnblockUser(ctx, ctx.Doer(), ctx.User())
 }

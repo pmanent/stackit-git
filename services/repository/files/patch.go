@@ -147,11 +147,7 @@ func ApplyDiffPatch(ctx context.Context, repo *repo_model.Repository, doer *user
 	stdout := &strings.Builder{}
 	stderr := &strings.Builder{}
 
-	cmdApply := git.NewCommand(ctx, "apply", "--index", "--recount", "--cached", "--ignore-whitespace", "--whitespace=fix", "--binary")
-	if git.CheckGitVersionAtLeast("2.32") == nil {
-		cmdApply.AddArguments("-3")
-	}
-
+	cmdApply := git.NewCommand(ctx, "-c", "core.hooksPath=/dev/null", "apply", "--index", "--recount", "--cached", "--ignore-whitespace", "--whitespace=fix", "--binary", "-3")
 	if err := cmdApply.Run(&git.RunOpts{
 		Dir:    t.basePath,
 		Stdout: stdout,
@@ -179,7 +175,7 @@ func ApplyDiffPatch(ctx context.Context, repo *repo_model.Repository, doer *user
 	}
 
 	// Then push this tree to NewBranch
-	if err := t.Push(doer, commitHash, opts.NewBranch); err != nil {
+	if err := t.Push(doer, commitHash, opts.NewBranch, false); err != nil {
 		return nil, err
 	}
 

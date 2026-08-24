@@ -4,12 +4,9 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	"image/png"
 	"io"
 	"net/url"
 	"os"
@@ -82,27 +79,12 @@ func Clean(storage ObjectStorage) error {
 
 // >>> @@@ STACKIT CODE @@@
 // User Story 56494
-// For small image the process can be serialized
-
-func handleRecover() {
-	if r := recover(); r != nil {
-		log.Error("recovered from %v", r)
-	}
-}
-
-func SaveFromDirect(objStorage ObjectStorage, p string, img image.Image) error {
-	defer handleRecover()
-	var buff bytes.Buffer
-	if err := png.Encode(&buff, img); err != nil {
-		log.Error("Encode: %v", err)
-	}
-	log.Debug("Encoded an image of %d bytes", len(buff.Bytes()))
-	_, err := objStorage.Save(p, &buff, int64(len(buff.Bytes())))
-	log.Debug("Saved an image of %d bytes", len(buff.Bytes()))
-
-	return err
-}
-
+// SaveFrom below streams through an io.Pipe and passes size -1 to the object
+// store, which the S3/MinIO backend writes as an empty object. Avatars are
+// serialized first so the write carries an explicit content length; that lives
+// in modules/avatarstore (saveSized). Nothing calls SaveFrom any more -- it is
+// kept as upstream has it, and listed in .deadcode-out, so upstream merges of
+// this file stay conflict-free. Do not use it for avatars.
 // <<< @@@ STACKIT CODE @@@
 
 // SaveFrom saves data to the ObjectStorage with path p from the callback
@@ -231,6 +213,7 @@ func initLFS() (err error) {
 		LFS = DiscardStorage("LFS isn't enabled")
 		return nil
 	}
+
 	log.Info("Initialising LFS storage with type: %s", setting.LFS.Storage.Type)
 	LFS, err = NewStorage(setting.LFS.Storage.Type, setting.LFS.Storage)
 

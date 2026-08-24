@@ -8,76 +8,110 @@ import (
 	"net/http"
 	"testing"
 
+	actions_model "forgejo.org/models/actions"
 	auth_model "forgejo.org/models/auth"
+	"forgejo.org/models/unittest"
+	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/tests"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestAPIUserVariables(t *testing.T) {
+func TestAPIUserVariablesCreateUserVariable(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
-	session := loginUser(t, "user1")
+	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+
+	session := loginUser(t, user1.Name)
 	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
 
-	t.Run("CreateUserVariable", func(t *testing.T) {
-		cases := []struct {
-			Name           string
-			ExpectedStatus int
-		}{
-			{
-				Name:           "-",
-				ExpectedStatus: http.StatusBadRequest,
-			},
-			{
-				Name:           "_",
-				ExpectedStatus: http.StatusNoContent,
-			},
-			{
-				Name:           "TEST_VAR",
-				ExpectedStatus: http.StatusNoContent,
-			},
-			{
-				Name:           "test_var",
-				ExpectedStatus: http.StatusConflict,
-			},
-			{
-				Name:           "ci",
-				ExpectedStatus: http.StatusBadRequest,
-			},
-			{
-				Name:           "123var",
-				ExpectedStatus: http.StatusBadRequest,
-			},
-			{
-				Name:           "var@test",
-				ExpectedStatus: http.StatusBadRequest,
-			},
-			{
-				Name:           "github_var",
-				ExpectedStatus: http.StatusBadRequest,
-			},
-			{
-				Name:           "gitea_var",
-				ExpectedStatus: http.StatusBadRequest,
-			},
-		}
+	cases := []struct {
+		Name           string
+		ExpectedStatus int
+	}{
+		{
+			Name:           "-",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+		{
+			Name:           "_",
+			ExpectedStatus: http.StatusNoContent,
+		},
+		{
+			Name:           "TEST_VAR",
+			ExpectedStatus: http.StatusNoContent,
+		},
+		{
+			Name:           "test_var",
+			ExpectedStatus: http.StatusConflict,
+		},
+		{
+			Name:           "ci",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+		{
+			Name:           "123var",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+		{
+			Name:           "var@test",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+		{
+			Name:           "forgejo_var",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+		{
+			Name:           "github_var",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+		{
+			Name:           "gitea_var",
+			ExpectedStatus: http.StatusBadRequest,
+		},
+	}
 
-		for _, c := range cases {
-			req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/user/actions/variables/%s", c.Name), api.CreateVariableOption{
-				Value: "value",
-			}).AddTokenAuth(token)
-			MakeRequest(t, req, c.ExpectedStatus)
-		}
-	})
+	for _, c := range cases {
+		url := fmt.Sprintf("/api/v1/user/actions/variables/%s", c.Name)
 
-	t.Run("UpdateUserVariable", func(t *testing.T) {
-		variableName := "test_update_var"
-		url := fmt.Sprintf("/api/v1/user/actions/variables/%s", variableName)
 		req := NewRequestWithJSON(t, "POST", url, api.CreateVariableOption{
-			Value: "initial_val",
-		}).AddTokenAuth(token)
-		MakeRequest(t, req, http.StatusNoContent)
+			Value: "  \tvalüé\r\n" + c.Name + "  \r\n",
+		})
+		req.AddTokenAuth(token)
+		MakeRequest(t, req, c.ExpectedStatus)
 
+		if c.ExpectedStatus < 300 {
+			req = NewRequest(t, "GET", url)
+			req.AddTokenAuth(token)
+			res := MakeRequest(t, req, http.StatusOK)
+
+			variable := api.ActionVariable{}
+			DecodeJSON(t, res, &variable)
+
+			assert.Equal(t, variable.Name, c.Name)
+			assert.Equal(t, variable.Data, "  \tvalüé\n"+c.Name+"  \n")
+		}
+	}
+}
+
+func TestAPIUserVariablesUpdateUserVariable(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+
+	session := loginUser(t, user1.Name)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
+
+	variableName := "test_update_var"
+	url := fmt.Sprintf("/api/v1/user/actions/variables/%s", variableName)
+	req := NewRequestWithJSON(t, "POST", url, api.CreateVariableOption{
+		Value: "initial_val",
+	}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+
+	t.Run("Accepts only valid names", func(t *testing.T) {
 		cases := []struct {
 			Name           string
 			UpdateName     string
@@ -104,6 +138,11 @@ func TestAPIUserVariables(t *testing.T) {
 			},
 			{
 				Name:           variableName,
+				UpdateName:     "forgejo_foo",
+				ExpectedStatus: http.StatusBadRequest,
+			},
+			{
+				Name:           variableName,
 				UpdateName:     "updated_var_name",
 				ExpectedStatus: http.StatusNoContent,
 			},
@@ -118,27 +157,142 @@ func TestAPIUserVariables(t *testing.T) {
 		}
 
 		for _, c := range cases {
-			req := NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/user/actions/variables/%s", c.Name), api.UpdateVariableOption{
+			url := fmt.Sprintf("/api/v1/user/actions/variables/%s", c.Name)
+			req := NewRequestWithJSON(t, "PUT", url, api.UpdateVariableOption{
 				Name:  c.UpdateName,
 				Value: "updated_val",
-			}).AddTokenAuth(token)
+			})
+			req.AddTokenAuth(token)
 			MakeRequest(t, req, c.ExpectedStatus)
 		}
 	})
 
-	t.Run("DeleteRepoVariable", func(t *testing.T) {
-		variableName := "test_delete_var"
+	t.Run("Retains special characters", func(t *testing.T) {
+		variableName := "special_characters"
 		url := fmt.Sprintf("/api/v1/user/actions/variables/%s", variableName)
 
-		req := NewRequestWithJSON(t, "POST", url, api.CreateVariableOption{
-			Value: "initial_val",
-		}).AddTokenAuth(token)
+		req := NewRequestWithJSON(t, "POST", url, api.CreateVariableOption{Value: "initial_value"})
+		req.AddTokenAuth(token)
 		MakeRequest(t, req, http.StatusNoContent)
 
-		req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
+		requestData := api.UpdateVariableOption{
+			Value: "\r\n    \tüpdåtéd\r\n   \r\n",
+		}
+		req = NewRequestWithJSON(t, "PUT", url, requestData)
+		req.AddTokenAuth(token)
 		MakeRequest(t, req, http.StatusNoContent)
 
-		req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
-		MakeRequest(t, req, http.StatusNotFound)
+		req = NewRequest(t, "GET", url)
+		req.AddTokenAuth(token)
+		res := MakeRequest(t, req, http.StatusOK)
+
+		variable := api.ActionVariable{}
+		DecodeJSON(t, res, &variable)
+
+		assert.Equal(t, "SPECIAL_CHARACTERS", variable.Name)
+		assert.Equal(t, "\n    \tüpdåtéd\n   \n", variable.Data)
 	})
+}
+
+func TestAPIUserVariablesDeleteUserVariable(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+	variable, err := actions_model.InsertVariable(t.Context(), user1.ID, 0, "FORGEJO_FORBIDDEN", "illegal")
+	require.NoError(t, err)
+
+	session := loginUser(t, user1.Name)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
+
+	variableName := "test_delete_var"
+	url := fmt.Sprintf("/api/v1/user/actions/variables/%s", variableName)
+
+	req := NewRequestWithJSON(t, "POST", url, api.CreateVariableOption{
+		Value: "initial_val",
+	}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+
+	req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+
+	req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNotFound)
+
+	// deleting of forbidden names should still be possible
+	url = fmt.Sprintf("/api/v1/user/actions/variables/%s", variable.Name)
+	req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+
+	req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNotFound)
+}
+
+func TestAPIUserVariablesGetSingleUserVariable(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+
+	session := loginUser(t, user1.Name)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
+
+	createURL := fmt.Sprintf("/api/v1/user/actions/variables/%s", "some_variable")
+
+	createRequest := NewRequestWithJSON(t, "POST", createURL, api.CreateVariableOption{Value: "true"})
+	createRequest.AddTokenAuth(token)
+
+	MakeRequest(t, createRequest, http.StatusNoContent)
+
+	variableRequest := NewRequest(t, "GET", "/api/v1/user/actions/variables/some_variable")
+	variableRequest.AddTokenAuth(token)
+
+	variableResponse := MakeRequest(t, variableRequest, http.StatusOK)
+
+	var actionVariable api.ActionVariable
+	DecodeJSON(t, variableResponse, &actionVariable)
+
+	assert.NotNil(t, actionVariable)
+
+	assert.Equal(t, user1.ID, actionVariable.OwnerID)
+	assert.Equal(t, int64(0), actionVariable.RepoID)
+	assert.Equal(t, "SOME_VARIABLE", actionVariable.Name)
+	assert.Equal(t, "true", actionVariable.Data)
+}
+
+func TestAPIUserVariablesGetAllUserVariables(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+
+	session := loginUser(t, user1.Name)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
+
+	variables := map[string]string{"second": "Dolor sit amet", "first": "Lorem ipsum"}
+	for name, value := range variables {
+		createURL := fmt.Sprintf("/api/v1/user/actions/variables/%s", name)
+
+		createRequest := NewRequestWithJSON(t, "POST", createURL, api.CreateVariableOption{Value: value})
+		createRequest.AddTokenAuth(token)
+
+		MakeRequest(t, createRequest, http.StatusNoContent)
+	}
+
+	listRequest := NewRequest(t, "GET", "/api/v1/user/actions/variables")
+	listRequest.AddTokenAuth(token)
+
+	listResponse := MakeRequest(t, listRequest, http.StatusOK)
+
+	var actionVariables []api.ActionVariable
+	DecodeJSON(t, listResponse, &actionVariables)
+
+	assert.Len(t, actionVariables, len(variables))
+
+	assert.Equal(t, user1.ID, actionVariables[0].OwnerID)
+	assert.Equal(t, int64(0), actionVariables[0].RepoID)
+	assert.Equal(t, "FIRST", actionVariables[0].Name)
+	assert.Equal(t, "Lorem ipsum", actionVariables[0].Data)
+
+	assert.Equal(t, user1.ID, actionVariables[1].OwnerID)
+	assert.Equal(t, int64(0), actionVariables[1].RepoID)
+	assert.Equal(t, "SECOND", actionVariables[1].Name)
+	assert.Equal(t, "Dolor sit amet", actionVariables[1].Data)
 }

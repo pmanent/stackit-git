@@ -6,10 +6,12 @@ package repository
 import (
 	"testing"
 
+	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
+	user_model "forgejo.org/models/user"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,4 +42,42 @@ func TestLinkedRepository(t *testing.T) {
 			assert.Equal(t, tc.expectedUnitType, unitType)
 		})
 	}
+}
+
+func TestConvertMirrorToNormalRepo(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	// repo 10 has only Code/Issues/PullRequests units — no TypeActions — simulating a mirror repo
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
+	repo.IsMirror = true
+	require.NoError(t, repo_model.UpdateRepositoryCols(db.DefaultContext, repo, "is_mirror"))
+	require.False(t, repo.UnitEnabled(db.DefaultContext, unit.TypeActions))
+
+	require.NoError(t, ConvertMirrorToNormalRepo(db.DefaultContext, repo))
+
+	assert.False(t, repo.IsMirror)
+	repo.Units = nil // force reload
+	assert.True(t, repo.UnitEnabled(db.DefaultContext, unit.TypeActions))
+}
+
+func TestDeleteRepository(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	require.NoError(t, DeleteRepository(t.Context(), doer, repo, false))
+}
+
+func TestDeleteRepositoryWithReferences(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+
+	token1 := unittest.AssertExistsAndLoadBean(t, &auth_model.AccessToken{ID: 1})
+	err := db.Insert(t.Context(), &auth_model.AccessTokenResourceRepo{
+		TokenID: token1.ID,
+		RepoID:  repo.ID,
+	})
+	require.NoError(t, err)
+
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	require.NoError(t, DeleteRepository(t.Context(), doer, repo, false))
 }

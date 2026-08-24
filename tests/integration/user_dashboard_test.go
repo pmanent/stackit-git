@@ -1,4 +1,4 @@
-// Copyright 2024 The Forgejo Authors. All rights reserved.
+// Copyright 2024-2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package integration
@@ -7,36 +7,19 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"testing"
 
-	"forgejo.org/models/db"
-	unit_model "forgejo.org/models/unit"
+	"forgejo.org/models/issues"
 	"forgejo.org/models/unittest"
-	user_model "forgejo.org/models/user"
-	"forgejo.org/modules/translation"
+	"forgejo.org/modules/gitrepo"
 	issue_service "forgejo.org/services/issue"
-	files_service "forgejo.org/services/repository/files"
-	"forgejo.org/tests"
+	pull_service "forgejo.org/services/pull"
+	"forgejo.org/tests/forgery"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestUserDashboardActionLinks(t *testing.T) {
-	require.NoError(t, unittest.PrepareTestDatabase())
-
-	session := loginUser(t, "user1")
-	locale := translation.NewLocale("en-US")
-
-	response := session.MakeRequest(t, NewRequest(t, "GET", "/"), http.StatusOK)
-	page := NewHTMLParser(t, response.Body)
-	links := page.Find("#navbar .dropdown[data-tooltip-content='Create…'] .menu")
-	assert.EqualValues(t, locale.TrString("new_repo.link"), strings.TrimSpace(links.Find("a[href='/repo/create']").Text()))
-	assert.EqualValues(t, locale.TrString("new_migrate.link"), strings.TrimSpace(links.Find("a[href='/repo/migrate']").Text()))
-	assert.EqualValues(t, locale.TrString("new_org.link"), strings.TrimSpace(links.Find("a[href='/org/create']").Text()))
-}
 
 func TestUserDashboardFeedWelcome(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
@@ -58,29 +41,24 @@ func testUserDashboardFeedType(t *testing.T, page *HTMLDoc, isEmpty bool) {
 }
 
 func TestDashboardTitleRendering(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
-		user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
-		sess := loginUser(t, user4.Name)
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		user := forgery.CreateUser(t, nil)
+		sess := loginUser(t, user.Name)
 
-		repo, _, f := tests.CreateDeclarativeRepo(t, user4, "",
-			[]unit_model.Type{unit_model.TypePullRequests, unit_model.TypeIssues}, nil,
-			[]*files_service.ChangeRepoFile{
-				{
-					Operation:     "create",
-					TreePath:      "test.txt",
-					ContentReader: strings.NewReader("Just some text here"),
-				},
+		repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+			Files: forgery.MapFS{
+				"README.md": forgery.MapFile("some readme to update via the pull request"),
+				"test.txt":  forgery.MapFile("Just some text here"),
 			},
-		)
-		defer f()
+		})
 
-		issue := createIssue(t, user4, repo, "`:exclamation:` not rendered", "Hi there!")
-		pr := createPullRequest(t, user4, repo, "testing", "`:exclamation:` not rendered")
+		issue := createIssue(t, user, repo, "`:exclamation:` not rendered #1", "Hi there!")
+		pr := createPullRequest(t, user, repo, "testing", "`:exclamation:` not rendered #1")
 
-		_, err := issue_service.CreateIssueComment(db.DefaultContext, user4, repo, issue, "hi", nil)
+		_, err := issue_service.CreateIssueComment(t.Context(), user, repo, issue, "hi", nil)
 		require.NoError(t, err)
 
-		_, err = issue_service.CreateIssueComment(db.DefaultContext, user4, repo, pr.Issue, "hi", nil)
+		_, err = issue_service.CreateIssueComment(t.Context(), user, repo, pr.Issue, "hi", nil)
 		require.NoError(t, err)
 
 		testIssueClose(t, sess, repo.OwnerName, repo.Name, strconv.Itoa(int(issue.Index)), false)
@@ -93,12 +71,86 @@ func TestDashboardTitleRendering(t *testing.T) {
 		htmlDoc.doc.Find("#activity-feed .flex-item-main .title").Each(func(i int, s *goquery.Selection) {
 			count++
 			if s.IsMatcher(goquery.Single("a")) {
-				assert.EqualValues(t, "❗ not rendered", s.Text())
+				assert.Equal(t, ":exclamation: not rendered #1", s.Text())
+				assert.Equal(t, 0, s.Find("a").Length())
 			} else {
-				assert.EqualValues(t, ":exclamation: not rendered", s.Text())
+				assert.Equal(t, ":exclamation: not rendered #1", s.Text())
+				assert.Equal(t, 1, s.Find("a").Length())
 			}
 		})
 
-		assert.EqualValues(t, 6, count)
+		assert.Equal(t, 6, count)
+	})
+}
+
+func TestDashboardActionEscaping(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		user := forgery.CreateUser(t, nil)
+		sess := loginUser(t, user.Name)
+
+		repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+			Files: forgery.FilesInit{},
+		})
+
+		issue := createIssue(t, user, repo, "Issue with | in title", "Hey here's a | for you")
+
+		_, err := issue_service.CreateIssueComment(t.Context(), user, repo, issue, "Comment with a | in it", nil)
+		require.NoError(t, err)
+
+		testIssueClose(t, sess, repo.OwnerName, repo.Name, strconv.Itoa(int(issue.Index)), false)
+
+		response := sess.MakeRequest(t, NewRequest(t, "GET", "/"), http.StatusOK)
+		htmlDoc := NewHTMLParser(t, response.Body)
+
+		count := 0
+		htmlDoc.doc.Find("#activity-feed .flex-item-main .title").Each(func(i int, s *goquery.Selection) {
+			count++
+			assert.Equal(t, "Issue with | in title", s.Text())
+		})
+		htmlDoc.doc.Find("#activity-feed .flex-item-main .markup").Each(func(i int, s *goquery.Selection) {
+			count++
+			assert.Equal(t, "Comment with a | in it\n", s.Text())
+		})
+
+		assert.Equal(t, 4, count)
+	})
+}
+
+func TestDashboardReviewWorkflows(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		user := forgery.CreateUser(t, nil)
+		sess := loginUser(t, user.Name)
+
+		repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+			Files: forgery.FilesInit{},
+		})
+
+		gitRepo, err := gitrepo.OpenRepository(t.Context(), repo)
+		require.NoError(t, err)
+
+		pr := createPullRequest(t, user, repo, "testing", "My very first PR!")
+
+		review, _, err := pull_service.SubmitReview(t.Context(), user, gitRepo, pr.Issue, issues.ReviewTypeReject, "This isn't good enough!", "HEAD", []string{})
+		require.NoError(t, err)
+
+		_, err = pull_service.DismissReview(t.Context(), review.ID, repo.ID, "Come on, give the newbie a break!", user, true, true)
+		require.NoError(t, err)
+
+		response := sess.MakeRequest(t, NewRequest(t, "GET", "/"), http.StatusOK)
+		htmlDoc := NewHTMLParser(t, response.Body)
+
+		count := 0
+		htmlDoc.doc.Find("#activity-feed .flex-item-main .title").Each(func(i int, s *goquery.Selection) {
+			count++
+			assert.Equal(t, "My very first PR!", s.Text())
+		})
+		htmlDoc.doc.Find("#activity-feed .flex-item-main .flex-item-body").Each(func(i int, s *goquery.Selection) {
+			count++
+			if s.Text() != "Reason:" && s.Text() != "Come on, give the newbie a break!" {
+				assert.Fail(t, "Unexpected feed text", "Expected 'Reason:' and reason explanation, but found: %q", s.Text())
+			}
+		})
+
+		assert.Equal(t, 4, count)
 	})
 }

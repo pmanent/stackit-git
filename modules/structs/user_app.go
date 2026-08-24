@@ -11,22 +11,29 @@ import (
 // AccessToken represents an API access token.
 // swagger:response AccessToken
 type AccessToken struct {
-	ID             int64    `json:"id"`
-	Name           string   `json:"name"`
-	Token          string   `json:"sha1"`
-	TokenLastEight string   `json:"token_last_eight"`
-	Scopes         []string `json:"scopes"`
+	ID             int64     `json:"id"`
+	Name           string    `json:"name"`
+	Token          string    `json:"sha1"`
+	TokenLastEight string    `json:"token_last_eight"`
+	Scopes         []string  `json:"scopes"`
+	Created        time.Time `json:"created_at"`
+	// Indicates that an access token only has access to the specified repositories.  Will be null if the access token
+	// is not limited to a set of specified repositories.
+	Repositories []*RepositoryMeta `json:"repositories"`
 }
 
 // AccessTokenList represents a list of API access token.
-// swagger:response AccessTokenList
 type AccessTokenList []*AccessToken
 
 // CreateAccessTokenOption options when create access token
+// swagger:model CreateAccessTokenOption
 type CreateAccessTokenOption struct {
 	// required: true
-	Name   string   `json:"name" binding:"Required"`
+	Name string `json:"name" binding:"Required"`
+	// example: ["all", "read:activitypub","read:issue", "write:misc", "read:notification", "read:organization", "read:package", "read:repository", "read:user"]
 	Scopes []string `json:"scopes"`
+	// If provided and not-empty, creates an access token with access only to specified repositories.
+	Repositories []*RepoTargetOption `json:"repositories"`
 }
 
 // CreateOAuth2ApplicationOptions holds options to create an oauth2 application

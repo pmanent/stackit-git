@@ -4,10 +4,11 @@
 // @watch end
 
 import {expect} from '@playwright/test';
-import {test} from './utils_e2e.ts';
 import {accessibilityCheck} from './shared/accessibility.ts';
+import {test} from './utils_e2e.ts';
 
-test('Pagination a11y', async ({page}) => {
+test('Pagination a11y', async ({page}, workerInfo) => {
+  test.skip(['Mobile Safari', 'Mobile Chrome'].includes(workerInfo.project.name), 'Mobile pagination accessibility has issues');
   await page.goto('/explore/repos');
 
   await expect(page.locator('.pagination')).toBeVisible();

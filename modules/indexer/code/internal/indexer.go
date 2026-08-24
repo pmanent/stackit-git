@@ -5,7 +5,7 @@ package internal
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -18,6 +18,7 @@ type Indexer interface {
 	Index(ctx context.Context, repo *repo_model.Repository, sha string, changes *RepoChanges) error
 	Delete(ctx context.Context, repoID int64) error
 	Search(ctx context.Context, opts *SearchOptions) (int64, []*SearchResult, []*SearchResultLanguages, error)
+	Formatter() ResultFormatter
 }
 
 type CodeSearchMode int
@@ -25,13 +26,18 @@ type CodeSearchMode int
 const (
 	CodeSearchModeExact CodeSearchMode = iota
 	CodeSearchModeUnion
+	CodeSearchModeFuzzy
 )
 
 func (mode CodeSearchMode) String() string {
-	if mode == CodeSearchModeUnion {
+	switch mode {
+	case CodeSearchModeFuzzy:
+		return "fuzzy"
+	case CodeSearchModeUnion:
 		return "union"
+	default:
+		return "exact"
 	}
-	return "exact"
 }
 
 type SearchOptions struct {
@@ -57,13 +63,17 @@ type dummyIndexer struct {
 }
 
 func (d *dummyIndexer) Index(ctx context.Context, repo *repo_model.Repository, sha string, changes *RepoChanges) error {
-	return fmt.Errorf("indexer is not ready")
+	return errors.New("indexer is not ready")
 }
 
 func (d *dummyIndexer) Delete(ctx context.Context, repoID int64) error {
-	return fmt.Errorf("indexer is not ready")
+	return errors.New("indexer is not ready")
 }
 
 func (d *dummyIndexer) Search(ctx context.Context, opts *SearchOptions) (int64, []*SearchResult, []*SearchResultLanguages, error) {
-	return 0, nil, nil, fmt.Errorf("indexer is not ready")
+	return 0, nil, nil, errors.New("indexer is not ready")
+}
+
+func (d *dummyIndexer) Formatter() ResultFormatter {
+	return nil
 }

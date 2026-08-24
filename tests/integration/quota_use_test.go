@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -15,27 +16,28 @@ import (
 	"testing"
 
 	"forgejo.org/models/db"
+	git_model "forgejo.org/models/git"
 	org_model "forgejo.org/models/organization"
 	quota_model "forgejo.org/models/quota"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
+	"forgejo.org/modules/lfs"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
 	"forgejo.org/routers"
-	forgejo_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
-	gouuid "github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWebQuotaEnforcementRepoMigrate(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -48,7 +50,7 @@ func TestWebQuotaEnforcementRepoMigrate(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoCreate(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -57,7 +59,7 @@ func TestWebQuotaEnforcementRepoCreate(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoFork(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -69,7 +71,7 @@ func TestWebQuotaEnforcementRepoFork(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementIssueAttachment(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -94,7 +96,7 @@ func TestWebQuotaEnforcementIssueAttachment(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementMirrorSync(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -115,7 +117,7 @@ func TestWebQuotaEnforcementMirrorSync(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoContentEditing(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -164,7 +166,7 @@ func TestWebQuotaEnforcementRepoContentEditing(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoBranches(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -227,7 +229,7 @@ func TestWebQuotaEnforcementRepoBranches(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoReleases(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -262,7 +264,7 @@ func TestWebQuotaEnforcementRepoReleases(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoPulls(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -300,7 +302,7 @@ func TestWebQuotaEnforcementRepoPulls(t *testing.T) {
 }
 
 func TestWebQuotaEnforcementRepoTransfer(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -365,8 +367,8 @@ func TestWebQuotaEnforcementRepoTransfer(t *testing.T) {
 	})
 }
 
-func TestGitQuotaEnforcement(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+func TestQuotaGitEnforcement(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -548,8 +550,63 @@ func TestGitQuotaEnforcement(t *testing.T) {
 	})
 }
 
+func TestQuotaGitLfsEnforcement(t *testing.T) {
+	defer test.MockVariableValue(&setting.LFS.StartServer, true)()
+
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		env := createQuotaWebEnv(t)
+		defer env.Cleanup()
+
+		t.Run("UploadHandler", func(t *testing.T) {
+			// Uploading to our repo => 413
+			env.As(t, env.Users.Limited).
+				With(Context{Repo: env.Users.Limited.Repo}).
+				AuthBasic().
+				PushLFSObject().
+				ExpectStatus(http.StatusRequestEntityTooLarge)
+
+			// Uploading to the limited org repo => 413
+			env.As(t, env.Users.Limited).
+				With(Context{Repo: env.Orgs.Limited.Repo}).
+				AuthBasic().
+				PushLFSObject().
+				ExpectStatus(http.StatusRequestEntityTooLarge)
+
+			// Uploading to the unlimited org repo => 200
+			env.As(t, env.Users.Limited).
+				With(Context{Repo: env.Orgs.Unlimited.Repo}).
+				AuthBasic().
+				PushLFSObject().
+				ExpectStatus(http.StatusOK)
+		})
+
+		t.Run("BatchHandler", func(t *testing.T) {
+			// Uploading to our repo => 413
+			env.As(t, env.Users.Limited).
+				With(Context{Repo: env.Users.Limited.Repo}).
+				AuthBasic().
+				BatchPushLFSObject().
+				ExpectStatus(http.StatusRequestEntityTooLarge)
+
+			// Uploading to the limited org repo => 413
+			env.As(t, env.Users.Limited).
+				With(Context{Repo: env.Orgs.Limited.Repo}).
+				AuthBasic().
+				BatchPushLFSObject().
+				ExpectStatus(http.StatusRequestEntityTooLarge)
+
+			// Uploading to the unlimited org repo => 200
+			env.As(t, env.Users.Limited).
+				With(Context{Repo: env.Orgs.Unlimited.Repo}).
+				AuthBasic().
+				BatchPushLFSObject().
+				ExpectStatus(http.StatusOK)
+		})
+	})
+}
+
 func TestQuotaConfigDefault(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		env := createQuotaWebEnv(t)
 		defer env.Cleanup()
 
@@ -640,18 +697,16 @@ type quotaWebEnvAsContext struct {
 
 	Payload Payload
 
-	CSRFPath *string
-
 	gitPath string
 
-	request  *RequestWrapper
-	response *httptest.ResponseRecorder
+	request   *RequestWrapper
+	response  *httptest.ResponseRecorder
+	authBasic bool
 }
 
 type Context struct {
-	Repo     *repo_model.Repository
-	Payload  *Payload
-	CSRFPath *string
+	Repo    *repo_model.Repository
+	Payload *Payload
 }
 
 func (ctx *quotaWebEnvAsContext) With(opts Context) *quotaWebEnvAsContext {
@@ -659,12 +714,7 @@ func (ctx *quotaWebEnvAsContext) With(opts Context) *quotaWebEnvAsContext {
 		ctx.Repo = opts.Repo
 	}
 	if opts.Payload != nil {
-		for key, value := range *opts.Payload {
-			ctx.Payload[key] = value
-		}
-	}
-	if opts.CSRFPath != nil {
-		ctx.CSRFPath = opts.CSRFPath
+		maps.Copy(ctx.Payload, *opts.Payload)
 	}
 	return ctx
 }
@@ -683,10 +733,20 @@ func (ctx *quotaWebEnvAsContext) VisitRepoPage(page string) *quotaWebEnvAsContex
 	return ctx.VisitPage(ctx.Repo.Link() + page)
 }
 
+func (ctx *quotaWebEnvAsContext) AuthBasic() *quotaWebEnvAsContext {
+	ctx.t.Helper()
+	ctx.authBasic = true
+	return ctx
+}
+
 func (ctx *quotaWebEnvAsContext) ExpectStatus(status int) *quotaWebEnvAsContext {
 	ctx.t.Helper()
 
-	ctx.response = ctx.Doer.Session.MakeRequest(ctx.t, ctx.request, status)
+	if ctx.authBasic {
+		ctx.response = MakeRequest(ctx.t, ctx.request.AddBasicAuth(ctx.Doer.User.Name), status)
+	} else {
+		ctx.response = ctx.Doer.Session.MakeRequest(ctx.t, ctx.request, status)
+	}
 
 	return ctx
 }
@@ -697,7 +757,7 @@ func (ctx *quotaWebEnvAsContext) ExpectFlashMessage(value string) {
 	htmlDoc := NewHTMLParser(ctx.t, ctx.response.Body)
 	flashMessage := strings.TrimSpace(htmlDoc.Find(`.flash-message`).Text())
 
-	assert.EqualValues(ctx.t, value, flashMessage)
+	assert.Equal(ctx.t, value, flashMessage)
 }
 
 func (ctx *quotaWebEnvAsContext) ExpectFlashMessageContains(parts ...string) {
@@ -714,7 +774,7 @@ func (ctx *quotaWebEnvAsContext) ExpectFlashMessageContains(parts ...string) {
 func (ctx *quotaWebEnvAsContext) ExpectFlashCookieContains(parts ...string) {
 	ctx.t.Helper()
 
-	flashCookie := ctx.Doer.Session.GetCookie(forgejo_context.CookieNameFlash)
+	flashCookie := ctx.Doer.Session.GetCookie(app_context.CookieNameFlash)
 	assert.NotNil(ctx.t, flashCookie)
 
 	// Need to decode the cookie twice
@@ -756,12 +816,6 @@ func (ctx *quotaWebEnvAsContext) PostToPage(page string) *quotaWebEnvAsContext {
 	ctx.t.Helper()
 
 	payload := ctx.Payload
-	csrfPath := page
-	if ctx.CSRFPath != nil {
-		csrfPath = *ctx.CSRFPath
-	}
-
-	payload["_csrf"] = GetCSRF(ctx.t, ctx.Doer.Session, csrfPath)
 
 	ctx.request = NewRequestWithValues(ctx.t, "POST", page, payload)
 
@@ -771,8 +825,7 @@ func (ctx *quotaWebEnvAsContext) PostToPage(page string) *quotaWebEnvAsContext {
 func (ctx *quotaWebEnvAsContext) PostToRepoPage(page string) *quotaWebEnvAsContext {
 	ctx.t.Helper()
 
-	csrfPath := ctx.Repo.Link()
-	return ctx.With(Context{CSRFPath: &csrfPath}).PostToPage(ctx.Repo.Link() + page)
+	return ctx.PostToPage(ctx.Repo.Link() + page)
 }
 
 func (ctx *quotaWebEnvAsContext) CreateAttachment(filename, attachmentType string) *quotaWebEnvAsContext {
@@ -790,10 +843,7 @@ func (ctx *quotaWebEnvAsContext) CreateAttachment(filename, attachmentType strin
 	err = writer.Close()
 	require.NoError(ctx.t, err)
 
-	csrf := GetCSRF(ctx.t, ctx.Doer.Session, ctx.Repo.Link())
-
 	ctx.request = NewRequestWithBody(ctx.t, "POST", fmt.Sprintf("%s/%s/attachments", ctx.Repo.Link(), attachmentType), body)
-	ctx.request.Header.Add("X-Csrf-Token", csrf)
 	ctx.request.Header.Add("Content-Type", writer.FormDataContentType())
 
 	return ctx
@@ -809,6 +859,42 @@ func (ctx *quotaWebEnvAsContext) CreateReleaseAttachment(filename string) *quota
 	ctx.t.Helper()
 
 	return ctx.CreateAttachment(filename, "releases")
+}
+
+func (ctx *quotaWebEnvAsContext) PushLFSObject() *quotaWebEnvAsContext {
+	ctx.t.Helper()
+
+	p := lfs.Pointer{Oid: "6ccce4863b70f258d691f59609d31b4502e1ba5199942d3bc5d35d17a4ce771d", Size: 5}
+	ctx.request = NewRequestWithBody(ctx.t, "PUT",
+		fmt.Sprintf("%s.git/info/lfs/objects/%s/%d",
+			ctx.Repo.Link(), p.Oid, p.Size), strings.NewReader("gitea"))
+
+	ctx.t.Cleanup(func() {
+		git_model.RemoveLFSMetaObjectByOid(db.DefaultContext, ctx.Repo.ID, p.Oid)
+	})
+
+	return ctx
+}
+
+func (ctx *quotaWebEnvAsContext) BatchPushLFSObject() *quotaWebEnvAsContext {
+	ctx.t.Helper()
+
+	batch := &lfs.BatchRequest{
+		Operation: "upload",
+		Objects: []lfs.Pointer{
+			{Oid: "d6f175817f886ec6fbbc1515326465fa96c3bfd54a4ea06cfd6dbbd8340e0153", Size: 1},
+		},
+	}
+	ctx.request = NewRequestWithJSON(ctx.t, "POST",
+		fmt.Sprintf("%s.git/info/lfs/objects/batch", ctx.Repo.Link()), batch).
+		SetHeader("Accept", lfs.AcceptHeader).
+		SetHeader("Content-Type", lfs.MediaType)
+
+	ctx.t.Cleanup(func() {
+		git_model.RemoveLFSMetaObjectByOid(db.DefaultContext, ctx.Repo.ID, batch.Objects[0].Oid)
+	})
+
+	return ctx
 }
 
 func (ctx *quotaWebEnvAsContext) WithoutQuota(task func(ctx *quotaWebEnvAsContext)) *quotaWebEnvAsContext {
@@ -949,12 +1035,10 @@ func (env *quotaWebEnv) RunVisitAndPostToRepoPageTests(t *testing.T, page string
 
 	// Posting as the limited user, to the limited repo, fails due to being over
 	// quota.
-	csrfPath := env.Users.Limited.Repo.Link()
 	env.As(t, env.Users.Limited).
 		With(Context{
-			Payload:  payload,
-			CSRFPath: &csrfPath,
-			Repo:     env.Users.Limited.Repo,
+			Payload: payload,
+			Repo:    env.Users.Limited.Repo,
 		}).
 		PostToRepoPage(page).
 		ExpectStatus(http.StatusRequestEntityTooLarge)
@@ -967,12 +1051,10 @@ func (env *quotaWebEnv) RunVisitAndPostToRepoPageTests(t *testing.T, page string
 
 	// Posting as the limited user, to a limited org's repo, fails for the same
 	// reason.
-	csrfPath = env.Orgs.Limited.Repo.Link()
 	env.As(t, env.Users.Limited).
 		With(Context{
-			Payload:  payload,
-			CSRFPath: &csrfPath,
-			Repo:     env.Orgs.Limited.Repo,
+			Payload: payload,
+			Repo:    env.Orgs.Limited.Repo,
 		}).
 		PostToRepoPage(page).
 		ExpectStatus(http.StatusRequestEntityTooLarge)
@@ -984,12 +1066,10 @@ func (env *quotaWebEnv) RunVisitAndPostToRepoPageTests(t *testing.T, page string
 		ExpectStatus(http.StatusOK)
 
 	// Posting as the limited user, to an unlimited org's repo, succeeds.
-	csrfPath = env.Orgs.Unlimited.Repo.Link()
 	env.As(t, env.Users.Limited).
 		With(Context{
-			Payload:  payload,
-			CSRFPath: &csrfPath,
-			Repo:     env.Orgs.Unlimited.Repo,
+			Payload: payload,
+			Repo:    env.Orgs.Unlimited.Repo,
 		}).
 		PostToRepoPage(page).
 		ExpectStatus(successStatus)
@@ -1048,13 +1128,13 @@ func createQuotaWebEnv(t *testing.T) *quotaWebEnv {
 		user := quotaWebEnvUser{}
 
 		// Create the user
-		userName := gouuid.NewString()
-		apiCreateUser(t, userName)
-		user.User = unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: userName})
-		user.Session = loginUser(t, userName)
+		user.User = forgery.CreateUser(t, nil)
+		user.Session = loginUser(t, user.User.Name)
 
 		// Create a repository for the user
-		repo, _, _ := tests.CreateDeclarativeRepoWithOptions(t, user.User, tests.DeclarativeRepoOptions{})
+		repo := forgery.CreateRepository(t, user.User, &forgery.CreateRepositoryOptions{
+			Files: forgery.FilesInit{},
+		})
 		user.Repo = repo
 
 		return user
@@ -1095,25 +1175,21 @@ func createQuotaWebEnv(t *testing.T) *quotaWebEnv {
 		org := quotaWebEnvOrg{}
 
 		// Create the org
-		userName := gouuid.NewString()
-		org.Org = &org_model.Organization{
-			Name: userName,
-		}
-		err := org_model.CreateOrganization(db.DefaultContext, org.Org, owner)
-		require.NoError(t, err)
+		org.Org = forgery.CreateOrganisation(t, owner)
 
 		// Create a repository for the org
-		orgUser := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: org.Org.ID})
-		repo, _, _ := tests.CreateDeclarativeRepoWithOptions(t, orgUser, tests.DeclarativeRepoOptions{})
+		repo := forgery.CreateRepository(t, org.Org.AsUser(), &forgery.CreateRepositoryOptions{
+			Files: forgery.FilesInit{},
+		})
 		org.Repo = repo
 
 		// Create a quota group for them
-		group, err := quota_model.CreateGroup(db.DefaultContext, userName)
+		group, err := quota_model.CreateGroup(db.DefaultContext, org.Org.Name)
 		require.NoError(t, err)
 		org.QuotaGroup = group
 
 		// Create a rule
-		rule, err := quota_model.CreateRule(db.DefaultContext, userName, limit, quota_model.LimitSubjects{quota_model.LimitSubjectSizeAll})
+		rule, err := quota_model.CreateRule(db.DefaultContext, org.Org.Name, limit, quota_model.LimitSubjects{quota_model.LimitSubjectSizeAll})
 		require.NoError(t, err)
 		org.QuotaRule = rule
 

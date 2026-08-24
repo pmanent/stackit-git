@@ -10,72 +10,73 @@ import (
 	"testing"
 
 	repo_model "forgejo.org/models/repo"
-	unit_model "forgejo.org/models/unit"
-	"forgejo.org/models/unittest"
-	user_model "forgejo.org/models/user"
-	files_service "forgejo.org/services/repository/files"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCitation(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
-		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
-
-		session := loginUser(t, user.LoginName)
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		user := forgery.CreateUser(t, nil)
 
 		t.Run("No citation", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
-			repo, _, f := tests.CreateDeclarativeRepo(t, user, "citation-no-citation", []unit_model.Type{unit_model.TypeCode}, nil, nil)
-			defer f()
+			repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					"README": forgery.MapFile("no citation file"),
+				},
+			})
 
-			testCitationButtonExists(t, session, repo, "", false)
+			testCitationButtonExists(t, repo, "")
 		})
 
 		t.Run("cff citation", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
-			repo, f := createRepoWithEmptyFile(t, user, "citation-cff", "CITATION.cff")
-			defer f()
+			repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					"CITATION.cff": forgery.MapFile("some content"),
+				},
+			})
 
-			testCitationButtonExists(t, session, repo, "CITATION.cff", true)
+			testCitationButtonExists(t, repo, "CITATION.cff")
 		})
 
 		t.Run("bib citation", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
-			repo, f := createRepoWithEmptyFile(t, user, "citation-bib", "CITATION.bib")
-			defer f()
+			repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+				Files: forgery.MapFS{
+					"CITATION.bib": forgery.MapFile("some content"),
+				},
+			})
 
-			testCitationButtonExists(t, session, repo, "CITATION.bib", true)
+			testCitationButtonExists(t, repo, "CITATION.bib")
 		})
 	})
 }
 
-func testCitationButtonExists(t *testing.T, session *TestSession, repo *repo_model.Repository, file string, exists bool) {
+func testCitationButtonExists(t *testing.T, repo *repo_model.Repository, file string) {
 	req := NewRequest(t, "GET", repo.HTMLURL())
-	resp := session.MakeRequest(t, req, http.StatusOK)
+	resp := MakeRequest(t, req, http.StatusOK)
 	doc := NewHTMLParser(t, resp.Body)
 
-	doc.AssertElement(t, "#cite-repo-button", exists)
-
-	if exists {
-		href, exists := doc.doc.Find("#goto-citation-btn").Attr("href")
-		assert.True(t, exists)
-
-		assert.True(t, strings.HasSuffix(href, file))
+	links := doc.Find("a.citation-link")
+	if file == "" {
+		assert.Equal(t, 0, links.Length())
+		return
 	}
-}
 
-func createRepoWithEmptyFile(t *testing.T, user *user_model.User, repoName, fileName string) (*repo_model.Repository, func()) {
-	repo, _, f := tests.CreateDeclarativeRepo(t, user, repoName, []unit_model.Type{unit_model.TypeCode}, nil, []*files_service.ChangeRepoFile{
-		{
-			Operation: "create",
-			TreePath:  fileName,
-		},
-	})
+	assert.Equal(t, 1, links.Length())
+	href, exists := links.Attr("href")
+	assert.True(t, exists)
+	assert.True(t, strings.HasSuffix(href, file))
 
-	return repo, f
+	// request the citation file to check for webcomponent presence
+	req = NewRequest(t, "GET", href)
+	resp = MakeRequest(t, req, http.StatusOK)
+	doc = NewHTMLParser(t, resp.Body)
+	doc.AssertElement(t, `lazy-webc[tag="citation-information"]`, true)
 }

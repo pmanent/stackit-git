@@ -50,6 +50,25 @@ func (err ErrUserNotExist) Unwrap() error {
 	return util.ErrNotExist
 }
 
+// ErrUserWrongType is returned if the user is of the wrong type (i.e. is an org when a user was expected)
+type ErrUserWrongType struct {
+	UID int64
+}
+
+func IsErrUserWrongType(err error) bool {
+	_, ok := err.(ErrUserNotExist)
+	return ok
+}
+
+func (err ErrUserWrongType) Error() string {
+	return fmt.Sprintf("user is the wrong user type [uid: %d]", err.UID)
+}
+
+// Unwrap unwraps this error as a ErrNotExist error
+func (err ErrUserWrongType) Unwrap() error {
+	return util.ErrInvalidArgument
+}
+
 // ErrUserProhibitLogin represents a "ErrUserProhibitLogin" kind of error.
 type ErrUserProhibitLogin struct {
 	UID  int64
@@ -84,5 +103,18 @@ func (err ErrUserIsNotLocal) Error() string {
 // IsErrUserIsNotLocal
 func IsErrUserIsNotLocal(err error) bool {
 	_, ok := err.(ErrUserIsNotLocal)
+	return ok
+}
+
+type ErrFederatedUserNotExists struct {
+	Identifier string
+}
+
+func (err ErrFederatedUserNotExists) Error() string {
+	return fmt.Sprintf("No cached federated user found for identifier %s", err.Identifier)
+}
+
+func IsErrFederatedUserNotExists(err error) bool {
+	_, ok := err.(ErrFederatedUserNotExists)
 	return ok
 }

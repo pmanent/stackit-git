@@ -39,7 +39,7 @@ EXTEND = true
 	_, err = getCronSettings(cfg, "test", extended)
 	require.NoError(t, err)
 	assert.True(t, extended.Base)
-	assert.EqualValues(t, "white rabbit", extended.Second)
+	assert.Equal(t, "white rabbit", extended.Second)
 	assert.True(t, extended.Extend)
 }
 

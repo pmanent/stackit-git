@@ -144,7 +144,7 @@ func (b *Indexer) addUpdate(ctx context.Context, batchWriter git.WriteCloserErro
 	fileContents, err := io.ReadAll(io.LimitReader(batchReader, size))
 	if err != nil {
 		return nil, err
-	} else if !typesniffer.DetectContentType(fileContents).IsText() {
+	} else if !typesniffer.DetectContentType(fileContents, update.Filename).IsText() {
 		// FIXME: UTF-16 files will probably fail here
 		return nil, nil
 	}
@@ -335,11 +335,14 @@ func extractAggs(searchResult *elastic.SearchResult) []*internal.SearchResultLan
 // Search searches for codes and language stats by given conditions.
 func (b *Indexer) Search(ctx context.Context, opts *internal.SearchOptions) (int64, []*internal.SearchResult, []*internal.SearchResultLanguages, error) {
 	searchType := esMultiMatchTypePhrase
-	if opts.Mode == internal.CodeSearchModeUnion {
+	if opts.Mode == internal.CodeSearchModeUnion || opts.Mode == internal.CodeSearchModeFuzzy {
 		searchType = esMultiMatchTypeBestFields
 	}
 
 	kwQuery := elastic.NewMultiMatchQuery(opts.Keyword, "content").Type(searchType)
+	if opts.Mode == internal.CodeSearchModeFuzzy {
+		kwQuery = kwQuery.Fuzziness("AUTO")
+	}
 	query := elastic.NewBoolQuery()
 	query = query.Must(kwQuery)
 	if len(opts.RepoIDs) > 0 {
@@ -414,4 +417,8 @@ func (b *Indexer) Search(ctx context.Context, opts *internal.SearchOptions) (int
 	total, hits, _, err := convertResult(searchResult, kw, pageSize)
 
 	return total, hits, extractAggs(countResult), err
+}
+
+func (b *Indexer) Formatter() internal.ResultFormatter {
+	return nil
 }

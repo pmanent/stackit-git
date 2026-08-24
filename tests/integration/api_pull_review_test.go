@@ -6,6 +6,7 @@ package integration
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 
 	auth_model "forgejo.org/models/auth"
@@ -15,6 +16,7 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	issue_service "forgejo.org/services/issue"
 	"forgejo.org/tests"
@@ -85,7 +87,7 @@ func TestAPIPullReviewCreateDeleteComment(t *testing.T) {
 				resp := MakeRequest(t, req, http.StatusOK)
 				DecodeJSON(t, resp, &review)
 				require.EqualValues(t, string(event), review.State)
-				require.EqualValues(t, 0, review.CodeCommentsCount)
+				require.Equal(t, 0, review.CodeCommentsCount)
 			}
 
 			{
@@ -94,7 +96,7 @@ func TestAPIPullReviewCreateDeleteComment(t *testing.T) {
 				resp := MakeRequest(t, req, http.StatusOK)
 				var getReview api.PullReview
 				DecodeJSON(t, resp, &getReview)
-				require.EqualValues(t, getReview, review)
+				require.Equal(t, getReview, review)
 			}
 			requireReviewCount(2)
 
@@ -109,11 +111,13 @@ func TestAPIPullReviewCreateDeleteComment(t *testing.T) {
 				}).AddTokenAuth(token)
 				resp := MakeRequest(t, req, http.StatusOK)
 				DecodeJSON(t, resp, &reviewComment)
-				assert.EqualValues(t, review.ID, reviewComment.ReviewID)
-				assert.EqualValues(t, newCommentBody, reviewComment.Body)
-				assert.EqualValues(t, reviewLine, reviewComment.OldLineNum)
-				assert.EqualValues(t, 0, reviewComment.LineNum)
-				assert.EqualValues(t, path, reviewComment.Path)
+				assert.Equal(t, review.ID, reviewComment.ReviewID)
+				assert.Equal(t, newCommentBody, reviewComment.Body)
+				// we sent OldLineNum: 1, but that line of code isn't modified in this PR, triggering the PR's logic
+				// which standardizes comments on non-modified lines of code to be on the right-hand-side of the diff:
+				assert.EqualValues(t, 0, reviewComment.OldLineNum)
+				assert.EqualValues(t, reviewLine, reviewComment.LineNum)
+				assert.Equal(t, path, reviewComment.Path)
 			}
 
 			{
@@ -123,7 +127,7 @@ func TestAPIPullReviewCreateDeleteComment(t *testing.T) {
 
 				var comment api.PullReviewComment
 				DecodeJSON(t, resp, &comment)
-				assert.EqualValues(t, reviewComment, comment)
+				assert.Equal(t, reviewComment, comment)
 			}
 
 			{
@@ -148,6 +152,109 @@ func TestAPIPullReviewCreateDeleteComment(t *testing.T) {
 	}
 }
 
+func TestAPIPullReviewMultiLineComment(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	pullIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: 3})
+	require.NoError(t, pullIssue.LoadAttributes(db.DefaultContext))
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: pullIssue.RepoID})
+
+	session := loginUser(t, "user2")
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+
+	// Create a review with a multi-line comment (extra_lines_count > 0)
+	var review api.PullReview
+	req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", repo.OwnerName, repo.Name, pullIssue.Index), &api.CreatePullReviewOptions{
+		Body:  "multi-line review",
+		Event: "COMMENT",
+		Comments: []api.CreatePullReviewComment{
+			{
+				Path:            "README.md",
+				Body:            "multi-line comment on lines 1-3",
+				NewLineNum:      1,
+				ExtraLinesCount: 2,
+			},
+		},
+	}).AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+	DecodeJSON(t, resp, &review)
+	assert.EqualValues(t, "COMMENT", review.State)
+	assert.Equal(t, 1, review.CodeCommentsCount)
+
+	// Get the review comments and verify extra_lines_count is returned
+	req = NewRequestf(t, http.MethodGet, "/api/v1/repos/%s/%s/pulls/%d/reviews/%d/comments", repo.OwnerName, repo.Name, pullIssue.Index, review.ID).
+		AddTokenAuth(token)
+	resp = MakeRequest(t, req, http.StatusOK)
+	var reviewComments []*api.PullReviewComment
+	DecodeJSON(t, resp, &reviewComments)
+	require.Len(t, reviewComments, 1)
+	assert.EqualValues(t, 2, reviewComments[0].ExtraLinesCount)
+	assert.EqualValues(t, 1, reviewComments[0].LineNum)
+	assert.Equal(t, "multi-line comment on lines 1-3", reviewComments[0].Body)
+
+	// Create a review with a single-line comment (extra_lines_count = 0, backward compat)
+	var review2 api.PullReview
+	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", repo.OwnerName, repo.Name, pullIssue.Index), &api.CreatePullReviewOptions{
+		Body:  "single-line review",
+		Event: "COMMENT",
+		Comments: []api.CreatePullReviewComment{
+			{
+				Path:       "README.md",
+				Body:       "single-line comment",
+				NewLineNum: 1,
+			},
+		},
+	}).AddTokenAuth(token)
+	resp = MakeRequest(t, req, http.StatusOK)
+	DecodeJSON(t, resp, &review2)
+
+	// Get the review comments and verify extra_lines_count is 0
+	req = NewRequestf(t, http.MethodGet, "/api/v1/repos/%s/%s/pulls/%d/reviews/%d/comments", repo.OwnerName, repo.Name, pullIssue.Index, review2.ID).
+		AddTokenAuth(token)
+	resp = MakeRequest(t, req, http.StatusOK)
+	var singleComments []*api.PullReviewComment
+	DecodeJSON(t, resp, &singleComments)
+	require.Len(t, singleComments, 1)
+	assert.EqualValues(t, 0, singleComments[0].ExtraLinesCount)
+
+	// Create a review with negative extra_lines_count → should be rejected
+	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", repo.OwnerName, repo.Name, pullIssue.Index), &api.CreatePullReviewOptions{
+		Body:  "negative review",
+		Event: "COMMENT",
+		Comments: []api.CreatePullReviewComment{
+			{
+				Path:            "README.md",
+				Body:            "negative extra_lines_count",
+				NewLineNum:      1,
+				ExtraLinesCount: -1,
+			},
+		},
+	}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusUnprocessableEntity)
+
+	// Create a review with a range exceeding setting.UI.MaxCodeCommentLines → should be rejected
+	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", repo.OwnerName, repo.Name, pullIssue.Index), &api.CreatePullReviewOptions{
+		Body:  "too long review",
+		Event: "COMMENT",
+		Comments: []api.CreatePullReviewComment{
+			{
+				Path:            "README.md",
+				Body:            "extra_lines_count over the limit",
+				NewLineNum:      1,
+				ExtraLinesCount: int64(setting.UI.MaxCodeCommentLines), // range spans MaxCodeCommentLines+1 lines
+			},
+		},
+	}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusUnprocessableEntity)
+
+	// Cleanup
+	req = NewRequestf(t, http.MethodDelete, "/api/v1/repos/%s/%s/pulls/%d/reviews/%d", repo.OwnerName, repo.Name, pullIssue.Index, review.ID).
+		AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+	req = NewRequestf(t, http.MethodDelete, "/api/v1/repos/%s/%s/pulls/%d/reviews/%d", repo.OwnerName, repo.Name, pullIssue.Index, review2.ID).
+		AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusNoContent)
+}
+
 func TestAPIPullReview(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	pullIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: 3})
@@ -167,17 +274,17 @@ func TestAPIPullReview(t *testing.T) {
 		return
 	}
 	for _, r := range reviews {
-		assert.EqualValues(t, pullIssue.HTMLURL(), r.HTMLPullURL)
+		assert.Equal(t, pullIssue.HTMLURL(), r.HTMLPullURL)
 	}
 	assert.EqualValues(t, 8, reviews[3].ID)
 	assert.EqualValues(t, "APPROVED", reviews[3].State)
-	assert.EqualValues(t, 0, reviews[3].CodeCommentsCount)
+	assert.Equal(t, 0, reviews[3].CodeCommentsCount)
 	assert.True(t, reviews[3].Stale)
 	assert.False(t, reviews[3].Official)
 
 	assert.EqualValues(t, 10, reviews[5].ID)
 	assert.EqualValues(t, "REQUEST_CHANGES", reviews[5].State)
-	assert.EqualValues(t, 1, reviews[5].CodeCommentsCount)
+	assert.Equal(t, 1, reviews[5].CodeCommentsCount)
 	assert.EqualValues(t, -1, reviews[5].Reviewer.ID) // ghost user
 	assert.False(t, reviews[5].Stale)
 	assert.True(t, reviews[5].Official)
@@ -188,13 +295,13 @@ func TestAPIPullReview(t *testing.T) {
 	resp = MakeRequest(t, req, http.StatusOK)
 	var review api.PullReview
 	DecodeJSON(t, resp, &review)
-	assert.EqualValues(t, *reviews[3], review)
+	assert.Equal(t, *reviews[3], review)
 
 	req = NewRequestf(t, "GET", "/api/v1/repos/%s/%s/pulls/%d/reviews/%d", repo.OwnerName, repo.Name, pullIssue.Index, reviews[5].ID).
 		AddTokenAuth(token)
 	resp = MakeRequest(t, req, http.StatusOK)
 	DecodeJSON(t, resp, &review)
-	assert.EqualValues(t, *reviews[5], review)
+	assert.Equal(t, *reviews[5], review)
 
 	// test GetPullReviewComments
 	comment := unittest.AssertExistsAndLoadBean(t, &issues_model.Comment{ID: 7})
@@ -204,11 +311,11 @@ func TestAPIPullReview(t *testing.T) {
 	var reviewComments []*api.PullReviewComment
 	DecodeJSON(t, resp, &reviewComments)
 	assert.Len(t, reviewComments, 1)
-	assert.EqualValues(t, "Ghost", reviewComments[0].Poster.UserName)
-	assert.EqualValues(t, "a review from a deleted user", reviewComments[0].Body)
-	assert.EqualValues(t, comment.ID, reviewComments[0].ID)
+	assert.Equal(t, "Ghost", reviewComments[0].Poster.UserName)
+	assert.Equal(t, "a review from a deleted user", reviewComments[0].Body)
+	assert.Equal(t, comment.ID, reviewComments[0].ID)
 	assert.EqualValues(t, comment.UpdatedUnix, reviewComments[0].Updated.Unix())
-	assert.EqualValues(t, comment.HTMLURL(db.DefaultContext), reviewComments[0].HTMLURL)
+	assert.Equal(t, comment.HTMLURL(db.DefaultContext), reviewComments[0].HTMLURL)
 
 	// test CreatePullReview
 	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", repo.OwnerName, repo.Name, pullIssue.Index), &api.CreatePullReviewOptions{
@@ -237,7 +344,7 @@ func TestAPIPullReview(t *testing.T) {
 	DecodeJSON(t, resp, &review)
 	assert.EqualValues(t, 6, review.ID)
 	assert.EqualValues(t, "PENDING", review.State)
-	assert.EqualValues(t, 3, review.CodeCommentsCount)
+	assert.Equal(t, 3, review.CodeCommentsCount)
 
 	// test SubmitPullReview
 	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews/%d", repo.OwnerName, repo.Name, pullIssue.Index, review.ID), &api.SubmitPullReviewOptions{
@@ -248,7 +355,7 @@ func TestAPIPullReview(t *testing.T) {
 	DecodeJSON(t, resp, &review)
 	assert.EqualValues(t, 6, review.ID)
 	assert.EqualValues(t, "APPROVED", review.State)
-	assert.EqualValues(t, 3, review.CodeCommentsCount)
+	assert.Equal(t, 3, review.CodeCommentsCount)
 
 	// test dismiss review
 	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews/%d/dismissals", repo.OwnerName, repo.Name, pullIssue.Index, review.ID), &api.DismissPullReviewOptions{
@@ -275,7 +382,7 @@ func TestAPIPullReview(t *testing.T) {
 	resp = MakeRequest(t, req, http.StatusOK)
 	DecodeJSON(t, resp, &review)
 	assert.EqualValues(t, "COMMENT", review.State)
-	assert.EqualValues(t, 0, review.CodeCommentsCount)
+	assert.Equal(t, 0, review.CodeCommentsCount)
 	req = NewRequestf(t, http.MethodDelete, "/api/v1/repos/%s/%s/pulls/%d/reviews/%d", repo.OwnerName, repo.Name, pullIssue.Index, review.ID).
 		AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusNoContent)
@@ -303,7 +410,7 @@ func TestAPIPullReview(t *testing.T) {
 	resp = MakeRequest(t, req, http.StatusOK)
 	DecodeJSON(t, resp, &commentReview)
 	assert.EqualValues(t, "COMMENT", commentReview.State)
-	assert.EqualValues(t, 2, commentReview.CodeCommentsCount)
+	assert.Equal(t, 2, commentReview.CodeCommentsCount)
 	assert.Empty(t, commentReview.Body)
 	assert.False(t, commentReview.Dismissed)
 
@@ -318,8 +425,8 @@ func TestAPIPullReview(t *testing.T) {
 	resp = MakeRequest(t, req, http.StatusOK)
 	DecodeJSON(t, resp, &commentReview)
 	assert.EqualValues(t, "COMMENT", commentReview.State)
-	assert.EqualValues(t, 0, commentReview.CodeCommentsCount)
-	assert.EqualValues(t, commentBody, commentReview.Body)
+	assert.Equal(t, 0, commentReview.CodeCommentsCount)
+	assert.Equal(t, commentBody, commentReview.Body)
 	assert.False(t, commentReview.Dismissed)
 
 	// test CreatePullReview Comment without body and no comments
@@ -331,7 +438,7 @@ func TestAPIPullReview(t *testing.T) {
 	resp = MakeRequest(t, req, http.StatusUnprocessableEntity)
 	errMap := make(map[string]any)
 	json.Unmarshal(resp.Body.Bytes(), &errMap)
-	assert.EqualValues(t, "review event COMMENT requires a body or a comment", errMap["message"].(string))
+	assert.Equal(t, "review event COMMENT requires a body or a comment", errMap["message"].(string))
 
 	// test get review requests
 	// to make it simple, use same api with get review
@@ -345,14 +452,14 @@ func TestAPIPullReview(t *testing.T) {
 	DecodeJSON(t, resp, &reviews)
 	assert.EqualValues(t, 11, reviews[0].ID)
 	assert.EqualValues(t, "REQUEST_REVIEW", reviews[0].State)
-	assert.EqualValues(t, 0, reviews[0].CodeCommentsCount)
+	assert.Equal(t, 0, reviews[0].CodeCommentsCount)
 	assert.False(t, reviews[0].Stale)
 	assert.True(t, reviews[0].Official)
-	assert.EqualValues(t, "test_team", reviews[0].ReviewerTeam.Name)
+	assert.Equal(t, "test_team", reviews[0].ReviewerTeam.Name)
 
 	assert.EqualValues(t, 12, reviews[1].ID)
 	assert.EqualValues(t, "REQUEST_REVIEW", reviews[1].State)
-	assert.EqualValues(t, 0, reviews[0].CodeCommentsCount)
+	assert.Equal(t, 0, reviews[0].CodeCommentsCount)
 	assert.False(t, reviews[1].Stale)
 	assert.True(t, reviews[1].Official)
 	assert.EqualValues(t, 1, reviews[1].Reviewer.ID)
@@ -484,6 +591,101 @@ func TestAPIPullReviewRequest(t *testing.T) {
 	req = NewRequestWithJSON(t, http.MethodDelete, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/requested_reviewers", repo3.OwnerName, repo3.Name, pullIssue12.Index), &api.PullReviewRequestOptions{}).
 		AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusNoContent)
+}
+
+func TestAPIPullReviewRequestAccessTokenResources(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		session := loginUser(t, "user2")
+		writeToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteIssue, auth_model.AccessTokenScopeWriteRepository)
+
+		for _, repo := range []string{"user2/repo1", "user2/repo2", "org3/repo3"} {
+			// For our three target repos, we'll need to enable pull requests for this test case.
+			trueBool := true
+			req := NewRequestWithJSON(t, "PATCH", fmt.Sprintf("/api/v1/repos/%s", repo), &api.EditRepoOption{
+				HasPullRequests: &trueBool,
+			}).AddTokenAuth(writeToken)
+			MakeRequest(t, req, http.StatusOK)
+
+			// Add user `user5` as a collaborator on all the target repos as well, so that we can successfully request
+			// review from them.
+			write := "write"
+			req = NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/collaborators/user5", repo), &api.AddCollaboratorOption{
+				Permission: &write,
+			}).AddTokenAuth(writeToken)
+			MakeRequest(t, req, http.StatusNoContent)
+		}
+
+		// Create a pull request on each of the target test repos.
+		var repo1PullRequest, repo2PullRequest, repo3PullRequest api.PullRequest
+		createPullRequest := func(repoFullname string, pullRequest *api.PullRequest) {
+			req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/contents", repoFullname),
+				&api.ChangeFilesOptions{
+					FileOptions: api.FileOptions{
+						NewBranchName: "prtest",
+					},
+					Files: []*api.ChangeFileOperation{},
+				}).AddTokenAuth(writeToken)
+			MakeRequest(t, req, http.StatusCreated)
+
+			req = NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/pulls", repoFullname), &api.CreatePullRequestOption{
+				Body:  "repo1 issue dependency",
+				Title: "important dependency",
+				Base:  "master",
+				Head:  "prtest",
+			}).AddTokenAuth(writeToken)
+			resp := MakeRequest(t, req, http.StatusCreated)
+			DecodeJSON(t, resp, pullRequest)
+		}
+		createPullRequest("user2/repo1", &repo1PullRequest)
+		createPullRequest("user2/repo2", &repo2PullRequest)
+		createPullRequest("org3/repo3", &repo3PullRequest)
+
+		// The core of the test is to see whether we can add pull request reviewers to the repos, using access tokens
+		// with different permission scopes (all, public-only, fine-grained access tokens).  Define the test:
+		testCase := func(t *testing.T, repo string, pullRequest *api.PullRequest, token string, expectedStatus int) {
+			req := NewRequestWithJSON(t,
+				"POST",
+				fmt.Sprintf("/api/v1/repos/%s/pulls/%d/requested_reviewers", repo, pullRequest.Index),
+				&api.PullReviewRequestOptions{
+					Reviewers: []string{"user5"},
+				}).
+				AddTokenAuth(token)
+			MakeRequest(t, req, expectedStatus)
+		}
+
+		t.Run("all access token", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			allToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+
+			testCase(t, "user2/repo1", &repo1PullRequest, allToken, http.StatusCreated) // public user2/repo1
+			testCase(t, "user2/repo2", &repo2PullRequest, allToken, http.StatusCreated) // private user2/repo2
+			testCase(t, "org3/repo3", &repo3PullRequest, allToken, http.StatusCreated)  // private org3/repo3
+		})
+
+		t.Run("public-only access token", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			publicOnlyToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopePublicOnly, auth_model.AccessTokenScopeWriteRepository)
+
+			testCase(t, "user2/repo1", &repo1PullRequest, publicOnlyToken, http.StatusCreated)  // public user2/repo1
+			testCase(t, "user2/repo2", &repo2PullRequest, publicOnlyToken, http.StatusNotFound) // private user2/repo2
+			testCase(t, "org3/repo3", &repo3PullRequest, publicOnlyToken, http.StatusNotFound)  // private org3/repo3
+		})
+
+		t.Run("specific repo access token", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			repo2OnlyToken := createFineGrainedRepoAccessToken(t, "user2",
+				[]auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteRepository},
+				[]int64{3},
+			)
+
+			testCase(t, "user2/repo1", &repo1PullRequest, repo2OnlyToken, http.StatusForbidden) // public user2/repo1, read-only outside of the auth'd repos
+			testCase(t, "user2/repo2", &repo2PullRequest, repo2OnlyToken, http.StatusNotFound)  // private user2/repo2, outside of fine-grain
+			testCase(t, "org3/repo3", &repo3PullRequest, repo2OnlyToken, http.StatusCreated)    // private org3/repo3
+		})
+	})
 }
 
 func TestAPIPullReviewStayDismissed(t *testing.T) {

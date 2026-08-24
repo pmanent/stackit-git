@@ -104,7 +104,7 @@ type EventSource struct {
 	Owner      *user_model.User
 }
 
-// handle delivers hook tasks
+// handler delivers hook tasks
 func handler(items ...int64) []int64 {
 	ctx := graceful.GetManager().HammerContext()
 
@@ -210,6 +210,32 @@ func PrepareWebhook(ctx context.Context, w *webhook_model.Webhook, event webhook
 	return enqueueHookTask(task.ID)
 }
 
+// PrepareTestWebhook creates a hook task for test delivery and enqueues it for processing.
+// It simulates a "push" event even though the webhook might not be enabled for that event.
+func PrepareTestWebhook(ctx context.Context, w *webhook_model.Webhook, p api.Payloader) error {
+	// Skip sending if webhooks are disabled.
+	if setting.DisableWebhooks {
+		return errors.New("webhooks are globally disabled")
+	}
+
+	payload, err := p.JSONPayload()
+	if err != nil {
+		return fmt.Errorf("JSONPayload for Test: %w", err)
+	}
+
+	task, err := webhook_model.CreateHookTask(ctx, &webhook_model.HookTask{
+		HookID:         w.ID,
+		PayloadContent: string(payload),
+		EventType:      webhook_module.HookEventPush,
+		PayloadVersion: 2,
+	})
+	if err != nil {
+		return fmt.Errorf("CreateHookTask for Test: %w", err)
+	}
+
+	return enqueueHookTask(task.ID)
+}
+
 // PrepareWebhooks adds new webhooks to task queue for given payload.
 func PrepareWebhooks(ctx context.Context, source EventSource, event webhook_module.HookEventType, p api.Payloader) error {
 	owner := source.Owner
@@ -242,7 +268,7 @@ func PrepareWebhooks(ctx context.Context, source EventSource, event webhook_modu
 	}
 
 	// Add any admin-defined system webhooks
-	systemHooks, err := webhook_model.GetSystemWebhooks(ctx, true)
+	systemHooks, _, err := webhook_model.GetSystemWebhooks(ctx, db.ListOptions{ListAll: true}, true)
 	if err != nil {
 		return fmt.Errorf("GetSystemWebhooks: %w", err)
 	}

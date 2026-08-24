@@ -10,6 +10,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/log"
+	"forgejo.org/modules/setting"
 )
 
 // Indexer defines an interface to index repository stats
@@ -38,6 +39,9 @@ func Init() error {
 // populateRepoIndexer populate the repo indexer with pre-existing data. This
 // should only be run when the indexer is created for the first time.
 func populateRepoIndexer(ctx context.Context) {
+	if setting.IsInTesting {
+		return
+	}
 	log.Info("Populating the repo stats indexer with existing repositories")
 
 	isShutdown := graceful.GetManager().IsShutdown()

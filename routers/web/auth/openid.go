@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,12 +12,13 @@ import (
 	auth_model "forgejo.org/models/auth"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/auth/openid"
+	"forgejo.org/modules/auth/password"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
-	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/services/auth"
+	auth_method "forgejo.org/services/auth/method"
 	"forgejo.org/services/context"
 	"forgejo.org/services/forms"
 )
@@ -56,13 +58,13 @@ func allowedOpenIDURI(uri string) (err error) {
 			}
 		}
 		// must match one of this or be refused
-		return fmt.Errorf("URI not allowed by whitelist")
+		return errors.New("URI not allowed by whitelist")
 	}
 
 	// A blacklist match expliclty forbids
 	for _, pat := range setting.Service.OpenIDBlacklist {
 		if pat.MatchString(uri) {
-			return fmt.Errorf("URI forbidden by blacklist")
+			return errors.New("URI forbidden by blacklist")
 		}
 	}
 
@@ -265,7 +267,7 @@ func ConnectOpenIDPost(ctx *context.Context) {
 	ctx.Data["EnableOpenIDSignUp"] = setting.Service.EnableOpenIDSignUp
 	ctx.Data["OpenID"] = oid
 
-	u, source, err := auth.UserSignIn(ctx, form.UserName, form.Password)
+	u, source, err := auth_method.UserSignIn(ctx, form.UserName, form.Password)
 	if err != nil {
 		handleSignInError(ctx, form.UserName, &form, tplConnectOID, "ConnectOpenIDPost", err)
 		return
@@ -386,11 +388,7 @@ func RegisterOpenIDPost(ctx *context.Context) {
 		context.VerifyCaptcha(ctx, tplSignUpOID, form)
 	}
 
-	length := setting.MinPasswordLength
-	if length < 256 {
-		length = 256
-	}
-	password, err := util.CryptoRandomString(int64(length))
+	password, err := password.Generate(max(256, setting.MinPasswordLength))
 	if err != nil {
 		ctx.RenderWithErr(err.Error(), tplSignUpOID, form)
 		return
@@ -408,7 +406,7 @@ func RegisterOpenIDPost(ctx *context.Context) {
 
 	// add OpenID for the user
 	userOID := &user_model.UserOpenID{UID: u.ID, URI: oid}
-	if err = user_model.AddUserOpenID(ctx, userOID); err != nil {
+	if err := user_model.AddUserOpenID(ctx, userOID); err != nil {
 		if user_model.IsErrOpenIDAlreadyUsed(err) {
 			ctx.RenderWithErr(ctx.Tr("form.openid_been_used", oid), tplSignUpOID, &form)
 			return

@@ -5,15 +5,17 @@ import {createDropzone} from './dropzone.js';
 import {showGlobalErrorMessage} from '../bootstrap.js';
 import {handleGlobalEnterQuickSubmit} from './comp/QuickSubmit.js';
 import {svg} from '../svg.js';
-import {hideElem, showElem, toggleElem, initSubmitEventPolyfill, submitEventSubmitter} from '../utils/dom.js';
+import {hideElem, showElem, toggleElem, resetForms, initSubmitEventPolyfill, submitEventSubmitter} from '../utils/dom.js';
 import {htmlEscape} from 'escape-goat';
 import {showTemporaryTooltip} from '../modules/tippy.js';
 import {confirmModal} from './comp/ConfirmModal.js';
 import {showErrorToast} from '../modules/toast.js';
 import {request, POST, GET} from '../modules/fetch.js';
 import '../htmx.js';
+import {initTab} from '../modules/tab.ts';
+import {initGlobalShowModal} from './show-modal.ts';
 
-const {appUrl, appSubUrl, csrfToken, i18n} = window.config;
+const {appUrl, appSubUrl, i18n} = window.config;
 
 export function initGlobalFormDirtyLeaveConfirm() {
   // Warn users that try to leave a page after entering data into a form.
@@ -57,7 +59,7 @@ export function initGlobalEnterQuickSubmit() {
 export function initGlobalButtonClickOnEnter() {
   $(document).on('keypress', 'div.ui.button,span.ui.button', (e) => {
     if (e.code === ' ' || e.code === 'Enter') {
-      $(e.target).trigger('click');
+      e.target.click();
       e.preventDefault();
     }
   });
@@ -92,13 +94,19 @@ async function fetchActionDoRequest(actionElem, url, opt) {
       }
       return;
     } else if (resp.status >= 400 && resp.status < 500) {
-      const data = await resp.json();
-      // the code was quite messy, sometimes the backend uses "err", sometimes it uses "error", and even "user_error"
-      // but at the moment, as a new approach, we only use "errorMessage" here, backend can use JSONError() to respond.
-      if (data.errorMessage) {
-        showErrorToast(data.errorMessage, {useHtmlBody: data.renderFormat === 'html'});
-      } else {
-        showErrorToast(`server error: ${resp.status}`);
+      const text = await resp.text();
+      try {
+        const data = JSON.parse(text);
+        // the code was quite messy, sometimes the backend uses "err", sometimes it uses "error", and even "user_error"
+        // but at the moment, as a new approach, we only use "errorMessage" here, backend can use JSONError() to respond.
+        if (data.errorMessage) {
+          showErrorToast(data.errorMessage, {useHtmlBody: data.renderFormat === 'html'});
+        } else {
+          showErrorToast(`server error: ${resp.status}`);
+        }
+      } catch {
+        // if the response is not valid JSON (e.g. plain text "Quota exceeded."), show it directly
+        showErrorToast(text.trim() || `server error: ${resp.status}`);
       }
     } else {
       showErrorToast(`server error: ${resp.status}`);
@@ -195,11 +203,22 @@ export function initGlobalCommon() {
   $uiDropdowns.filter('.upward').dropdown('setting', 'direction', 'upward');
   $uiDropdowns.filter('.downward').dropdown('setting', 'direction', 'downward');
 
-  $('.tabular.menu .item').tab();
+  for (const el of document.querySelectorAll('.tabular.menu')) {
+    initTab(el);
+  }
 
   initSubmitEventPolyfill();
   document.addEventListener('submit', formFetchAction);
   document.addEventListener('click', linkAction);
+}
+
+// Sometimes unrelated inputs are stored in forms for convenience, for example,
+// modal inputs. To prevent them from blocking the forms for noJS clients they
+// are disabled by default. TypeScript: root is HTMLElement
+export function initDisabledInputs(root) {
+  for (const el of root.querySelectorAll('input.js-enable[disabled]')) {
+    el.removeAttribute('disabled');
+  }
 }
 
 export function initGlobalDropzone() {
@@ -208,58 +227,127 @@ export function initGlobalDropzone() {
   }
 }
 
-export function initDropzone(el) {
-  const $dropzone = $(el);
-  const _promise = createDropzone(el, {
-    url: $dropzone.data('upload-url'),
-    headers: {'X-Csrf-Token': csrfToken},
-    maxFiles: $dropzone.data('max-file'),
-    maxFilesize: $dropzone.data('max-size'),
-    acceptedFiles: (['*/*', ''].includes($dropzone.data('accepts'))) ? null : $dropzone.data('accepts'),
+export async function initDropzone(dropzoneEl, zone = undefined) {
+  if (!dropzoneEl) return;
+
+  let disableRemovedfileEvent = false; // when resetting the dropzone (removeAllFiles), disable the "removedfile" event
+  let fileUuidDict = {}; // to record: if a comment has been saved, then the uploaded files won't be deleted from server when clicking the Remove in the dropzone
+
+  const initFilePreview = (file, data, isReload = false) => {
+    file.uuid = data.uuid;
+    fileUuidDict[file.uuid] = {submitted: isReload};
+    const input = document.createElement('input');
+    input.id = data.uuid;
+    input.name = 'files';
+    input.type = 'hidden';
+    input.value = data.uuid;
+    const inputPath = document.createElement('input');
+    inputPath.name = `files_fullpath[${data.uuid}]`;
+    inputPath.type = 'hidden';
+    inputPath.value = htmlEscape(file.fullPath || file.name);
+    dropzoneEl.querySelector('.files').append(input, inputPath);
+
+    // Create a "Copy Link" element, to conveniently copy the image
+    // or file link as Markdown to the clipboard
+    const copyLinkElement = document.createElement('div');
+    copyLinkElement.className = 'tw-text-center';
+    // The a element has a hardcoded cursor: pointer because the default is overridden by .dropzone
+    copyLinkElement.innerHTML = `<a href="#" style="cursor: pointer;">${svg('octicon-copy', 14, 'copy link')} Copy link</a>`;
+    copyLinkElement.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const name = file.name.slice(0, file.name.lastIndexOf('.'));
+      let fileMarkdown = `[${name}](/attachments/${file.uuid})`;
+      if (file.type.startsWith('image/')) {
+        fileMarkdown = `!${fileMarkdown}`;
+      } else if (file.type.startsWith('video/')) {
+        fileMarkdown = `<video src="/attachments/${file.uuid}" title="${htmlEscape(name)}" controls></video>`;
+      }
+      const success = await clippie(fileMarkdown);
+      showTemporaryTooltip(e.target, success ? i18n.copy_success : i18n.copy_error);
+    });
+    file.previewTemplate.append(copyLinkElement);
+  };
+  const updateDropzoneState = () => {
+    dropzoneEl.classList.toggle('dz-started', dropzoneEl.querySelector('.dz-preview'));
+  };
+
+  const dz = await createDropzone(dropzoneEl, {
+    url: dropzoneEl.getAttribute('data-upload-url'),
+    maxFiles: dropzoneEl.getAttribute('data-max-file'),
+    maxFilesize: dropzoneEl.getAttribute('data-max-size'),
+    acceptedFiles: (['*/*', ''].includes(dropzoneEl.getAttribute('data-accepts')) ? null : dropzoneEl.getAttribute('data-accepts')),
     addRemoveLinks: true,
-    dictDefaultMessage: $dropzone.data('default-message'),
-    dictInvalidFileType: $dropzone.data('invalid-input-type'),
-    dictFileTooBig: $dropzone.data('file-too-big'),
-    dictRemoveFile: $dropzone.data('remove-file'),
+    dictDefaultMessage: dropzoneEl.getAttribute('data-default-message'),
+    dictInvalidFileType: dropzoneEl.getAttribute('data-invalid-input-type'),
+    dictFileTooBig: dropzoneEl.getAttribute('data-file-too-big'),
+    dictRemoveFile: dropzoneEl.getAttribute('data-remove-file'),
     timeout: 0,
     thumbnailMethod: 'contain',
     thumbnailWidth: 480,
     thumbnailHeight: 480,
     init() {
-      this.on('success', (file, data) => {
-        file.uuid = data.uuid;
-        const $input = $(`<input id="${data.uuid}" name="files" type="hidden">`).val(data.uuid);
-        $dropzone.find('.files').append($input);
-        // Create a "Copy Link" element, to conveniently copy the image
-        // or file link as Markdown to the clipboard
-        const copyLinkElement = document.createElement('div');
-        copyLinkElement.className = 'tw-text-center';
-        // The a element has a hardcoded cursor: pointer because the default is overridden by .dropzone
-        copyLinkElement.innerHTML = `<a href="#" style="cursor: pointer;">${svg('octicon-copy', 14, 'copy link')} Copy link</a>`;
-        copyLinkElement.addEventListener('click', async (e) => {
-          e.preventDefault();
-          let fileMarkdown = `[${file.name}](/attachments/${file.uuid})`;
-          if (file.type.startsWith('image/')) {
-            fileMarkdown = `!${fileMarkdown}`;
-          } else if (file.type.startsWith('video/')) {
-            fileMarkdown = `<video src="/attachments/${file.uuid}" title="${htmlEscape(file.name)}" controls></video>`;
+      this.on('success', initFilePreview);
+      this.on('removedfile', async (file) => {
+        document.getElementById(file.uuid)?.remove();
+        document.querySelector(`input[name="files_fullpath[${file.uuid}]"]`)?.remove();
+        if (disableRemovedfileEvent) return;
+        if (dropzoneEl.getAttribute('data-remove-url') && !fileUuidDict[file.uuid].submitted) {
+          try {
+            await POST(dropzoneEl.getAttribute('data-remove-url'), {data: new URLSearchParams({file: file.uuid})});
+          } catch (error) {
+            console.error(error);
           }
-          const success = await clippie(fileMarkdown);
-          showTemporaryTooltip(e.target, success ? i18n.copy_success : i18n.copy_error);
-        });
-        file.previewTemplate.append(copyLinkElement);
-      });
-      this.on('removedfile', (file) => {
-        $(`#${file.uuid}`).remove();
-        if ($dropzone.data('remove-url')) {
-          POST($dropzone.data('remove-url'), {
-            data: new URLSearchParams({file: file.uuid}),
-          });
         }
+        updateDropzoneState();
       });
       this.on('error', function (file, message) {
         showErrorToast(message);
         this.removeFile(file);
+      });
+      this.on('reload', async () => {
+        if (!zone || !dz.removeAllFiles) return;
+        try {
+          const response = await GET(zone.getAttribute('data-attachment-url'));
+          const data = await response.json();
+          // do not trigger the "removedfile" event, otherwise the attachments would be deleted from server
+          disableRemovedfileEvent = true;
+          dz.removeAllFiles(true);
+          dropzoneEl.querySelector('.files').innerHTML = '';
+          for (const element of dropzoneEl.querySelectorAll('.dz-preview')) element.remove();
+          fileUuidDict = {};
+          disableRemovedfileEvent = false;
+
+          for (const attachment of data) {
+            attachment.type = attachment.mime_type;
+            dz.emit('addedfile', attachment);
+            dz.emit('complete', attachment);
+            if (attachment.type.startsWith('image/')) {
+              const imgSrc = `${dropzoneEl.getAttribute('data-link-url')}/${attachment.uuid}`;
+              dz.emit('thumbnail', attachment, imgSrc);
+            }
+            initFilePreview(attachment, {uuid: attachment.uuid}, true);
+            fileUuidDict[attachment.uuid] = {submitted: true};
+          }
+        } catch (error) {
+          console.error(error);
+        }
+        updateDropzoneState();
+      });
+      this.on('create-thumbnail', (attachment, file) => {
+        if (attachment.type && /image.*/.test(attachment.type)) {
+          // When a new issue is created, a thumbnail cannot be fetch, so we need to create it locally.
+          // The implementation is took from the dropzone library (`dropzone.js` > `_processThumbnailQueue()`)
+          dz.createThumbnail(
+            file,
+            dz.options.thumbnailWidth,
+            dz.options.thumbnailHeight,
+            dz.options.thumbnailMethod,
+            true,
+            (dataUrl) => {
+              dz.emit('thumbnail', attachment, dataUrl);
+            },
+          );
+        }
       });
     },
   });
@@ -297,12 +385,13 @@ export function initGlobalLinkActions() {
     e.preventDefault();
     const $this = $(this || e.target);
     const dataArray = $this.data();
-    let filter = '';
-    if ($this[0].getAttribute('data-modal-id')) {
-      filter += `#${$this[0].getAttribute('data-modal-id')}`;
+
+    const modalID = $this[0].getAttribute('data-modal-id');
+    if (!modalID) {
+      throw new Error('This button does not specify which modal it wants to open.');
     }
 
-    const $dialog = $(`.delete.modal${filter}`);
+    const $dialog = $(`#${modalID}`);
     $dialog.find('.name').text($this.data('name'));
     for (const [key, value] of Object.entries(dataArray)) {
       if (key && key.startsWith('data')) {
@@ -314,7 +403,7 @@ export function initGlobalLinkActions() {
       closable: false,
       onApprove: async () => {
         if ($this.data('type') === 'form') {
-          $($this.data('form')).trigger('submit');
+          document.querySelector($this.data('form')).requestSubmit();
           return;
         }
         if ($this[0].getAttribute('hx-confirm')) {
@@ -357,89 +446,52 @@ export function initGlobalLinkActions() {
   });
 }
 
-export function initGlobalShowModal() {
-  // A ".show-modal" button will show a modal dialog defined by its "data-modal" attribute.
-  // Each "data-modal-{target}" attribute will be filled to target element's value or text-content.
-  // * First, try to query '#target'
-  // * Then, try to query '.target'
-  // * Then, try to query 'target' as HTML tag
-  // If there is a ".{attr}" part like "data-modal-form.action", then the form's "action" attribute will be set.
-  $('.show-modal').on('click', function (e) {
-    e.preventDefault();
-    const modalSelector = this.getAttribute('data-modal');
-    const $modal = $(modalSelector);
-    if (!$modal.length) {
-      throw new Error('no modal for this action');
-    }
-    const modalAttrPrefix = 'data-modal-';
-    for (const attrib of this.attributes) {
-      if (!attrib.name.startsWith(modalAttrPrefix)) {
-        continue;
-      }
-
-      const attrTargetCombo = attrib.name.substring(modalAttrPrefix.length);
-      const [attrTargetName, attrTargetAttr] = attrTargetCombo.split('.');
-      // try to find target by: "#target" -> ".target" -> "target tag"
-      let $attrTarget = $modal.find(`#${attrTargetName}`);
-      if (!$attrTarget.length) $attrTarget = $modal.find(`.${attrTargetName}`);
-      if (!$attrTarget.length) $attrTarget = $modal.find(`${attrTargetName}`);
-      if (!$attrTarget.length) continue; // TODO: show errors in dev mode to remind developers that there is a bug
-
-      if (attrTargetAttr) {
-        $attrTarget[0][attrTargetAttr] = attrib.value;
-      } else if ($attrTarget[0].matches('input, textarea')) {
-        $attrTarget.val(attrib.value); // FIXME: add more supports like checkbox
-      } else {
-        $attrTarget.text(attrib.value); // FIXME: it should be more strict here, only handle div/span/p
-      }
-    }
-
-    $modal.modal('setting', {
-      onApprove: () => {
-        // "form-fetch-action" can handle network errors gracefully,
-        // so keep the modal dialog to make users can re-submit the form if anything wrong happens.
-        if ($modal.find('.form-fetch-action').length) return false;
-      },
-    }).modal('show');
-  });
-}
-
 export function initGlobalButtons() {
   // There are many "cancel button" elements in modal dialogs, Fomantic UI expects they are button-like elements but never submit a form.
   // However, Gitea misuses the modal dialog and put the cancel buttons inside forms, so we must prevent the form submission.
   // There are a few cancel buttons in non-modal forms, and there are some dynamically created forms (eg: the "Edit Issue Content")
-  $(document).on('click', 'form button.ui.cancel.button', (e) => {
-    e.preventDefault();
-  });
-
-  $('.show-panel').on('click', function (e) {
-    // a '.show-panel' element can show a panel, by `data-panel="selector"`
-    // if it has "toggle" class, it toggles the panel
-    e.preventDefault();
-    const sel = this.getAttribute('data-panel');
-    if (this.classList.contains('toggle')) {
-      toggleElem(sel);
-    } else {
-      showElem(sel);
+  document.addEventListener('click', (e) => {
+    if (e.target.matches('form button.ui.cancel.button')) {
+      e.preventDefault();
     }
   });
 
-  $('.hide-panel').on('click', function (e) {
-    // a `.hide-panel` element can hide a panel, by `data-panel="selector"` or `data-panel-closest="selector"`
-    e.preventDefault();
-    let sel = this.getAttribute('data-panel');
-    if (sel) {
-      hideElem($(sel));
-      return;
-    }
-    sel = this.getAttribute('data-panel-closest');
-    if (sel) {
-      hideElem($(this).closest(sel));
-      return;
-    }
-    // should never happen, otherwise there is a bug in code
-    showErrorToast('Nothing to hide');
-  });
+  for (const showPanelButton of document.querySelectorAll('.show-panel')) {
+    showPanelButton.addEventListener('click', (e) => {
+      // a '.show-panel' element can show a panel, by `data-panel="selector"`
+      // if it has "toggle" class, it toggles the panel
+      e.preventDefault();
+      const sel = e.currentTarget.getAttribute('data-panel');
+      if (e.currentTarget.classList.contains('toggle')) {
+        toggleElem(sel);
+      } else {
+        showElem(sel);
+      }
+    });
+  }
+
+  for (const hidePanelButton of document.querySelectorAll('.hide-panel')) {
+    hidePanelButton.addEventListener('click', (e) => {
+      // a `.hide-panel` element can hide a panel, by `data-panel="selector"` or `data-panel-closest="selector"`
+      e.preventDefault();
+      let sel = e.currentTarget.getAttribute('data-panel');
+      if (sel) {
+        const element = document.querySelector(sel);
+        hideElem(element);
+        resetForms(element);
+        return;
+      }
+      sel = e.currentTarget.getAttribute('data-panel-closest');
+      if (sel) {
+        const element = e.currentTarget.closest(sel);
+        hideElem(element);
+        resetForms(element);
+        return;
+      }
+      // should never happen, otherwise there is a bug in code
+      showErrorToast('Nothing to hide');
+    });
+  }
 
   initGlobalShowModal();
 }

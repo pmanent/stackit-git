@@ -71,27 +71,26 @@
 .repository .issue-content-right #deadlineForm input {
   width: 12.8rem;
   border-radius: var(--border-radius) 0 0 var(--border-radius);
-  border-right: 0;
+  border-inline-end: 0;
   white-space: nowrap;
 }
 
 .repository .issue-content-right .filter.menu {
   max-height: 500px;
-  overflow-x: auto;
+  overflow-inline: auto;
 }
 
-.repository .filter.menu.labels .label-filter .menu .info {
+.repository .filter.menu .label-filter .menu .info {
   display: inline-block;
   padding: 0.5rem 0;
   font-size: 12px;
   width: 100%;
   white-space: nowrap;
-  margin-left: 10px;
-  margin-right: 8px;
-  text-align: left;
+  margin-inline: 10px 8px;
+  text-align: start;
 }
 
-.repository .filter.menu.labels .label-filter .menu .info code {
+.repository .filter.menu .label-filter .menu .info code {
   border: 1px solid var(--color-secondary);
   border-radius: var(--border-radius);
   padding: 1px 2px;
@@ -102,20 +101,22 @@
 .repository .filter.menu .ui.dropdown .menu {
   max-height: 500px;
   max-width: 300px;
-  overflow-x: hidden;
-  right: 0;
-  left: auto;
+  overflow-inline: hidden;
+  inset-inline: auto 0;
 }
 
 /* the label-filter is the first dropdown, it shouldn't be shown leftward, otherwise it may go out the viewport (left side) */
 .repository .filter.menu .ui.dropdown.label-filter .menu {
   min-width: max-content;
-  right: unset;
-  left: 0;
+  inset-inline-end: unset;
+  inset-inline-start: 0;
 }
 
 .repository .select-label .desc {
-  padding-left: 23px;
+  padding-inline-start: 23px;
+  white-space: normal;
+  display: block;
+  margin-top: 2px;
 }
 
 /* For the secondary pointing menu, respect its own border-bottom */
@@ -140,9 +141,16 @@
   }
 }
 
+@media (max-width: 390px) {
+  .repository .clone-panel #repo-clone-url {
+    width: 0;
+    flex-grow: 1;
+  }
+}
+
 .repository .ui.action.input.clone-panel > button + button,
 .repository .ui.action.input.clone-panel > button + input {
-  margin-left: -1px; /* make the borders overlap to avoid double borders */
+  margin-inline-start: -1px; /* make the borders overlap to avoid double borders */
 }
 
 .repository .clone-panel > button:first-of-type {
@@ -156,8 +164,7 @@
 /* Dropdown alignment */
 .repository .clone-panel .dropdown .menu,
 .repository .folder-actions .dropdown .menu {
-  right: 0 !important;
-  left: auto !important;
+  inset-inline: auto 0 !important;
 }
 
 .repository.file.list .repo-description {
@@ -205,7 +212,7 @@ td .commit-summary {
 }
 
 .latest-commit .commit-status {
-  margin-right: 0.25em;
+  margin-inline-end: 0.25em;
 }
 
 @media (max-width: 767.98px) {
@@ -213,7 +220,7 @@ td .commit-summary {
     display: none;
   }
   .latest-commit .commit-summary {
-    margin-left: 8px;
+    margin-inline-start: 8px;
   }
 }
 
@@ -223,21 +230,40 @@ td .commit-summary {
 }
 
 /* this is what limits the commit table width to a value that works on all viewport sizes */
-#repo-files-table th:first-of-type {
+.repo-files-table-latest-commit-left {
   max-width: calc(calc(min(100vw, 1280px)) - 145px - calc(2 * var(--page-margin-x)));
 }
 
-.repository.file.list #repo-files-table thead th {
+.repo-files-table-latest-commit-cell {
   font-weight: var(--font-weight-normal);
+  background: var(--color-box-header);
+  text-align: inherit;
+  color: var(--color-text);
+  vertical-align: inherit;
+  border-inline-start: none;
+  padding: 6px 5px 6px 10px;
+}
+
+.latest-commit .commit-summary {
+  white-space: nowrap;
 }
 
 .repository.file.list #repo-files-table tbody .svg {
-  margin-left: 3px;
-  margin-right: 5px;
+  margin-inline: 3px 5px;
+}
+
+@media (min-width: 767.98px) {
+  #repo-files-table tbody > tr.commit-list td {
+    border-bottom: 1px solid var(--color-secondary);
+  }
+
+  #repo-files-table tbody > tr:is(.entry, .has-parent):nth-child(2) td {
+    border-top: none;
+  }
 }
 
 .repository.file.list #repo-files-table tbody .svg.octicon-reply {
-  margin-right: 10px;
+  margin-inline-end: 10px;
 }
 
 .repository.file.list #repo-files-table tbody .svg.octicon-file-directory-fill,
@@ -245,13 +271,14 @@ td .commit-summary {
   color: var(--color-primary);
 }
 
+.repository.file.list #repo-files-table tbody .svg.octicon-cross-reference,
 .repository.file.list #repo-files-table tbody .svg.octicon-file,
 .repository.file.list #repo-files-table tbody .svg.octicon-file-symlink-file,
 .repository.file.list #repo-files-table tbody .svg.octicon-file-directory-symlink {
   color: var(--color-secondary-dark-7);
 }
 
-.repository.file.list #repo-files-table td {
+.repository.file.list #repo-files-table td:not(.repo-files-table-latest-commit-cell) {
   padding-top: 0;
   padding-bottom: 0;
   overflow: initial;
@@ -317,14 +344,13 @@ td .commit-summary {
   padding-bottom: 8px;
 }
 
-.repository.file.list #repo-files-table td a {
+.repository.file.list #repo-files-table td a:not(.sha, .author-wrapper) {
   padding-top: 8px;
   padding-bottom: 8px;
 }
 
 .repository.file.list #repo-files-table td .at {
-  margin-left: 3px;
-  margin-right: 3px;
+  margin-inline: 3px;
 }
 
 .repository.file.list #repo-files-table td > * {
@@ -336,11 +362,11 @@ td .commit-summary {
 }
 
 .repository.file.list #repo-files-table tr:last-of-type td:first-child {
-  border-bottom-left-radius: var(--border-radius);
+  border-end-start-radius: var(--border-radius);
 }
 
 .repository.file.list #repo-files-table tr:last-of-type td:last-child {
-  border-bottom-right-radius: var(--border-radius);
+  border-end-end-radius: var(--border-radius);
 }
 
 .repository.file.list #repo-files-table tr:hover {
@@ -388,8 +414,8 @@ td .commit-summary {
 }
 
 .code-search + #repo-files-table {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+  border-top-left-radius: 0; /* stylelint-disable-line logical-css/require-logical-properties */
+  border-top-right-radius: 0; /* stylelint-disable-line logical-css/require-logical-properties */
 }
 
 .view-raw {
@@ -415,7 +441,14 @@ td .commit-summary {
   max-width: 600px !important;
 }
 
-.pdf-content {
+lazy-webc[tag="model-viewer"],
+model-viewer {
+  width: 100%;
+  height: 100vh;
+}
+
+lazy-webc[tag="pdf-object"],
+pdf-object {
   width: 100%;
   height: 100vh;
   border: none !important;
@@ -424,8 +457,8 @@ td .commit-summary {
   justify-content: center;
 }
 
-.pdf-content .pdf-fallback-button {
-  margin: 50px auto;
+citation-information .tab:not(.active) {
+  display: none;
 }
 
 .repository.file.list .non-diff-file-content .plain-text {
@@ -438,7 +471,7 @@ td .commit-summary {
 }
 
 .repository.file.list .non-diff-file-content .csv {
-  overflow-x: auto;
+  overflow-inline: auto;
   padding: 0 !important;
 }
 
@@ -455,7 +488,7 @@ td .commit-summary {
 }
 
 .repository.file.list .sidebar {
-  padding-left: 0;
+  padding-inline-start: 0;
 }
 
 .repository.file.list .sidebar .svg {
@@ -470,20 +503,20 @@ td .commit-summary {
   vertical-align: middle !important;
   width: auto !important;
   padding: 7px 8px !important;
-  margin-right: 5px !important;
+  margin-inline-end: 5px !important;
 }
 
 .repository.file.editor .tabular.menu .svg {
-  margin-right: 5px;
+  margin-inline-end: 5px;
 }
 
 .repository.file.editor .commit-form-wrapper {
-  padding-left: 64px;
+  padding-inline-start: 64px;
 }
 
 .repository.file.editor .commit-form-wrapper .commit-avatar {
-  float: left;
-  margin-left: -64px;
+  float: inline-start;
+  margin-inline-start: -64px;
   width: 3em;
   height: auto;
 }
@@ -499,7 +532,7 @@ td .commit-summary {
 
 .repository.file.editor .commit-form-wrapper .commit-form::before,
 .repository.file.editor .commit-form-wrapper .commit-form::after {
-  right: 100%;
+  inset-inline-end: 100%;
   top: 20px;
   border: solid transparent;
   content: " ";
@@ -510,13 +543,13 @@ td .commit-summary {
 }
 
 .repository.file.editor .commit-form-wrapper .commit-form::before {
-  border-right-color: var(--color-secondary);
+  border-inline-end-color: var(--color-secondary);
   border-width: 9px;
   margin-top: -9px;
 }
 
 .repository.file.editor .commit-form-wrapper .commit-form::after {
-  border-right-color: var(--color-box-body);
+  border-inline-end-color: var(--color-box-body);
   border-width: 8px;
   margin-top: -8px;
 }
@@ -533,18 +566,18 @@ td .commit-summary {
 
 .repository.file.editor .commit-form-wrapper .commit-form .quick-pull-choice .new-branch-name-input {
   position: relative;
-  margin-left: 25px;
+  margin-inline-start: 25px;
 }
 
 .repository.file.editor .commit-form-wrapper .commit-form .quick-pull-choice .new-branch-name-input input {
   width: 240px !important;
-  padding-left: 26px !important;
+  padding-inline-start: 26px !important;
 }
 
 .repository.file.editor .commit-form-wrapper .commit-form .quick-pull-choice .octicon-git-branch {
   position: absolute;
   top: 9px;
-  left: 10px;
+  inset-inline-start: 10px;
   color: var(--color-grey);
 }
 
@@ -558,12 +591,12 @@ td .commit-summary {
 }
 
 .repository.new.issue .comment.form .content {
-  margin-left: 4em;
+  margin-inline-start: 4em;
 }
 
 .repository.new.issue .comment.form .content::before,
 .repository.new.issue .comment.form .content::after {
-  right: 100%;
+  inset-inline-end: 100%;
   top: 20px;
   border: solid transparent;
   content: " ";
@@ -574,13 +607,13 @@ td .commit-summary {
 }
 
 .repository.new.issue .comment.form .content::before {
-  border-right-color: var(--color-secondary);
+  border-inline-end-color: var(--color-secondary);
   border-width: 9px;
   margin-top: -9px;
 }
 
 .repository.new.issue .comment.form .content::after {
-  border-right-color: var(--color-box-body);
+  border-inline-end-color: var(--color-box-body);
   border-width: 8px;
   margin-top: -8px;
 }
@@ -622,7 +655,7 @@ td .commit-summary {
     display: none;
   }
   .comment.form .issue-content-left .content {
-    margin-left: 0 !important;
+    margin-inline-start: 0 !important;
   }
   .comment.form .issue-content-left .content::before,
   .comment.form .issue-content-left .content::after,
@@ -632,7 +665,7 @@ td .commit-summary {
   }
 
   .repository.view.issue .issue-title.edit-active h1 {
-    padding-right: 0;
+    padding-inline-end: 0;
   }
 }
 
@@ -651,7 +684,7 @@ td .commit-summary {
   font-size: 32px;
   line-height: 40px;
   margin: 0;
-  padding-right: 0.5rem;
+  padding-inline-end: 0.5rem;
 }
 
 .repository.view.issue .issue-title .ui.input {
@@ -668,7 +701,7 @@ td .commit-summary {
 }
 
 .repository.view.issue .issue-title .label {
-  margin-right: 10px;
+  margin-inline-end: 10px;
 }
 
 .issue-state-label {
@@ -681,7 +714,7 @@ td .commit-summary {
 }
 
 .issue-state-label .svg {
-  margin-right: 4px;
+  margin-inline-end: 4px;
 }
 
 .repository.view.issue .pull-desc code {
@@ -696,7 +729,7 @@ td .commit-summary {
   vertical-align: middle;
   position: relative;
   top: -2px;
-  right: 1px;
+  inset-inline-end: 1px;
 }
 
 .repository.view.issue .pull.tabs.container {
@@ -706,12 +739,12 @@ td .commit-summary {
 
 .repository.view.issue .pull.tabular.menu {
   margin-bottom: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow-inline: auto;
+  overflow-block: hidden;
 }
 
 .repository.view.issue .pull.tabular.menu .svg {
-  margin-right: 5px;
+  margin-inline-end: 5px;
 }
 
 .repository.view.issue .merge.box .branch-update.grid .row {
@@ -730,7 +763,7 @@ td .commit-summary {
   margin-bottom: 14px;
   top: 0;
   bottom: 0;
-  left: 96px;
+  inset-inline-start: 96px;
   width: 2px;
   background-color: var(--color-timeline);
   z-index: -1;
@@ -739,8 +772,8 @@ td .commit-summary {
 .repository.view.issue .comment-list .timeline {
   position: relative;
   display: block;
-  margin-left: 40px;
-  padding-left: 16px;
+  margin-inline-start: 40px;
+  padding-inline-start: 16px;
 }
 
 .repository.view.issue .comment-list .timeline::before { /* ciara */
@@ -751,7 +784,7 @@ td .commit-summary {
   margin-bottom: 14px;
   top: 0;
   bottom: 0;
-  left: 30px;
+  inset-inline-start: 30px;
   width: 2px;
   background-color: var(--color-timeline);
   z-index: -1;
@@ -772,13 +805,13 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .timeline-item {
-  margin-left: 16px;
+  margin-inline-start: 16px;
   position: relative;
 }
 
 .repository.view.issue .comment-list .timeline-item .timeline-avatar {
   position: absolute;
-  left: -68px;
+  inset-inline-start: -68px;
 }
 
 /* Don't show the mobile oriented avatar ".inline-timeline-avatar" on desktop. Desktop uses the avatar with class ".timeline-avatar" */
@@ -805,9 +838,8 @@ td .commit-summary {
   background-color: var(--color-timeline);
   border-radius: var(--border-radius-full);
   display: flex;
-  float: left;
-  margin-left: -33px;
-  margin-right: 8px;
+  float: inline-start;
+  margin-inline: -33px 8px;
   color: var(--color-text);
   align-items: center;
   justify-content: center;
@@ -824,7 +856,7 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .timeline-item.comment > .content {
-  margin-left: -16px;
+  margin-inline-start: -16px;
 }
 
 .repository.view.issue .comment-list .timeline-item.event > .text {
@@ -833,13 +865,13 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .timeline-item.commits-list {
-  padding-left: 15px;
+  padding-inline-start: 15px;
   padding-top: 0;
 }
 
 .repository.view.issue .comment-list .timeline-item.commits-list .ui.avatar,
 .repository.view.issue .comment-list .timeline-item.event .ui.avatar {
-  margin-right: 0.25em;
+  margin-inline-end: 0.25em;
 }
 
 .repository.view.issue .comment-list .timeline-item .aggregated-actions .badge {
@@ -865,43 +897,6 @@ td .commit-summary {
 
 .singular-commit .shabox .sha.label {
   margin: 0;
-  border: 1px solid var(--color-light-border);
-}
-
-.singular-commit .shabox .sha.label.isSigned.isWarning {
-  border: 1px solid var(--color-red-badge);
-  background: var(--color-red-badge-bg);
-}
-
-.singular-commit .shabox .sha.label.isSigned.isWarning:hover {
-  background: var(--color-red-badge-hover-bg) !important;
-}
-
-.singular-commit .shabox .sha.label.isSigned.isVerified {
-  border: 1px solid var(--color-green-badge);
-  background: var(--color-green-badge-bg);
-}
-
-.singular-commit .shabox .sha.label.isSigned.isVerified:hover {
-  background: var(--color-green-badge-hover-bg) !important;
-}
-
-.singular-commit .shabox .sha.label.isSigned.isVerifiedUntrusted {
-  border: 1px solid var(--color-yellow-badge);
-  background: var(--color-yellow-badge-bg);
-}
-
-.singular-commit .shabox .sha.label.isSigned.isVerifiedUntrusted:hover {
-  background: var(--color-yellow-badge-hover-bg) !important;
-}
-
-.singular-commit .shabox .sha.label.isSigned.isVerifiedUnmatched {
-  border: 1px solid var(--color-orange-badge);
-  background: var(--color-orange-badge-bg);
-}
-
-.singular-commit .shabox .sha.label.isSigned.isVerifiedUnmatched:hover {
-  background: var(--color-orange-badge-hover-bg) !important;
 }
 
 @media (min-width: 768px) {
@@ -909,6 +904,16 @@ td .commit-summary {
     display: grid;
     grid-template-columns: 1fr auto;
     column-gap: 1rem;
+    span.compare {
+      /* Same height as .timeline-item .badge for alignment */
+      height: 34px;
+    }
+  }
+}
+
+@media (max-width: 767.98px) {
+  .repository.view.issue .comment-list .timeline-item .forced-push span.compare {
+    margin-inline-start: 1rem;
   }
 }
 
@@ -920,7 +925,7 @@ td .commit-summary {
 
 @media (max-width: 767.98px) {
   .repository.view.issue .comment-list .timeline-item .ui.segments {
-    margin-left: -2rem;
+    margin-inline-start: -2rem;
   }
 }
 
@@ -929,13 +934,13 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .comment > .content > div:first-child {
-  border-top-left-radius: 4px;
-  border-top-right-radius: 4px;
+  border-top-left-radius: 4px; /* stylelint-disable-line logical-css/require-logical-properties */
+  border-top-right-radius: 4px; /* stylelint-disable-line logical-css/require-logical-properties */
 }
 
 .repository.view.issue .comment-list .comment > .content > div:last-child {
-  border-bottom-left-radius: 4px;
-  border-bottom-right-radius: 4px;
+  border-bottom-left-radius: 4px; /* stylelint-disable-line logical-css/require-logical-properties */
+  border-bottom-right-radius: 4px; /* stylelint-disable-line logical-css/require-logical-properties */
 }
 
 .repository.view.issue .comment-list .comment .comment-container {
@@ -957,13 +962,13 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .comment .merge-section .divider {
-  margin-left: -1rem;
+  margin-inline-start: -1rem;
   width: calc(100% + 2rem);
 }
 
 .repository.view.issue .comment-list .comment .merge-section.no-header::before,
 .repository.view.issue .comment-list .comment .merge-section.no-header::after {
-  right: 100%;
+  inset-inline-end: 100%;
   top: 20px;
   border: solid transparent;
   content: " ";
@@ -974,13 +979,13 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .comment .merge-section.no-header::before {
-  border-right-color: var(--color-secondary);
+  border-inline-end-color: var(--color-secondary);
   border-width: 9px;
   margin-top: -9px;
 }
 
 .repository.view.issue .comment-list .comment .merge-section.no-header::after {
-  border-right-color: var(--color-box-body);
+  border-inline-end-color: var(--color-box-body);
   border-width: 8px;
   margin-top: -8px;
 }
@@ -1018,23 +1023,57 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .code-comment {
-  border: 1px solid transparent;
   margin: 0;
+  /* top: around 5px of whitespace are added by reaction octicon. (0.5rem=7px)-5px=2px */
+  padding: 2px 0.5rem 1.5rem;
 }
 
-.repository.view.issue .comment-list .code-comment .comment-header {
-  background: transparent;
-  border-bottom: 0 !important;
-  padding: 0 !important;
+@media (max-width: 768px) {
+  .repository.view.issue .comment-list .code-comment {
+    padding: 0.33rem 0.33rem 1.33rem;
+  }
 }
 
-.repository.view.issue .comment-list .code-comment .comment-header::after,
-.repository.view.issue .comment-list .code-comment .comment-header::before {
-  display: none;
+.repository.view.issue .comment-list .code-comment:target {
+  outline: 1px solid var(--color-primary);
+}
+
+.repository.view.issue .comment-list .code-comment .header {
+  display: flex;
+  margin-bottom: 0.25rem;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.repository.view.issue .comment-list .code-comment .header .comment-header-left {
+  gap: 0.5rem;
+}
+
+.repository.view.issue .comment-list .code-comment .header .avatar {
+  margin: 0 !important;
 }
 
 .repository.view.issue .comment-list .code-comment .comment-content {
-  margin-left: 36px;
+  margin-inline-start: calc(20px + 0.5rem);
+}
+
+.repository.view.issue .comment-list .code-comment .add-reaction {
+  padding: 0 0.5rem;
+}
+
+/* emulation of horizontal rule between comments originating from forgejo- themes, commit faab0c670e */
+
+.repository.view.issue .comment-list .code-comment + .code-comment {
+  margin-top: 1rem !important;
+  padding-top: 1rem !important;
+  border-top: 1px solid var(--color-secondary) !important;
+}
+
+@media (max-width: 768px) {
+  .repository.view.issue .comment-list .code-comment + .code-comment {
+    margin-top: 0.5rem !important;
+    padding-top: 0.5rem !important;
+  }
 }
 
 .repository.view.issue .comment-list .comment > .avatar {
@@ -1042,19 +1081,23 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .comment > .avatar ~ .content {
-  margin-left: 42px;
+  margin-inline-start: 42px;
 }
 
 .repository.view.issue .comment-list .comment-code-cloud .segment.reactions {
-  margin-top: 16px !important;
-  margin-bottom: -8px !important;
+  gap: var(--button-spacing);
+  flex-wrap: wrap;
+  width: unset !important;
+  margin-inline-start: calc(20px + 0.5rem) !important;
+  margin-top: 1rem !important;
+  margin-bottom: -1rem !important;
   border-top: none !important;
+  background: transparent !important;
 }
 
 .repository.view.issue .comment-list .comment-code-cloud .segment.reactions .ui.label {
   border: 1px solid;
   padding: 5px 8px !important;
-  margin: 0 2px;
   border-radius: var(--border-radius);
   border-color: var(--color-secondary-dark-1) !important;
 }
@@ -1074,12 +1117,12 @@ td .commit-summary {
 }
 
 .repository.view.issue .comment-list .event {
-  padding-left: 15px;
+  padding-inline-start: 15px;
 }
 
 .repository.view.issue .comment-list .event .detail {
   margin-top: 4px;
-  margin-left: 15px;
+  margin-inline-start: 15px;
 }
 
 .repository.view.issue .comment-list .event .detail .text {
@@ -1108,7 +1151,7 @@ td .commit-summary {
 
 .repository .comment.form .content .form::before,
 .repository .comment.form .content .form::after {
-  right: 100%;
+  inset-inline-end: 100%;
   top: 20px;
   border: solid transparent;
   content: " ";
@@ -1119,13 +1162,13 @@ td .commit-summary {
 }
 
 .repository .comment.form .content .form::before {
-  border-right-color: var(--color-secondary);
+  border-inline-end-color: var(--color-secondary);
   border-width: 9px;
   margin-top: -9px;
 }
 
 .repository .comment.form .content .form::after {
-  border-right-color: var(--color-box-body);
+  border-inline-end-color: var(--color-box-body);
   border-width: 8px;
   margin-top: -8px;
 }
@@ -1140,7 +1183,7 @@ td .commit-summary {
 }
 
 .repository.compare.pull .show-form-container {
-  text-align: left;
+  text-align: start;
 }
 
 .repository .choose.branch {
@@ -1171,7 +1214,7 @@ td .commit-summary {
 
 .repository.compare.pull .comment.form .content::before,
 .repository.compare.pull .comment.form .content::after {
-  right: 100%;
+  inset-inline-end: 100%;
   top: 20px;
   border: solid transparent;
   content: " ";
@@ -1182,13 +1225,13 @@ td .commit-summary {
 }
 
 .repository.compare.pull .comment.form .content::before {
-  border-right-color: var(--color-secondary);
+  border-inline-end-color: var(--color-secondary);
   border-width: 9px;
   margin-top: -9px;
 }
 
 .repository.compare.pull .comment.form .content::after {
-  border-right-color: var(--color-box-body);
+  border-inline-end-color: var(--color-box-body);
   border-width: 8px;
   margin-top: -8px;
 }
@@ -1212,14 +1255,14 @@ td .commit-summary {
 
 .repository.branches .commit-divergence .bar-group {
   position: relative;
-  float: left;
+  float: inline-start;
   padding-bottom: 6px;
   width: 50%;
   max-width: 90px;
 }
 
 .repository.branches .commit-divergence .bar-group:last-child {
-  border-left: 1px solid var(--color-secondary-dark-2);
+  border-inline-start: 1px solid var(--color-secondary-dark-2);
 }
 
 .repository.branches .commit-divergence .count {
@@ -1227,11 +1270,11 @@ td .commit-summary {
 }
 
 .repository.branches .commit-divergence .count.count-ahead {
-  text-align: left;
+  text-align: start;
 }
 
 .repository.branches .commit-divergence .count.count-behind {
-  text-align: right;
+  text-align: end;
 }
 
 .repository.branches .commit-divergence .bar {
@@ -1241,11 +1284,11 @@ td .commit-summary {
 }
 
 .repository.branches .commit-divergence .bar.bar-behind {
-  right: 0;
+  inset-inline-end: 0;
 }
 
 .repository.branches .commit-divergence .bar.bar-ahead {
-  left: 0;
+  inset-inline-start: 0;
 }
 
 .repository.commits .header .search input {
@@ -1272,169 +1315,6 @@ td .commit-summary {
   background-color: var(--color-light) !important;
 }
 
-.repository #commits-table td.sha .sha.label,
-.repository #repo-files-table .sha.label,
-.repository #repo-file-commit-box .sha.label,
-.repository #rev-list .sha.label,
-.repository .timeline-item.commits-list .singular-commit .sha.label {
-  border: 1px solid var(--color-light-border);
-}
-
-.repository #commits-table td.sha .sha.label .ui.signature.avatar,
-.repository #repo-files-table .sha.label .ui.signature.avatar,
-.repository #repo-file-commit-box .sha.label .ui.signature.avatar,
-.repository #rev-list .sha.label .ui.signature.avatar,
-.repository .timeline-item.commits-list .singular-commit .sha.label .ui.signature.avatar {
-  height: 16px;
-  margin-bottom: 0;
-  width: 16px;
-}
-
-.repository #commits-table td.sha .sha.label .detail.icon,
-.repository #repo-files-table .sha.label .detail.icon,
-.repository #repo-file-commit-box .sha.label .detail.icon,
-.repository #rev-list .sha.label .detail.icon,
-.repository .timeline-item.commits-list .singular-commit .sha.label .detail.icon {
-  background: var(--color-light);
-  margin: -6px -10px -4px 0;
-  padding: 5px 4px 5px 6px;
-  border-left: 1px solid var(--color-light-border);
-  border-top: 0;
-  border-right: 0;
-  border-bottom: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.repository #commits-table td.sha .sha.label .detail.icon img,
-.repository #repo-files-table .sha.label .detail.icon img,
-.repository #repo-file-commit-box .sha.label .detail.icon img,
-.repository #rev-list .sha.label .detail.icon img,
-.repository .timeline-item.commits-list .singular-commit .sha.label .detail.icon img {
-  margin-right: 0;
-}
-
-.repository #commits-table td.sha .sha.label .detail.icon .svg,
-.repository #repo-files-table .sha.label .detail.icon .svg,
-.repository #repo-file-commit-box .sha.label .detail.icon .svg,
-.repository #rev-list .sha.label .detail.icon .svg,
-.repository .timeline-item.commits-list .singular-commit .sha.label .detail.icon .svg {
-  margin: 0 0.25em 0 0;
-}
-
-.repository #commits-table td.sha .sha.label .detail.icon > div,
-.repository #repo-files-table .sha.label .detail.icon > div,
-.repository #repo-file-commit-box .sha.label .detail.icon > div,
-.repository #rev-list .sha.label .detail.icon > div,
-.repository .timeline-item.commits-list .singular-commit .sha.label .detail.icon > div {
-  display: flex;
-  align-items: center;
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isWarning,
-.repository #repo-files-table .sha.label.isSigned.isWarning,
-.repository #repo-file-commit-box .sha.label.isSigned.isWarning,
-.repository #rev-list .sha.label.isSigned.isWarning,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isWarning {
-  border: 1px solid var(--color-red-badge);
-  background: var(--color-red-badge-bg);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isWarning .detail.icon,
-.repository #repo-files-table .sha.label.isSigned.isWarning .detail.icon,
-.repository #repo-file-commit-box .sha.label.isSigned.isWarning .detail.icon,
-.repository #rev-list .sha.label.isSigned.isWarning .detail.icon,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isWarning .detail.icon {
-  border-left: 1px solid var(--color-red-badge);
-  color: var(--color-red-badge);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isWarning:hover,
-.repository #repo-files-table .sha.label.isSigned.isWarning:hover,
-.repository #repo-file-commit-box .sha.label.isSigned.isWarning:hover,
-.repository #rev-list .sha.label.isSigned.isWarning:hover,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isWarning:hover {
-  background: var(--color-red-badge-hover-bg) !important;
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerified,
-.repository #repo-files-table .sha.label.isSigned.isVerified,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerified,
-.repository #rev-list .sha.label.isSigned.isVerified,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerified {
-  border: 1px solid var(--color-green-badge);
-  background: var(--color-green-badge-bg);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerified .detail.icon,
-.repository #repo-files-table .sha.label.isSigned.isVerified .detail.icon,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerified .detail.icon,
-.repository #rev-list .sha.label.isSigned.isVerified .detail.icon,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerified .detail.icon {
-  border-left: 1px solid var(--color-green-badge);
-  color: var(--color-green-badge);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerified:hover,
-.repository #repo-files-table .sha.label.isSigned.isVerified:hover,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerified:hover,
-.repository #rev-list .sha.label.isSigned.isVerified:hover,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerified:hover {
-  background: var(--color-green-badge-hover-bg) !important;
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerifiedUntrusted,
-.repository #repo-files-table .sha.label.isSigned.isVerifiedUntrusted,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerifiedUntrusted,
-.repository #rev-list .sha.label.isSigned.isVerifiedUntrusted,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerifiedUntrusted {
-  border: 1px solid var(--color-yellow-badge);
-  background: var(--color-yellow-badge-bg);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerifiedUntrusted .detail.icon,
-.repository #repo-files-table .sha.label.isSigned.isVerifiedUntrusted .detail.icon,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerifiedUntrusted .detail.icon,
-.repository #rev-list .sha.label.isSigned.isVerifiedUntrusted .detail.icon,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerifiedUntrusted .detail.icon {
-  border-left: 1px solid var(--color-yellow-badge);
-  color: var(--color-yellow-badge);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerifiedUntrusted:hover,
-.repository #repo-files-table .sha.label.isSigned.isVerifiedUntrusted:hover,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerifiedUntrusted:hover,
-.repository #rev-list .sha.label.isSigned.isVerifiedUntrusted:hover,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerifiedUntrusted:hover {
-  background: var(--color-yellow-badge-hover-bg) !important;
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerifiedUnmatched,
-.repository #repo-files-table .sha.label.isSigned.isVerifiedUnmatched,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerifiedUnmatched,
-.repository #rev-list .sha.label.isSigned.isVerifiedUnmatched,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerifiedUnmatched {
-  border: 1px solid var(--color-orange-badge);
-  background: var(--color-orange-badge-bg);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerifiedUnmatched .detail.icon,
-.repository #repo-files-table .sha.label.isSigned.isVerifiedUnmatched .detail.icon,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerifiedUnmatched .detail.icon,
-.repository #rev-list .sha.label.isSigned.isVerifiedUnmatched .detail.icon,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerifiedUnmatched .detail.icon {
-  border-left: 1px solid var(--color-orange-badge);
-  color: var(--color-orange-badge);
-}
-
-.repository #commits-table td.sha .sha.label.isSigned.isVerifiedUnmatched:hover,
-.repository #repo-files-table .sha.label.isSigned.isVerifiedUnmatched:hover,
-.repository #repo-file-commit-box .sha.label.isSigned.isVerifiedUnmatched:hover,
-.repository #rev-list .sha.label.isSigned.isVerifiedUnmatched:hover,
-.repository .timeline-item.commits-list .singular-commit .sha.label.isSigned.isVerifiedUnmatched:hover {
-  background: var(--color-orange-badge-hover-bg) !important;
-}
-
 .repository .data-table {
   width: 100%;
 }
@@ -1448,7 +1328,7 @@ td .commit-summary {
   padding: 5px !important;
   overflow: hidden;
   font-size: 12px;
-  text-align: left;
+  text-align: start;
   white-space: nowrap;
   border: 1px solid var(--color-secondary);
 }
@@ -1462,10 +1342,10 @@ td .commit-summary {
   border-bottom: none !important;
 }
 .repository .data-table tr :is(td,th):first-child {
-  border-left: none !important;
+  border-inline-start: none !important;
 }
 .repository .data-table tr :is(td,th):last-child {
-  border-right: none !important;
+  border-inline-end: none !important;
 }
 
 .repository .data-table td {
@@ -1509,7 +1389,7 @@ td .commit-summary {
   white-space: nowrap;
   vertical-align: top;
   cursor: pointer;
-  text-align: right;
+  text-align: end;
   background: var(--color-body);
   border: 0;
 }
@@ -1533,8 +1413,7 @@ td .commit-summary {
   }
 }
 .repository .diff-detail-box .diff-detail-stats strong {
-  margin-left: 0.25rem;
-  margin-right: 0.25rem;
+  margin-inline: 0.25rem;
 }
 
 /* Because the translations contain the <strong> we need to style with nth-of-type */
@@ -1565,15 +1444,14 @@ td .commit-summary {
 
 .diff-detail-actions > *,
 .diff-detail-actions .button {
-  margin-left: 0 !important;
-  margin-right: 0 !important;
+  margin-inline: 0 !important;
 }
 
 .repository .diff-detail-box span.status {
   display: inline-block;
   width: 12px;
   height: 12px;
-  margin-right: 8px;
+  margin-inline-end: 8px;
   vertical-align: middle;
 }
 
@@ -1613,7 +1491,7 @@ td .commit-summary {
 .repository .diff-box .header:not(.resolved-placeholder) .button {
   padding: 0 1.125em;
   flex: 0 0 auto;
-  margin-right: 0;
+  margin-inline-end: 0;
   height: 30px;
 }
 
@@ -1639,7 +1517,7 @@ td .commit-summary {
 }
 
 .repository .diff-file-box .file-body.file-code .lines-num {
-  text-align: right;
+  text-align: end;
   width: 1%;
   min-width: 50px;
 }
@@ -1679,7 +1557,7 @@ td .commit-summary {
 
 .repository .diff-file-box .code-diff tbody tr [data-line-num]::before {
   content: attr(data-line-num);
-  text-align: right;
+  text-align: end;
 }
 
 .repository .diff-file-box .code-diff tbody tr .lines-type-marker {
@@ -1689,12 +1567,12 @@ td .commit-summary {
 
 .repository .diff-file-box .code-diff tbody tr [data-type-marker]::before {
   content: attr(data-type-marker);
-  text-align: right;
+  text-align: end;
   display: inline-block;
 }
 
 .repository .diff-file-box .code-diff-split .tag-code .lines-code code.code-inner {
-  padding-left: 10px !important;
+  padding-inline-start: 10px !important;
 }
 
 .repository .diff-file-box .code-diff-split table,
@@ -1703,7 +1581,7 @@ td .commit-summary {
 }
 
 .repository .diff-file-box.file-content {
-  clear: right;
+  clear: inline-end;
 }
 
 .repository .diff-file-box.file-content .image-diff img {
@@ -1787,9 +1665,6 @@ details.repo-search-result summary::marker {
   white-space: nowrap;
 }
 
-.file-view.markup {
-  padding: 2em;
-}
 .repository .activity-header {
   display: flex;
   justify-content: space-between;
@@ -1800,7 +1675,7 @@ details.repo-search-result summary::marker {
 /* if the element is for a checkbox, then it should have a padding-left to align to the checkbox's text */
 .repository.settings.branches .branch-protection .ui.checkbox .help,
 .repository.settings.branches .branch-protection .checkbox-sub-item {
-  padding-left: 26px;
+  padding-inline-start: 26px;
 }
 
 .repository.settings.branches .branch-protection .status-check-matched-mark {
@@ -1809,8 +1684,8 @@ details.repo-search-result summary::marker {
 }
 
 .repository .ui.attached.isSigned.isWarning {
-  border-left: 1px solid var(--color-error-border);
-  border-right: 1px solid var(--color-error-border);
+  border-inline-start: 1px solid var(--color-error-border);
+  border-inline-end: 1px solid var(--color-error-border);
 }
 
 .repository .ui.attached.isSigned.isWarning.top,
@@ -1834,8 +1709,8 @@ details.repo-search-result summary::marker {
 }
 
 .repository .ui.attached.isSigned.isVerified {
-  border-left: 1px solid var(--color-success-border);
-  border-right: 1px solid var(--color-success-border);
+  border-inline-start: 1px solid var(--color-success-border);
+  border-inline-end: 1px solid var(--color-success-border);
 }
 
 .repository .ui.attached.isSigned.isVerified.top,
@@ -1860,8 +1735,8 @@ details.repo-search-result summary::marker {
 
 .repository .ui.attached.isSigned.isVerifiedUntrusted,
 .repository .ui.attached.isSigned.isVerifiedUnmatched {
-  border-left: 1px solid var(--color-warning-border);
-  border-right: 1px solid var(--color-warning-border);
+  border-inline-start: 1px solid var(--color-warning-border);
+  border-inline-end: 1px solid var(--color-warning-border);
 }
 
 .repository .ui.attached.isSigned.isVerifiedUntrusted.top,
@@ -1890,35 +1765,9 @@ details.repo-search-result summary::marker {
   border-bottom: 1px solid var(--color-warning-border);
 }
 
-.repository .release-tag-name .ui.label.isSigned,
-.repository .release-list-title .ui.label.isSigned {
-  padding: 0 0.5em;
-  box-shadow: none;
-}
-
-.repository .release-tag-name .ui.label.isSigned .avatar,
-.repository .release-list-title .ui.label.isSigned .avatar {
-  margin-left: .5rem;
-}
-
-.repository .release-tag-name .ui.label.isSigned.isVerified,
-.repository .release-list-title .ui.label.isSigned.isVerified {
-  border: 1px solid var(--color-success-border);
-  background-color: var(--color-success-bg);
-  color: var(--color-success-text);
-}
-
-.repository .release-tag-name .ui.label.isSigned.isWarning,
-.repository .release-list-title .ui.label.isSigned.isWarning {
-  border: 1px solid var(--color-warning-border);
-  background-color: var(--color-warning-bg);
-  color: var(--color-warning-text);
-}
-
 .repository .segment.reactions.dropdown .menu,
 .repository .select-reaction.dropdown .menu {
-  right: 0 !important;
-  left: auto !important;
+  inset-inline: auto 0 !important;
   min-width: 170px;
 }
 
@@ -1929,7 +1778,7 @@ details.repo-search-result summary::marker {
 
 .repository .segment.reactions.dropdown .menu > .item,
 .repository .select-reaction.dropdown .menu > .item {
-  float: left;
+  float: inline-start;
   margin: 4px;
   font-size: 20px;
   width: 34px;
@@ -1958,7 +1807,7 @@ details.repo-search-result summary::marker {
   display: flex !important;
   align-items: center;
   border: 0;
-  border-right: 1px solid;
+  border-inline-end: 1px solid;
   border-radius: 0;
   margin: 0;
   font-size: 12px;
@@ -1968,7 +1817,7 @@ details.repo-search-result summary::marker {
 }
 
 .repository .segment.reactions .ui.label:first-of-type {
-  border-bottom-left-radius: 3px;
+  border-end-start-radius: 3px;
 }
 
 .repository .segment.reactions .ui.label.disabled {
@@ -1987,7 +1836,7 @@ details.repo-search-result summary::marker {
 }
 
 .repository .segment.reactions .reaction-count {
-  margin-left: 0.5rem;
+  margin-inline-start: 0.5rem;
 }
 
 .repository .segment.reactions .select-reaction {
@@ -2052,117 +1901,9 @@ details.repo-search-result summary::marker {
   font-weight: var(--font-weight-medium);
 }
 
-.repository .repository-summary #language-stats-bar {
-  display: flex;
-  gap: 2px;
-  padding: 0;
-  height: 10px;
-  white-space: nowrap;
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
-  overflow: hidden;
-}
-
-.size-overview .segment:has(> .bar) {
-  display: flex;
-  height: 10px;
-  padding: 0;
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-#cite-repo-modal #citation-panel {
-  display: flex;
-  width: 100%;
-}
-
-#cite-repo-modal #citation-panel input {
-  border-radius: 0;
-  padding: 5px 10px;
-  width: 50%;
-  line-height: 1.4;
-}
-
-#cite-repo-modal #citation-panel #citation-copy-content {
-  border-radius: 0;
-  padding: 5px 10px;
-  font-size: 1.2em;
-  line-height: 1.4;
-  flex: 1;
-}
-
-#cite-repo-modal #citation-panel #citation-copy-bibtex {
-  font-size: 13px;
-  padding: 7.5px 5px;
-  border-right: none;
-}
-
-#cite-repo-modal #citation-panel #goto-citation-btn {
-  border-left: none;
-}
-
-#cite-repo-modal #citation-panel > :first-child {
-  border-radius: var(--border-radius) 0 0 var(--border-radius) !important;
-}
-
-#cite-repo-modal #citation-panel > :last-child {
-  border-radius: 0 var(--border-radius) var(--border-radius) 0 !important;
-}
-
-#cite-repo-modal #citation-panel .icon.button {
-  padding: 0 10px;
-}
-
-.user-cards .list {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 15px;
-  margin: 0 0 10px;
-  padding: 0;
-}
-
-@media (max-width: 767.98px) {
-  .user-cards .list {
-    grid-template-columns: repeat(1, 1fr);
-  }
-}
-
-@media (max-width: 900px) {
-  .user.profile .user-cards .list {
-    grid-template-columns: repeat(1, 1fr);
-  }
-}
-
-.user-cards .list .card {
-  display: flex;
-  flex-direction: row;
-  width: 100%;
-  margin: 0;
-  padding: 14px;
-  border-radius: 0.28571429rem;
-  border: 1px solid var(--color-secondary);
-  background: var(--color-box-body);
-}
-
-.user-cards .list .card .avatar {
-  width: 48px;
-  height: 48px;
-  margin-right: 14px;
-}
-
-.user-cards .list .card .name {
-  margin-top: 0;
-  margin-bottom: 0;
-  font-weight: var(--font-weight-normal);
-}
-
-.user-cards .list .card .meta {
-  margin-top: 5px;
-}
-
 #search-user-box .results .result .image {
   order: 0;
-  margin-right: 12px;
+  margin-inline-end: 12px;
   width: 2em;
   height: 2em;
   min-width: 2em;
@@ -2181,21 +1922,21 @@ details.repo-search-result summary::marker {
   padding-top: 15px;
 }
 
-.commit-header-row,
-.tag-signature-row {
+.commit-header-row {
   min-height: 50px !important;
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
 }
 
-.ui.attached.message.tag-signature-row {
-  border-radius: var(--border-radius);
+.signature-row {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem !important;
+  gap: 0.5rem 1rem;
+  justify-content: space-between;
 }
 
-.tag-signature-row div {
-  margin-top: auto !important;
-  margin-bottom: auto !important;
-  display: inline-block !important;
+.signature-row > div {
+  display: flex;
+  align-items: center;
 }
 
 .commit-header-buttons {
@@ -2255,7 +1996,7 @@ details.repo-search-result summary::marker {
 }
 
 .comment:target .header::before {
-  border-right-color: var(--color-primary) !important;
+  border-inline-end-color: var(--color-primary) !important;
   filter: drop-shadow(-3px 0 0 var(--color-primary-alpha-30)) !important;
 }
 
@@ -2278,7 +2019,7 @@ details.repo-search-result summary::marker {
   margin: 0 !important;
   position: relative;
   color: var(--color-text);
-  min-height: var(--repo-header-issue-min-height);
+  min-height: 41px;
   background-color: var(--color-box-header);
   display: flex;
   justify-content: space-between;
@@ -2291,7 +2032,7 @@ details.repo-search-result summary::marker {
 
 .comment-header::before,
 .comment-header::after {
-  right: 100%;
+  inset-inline-end: 100%;
   top: 20px;
   border: solid transparent;
   content: " ";
@@ -2302,13 +2043,13 @@ details.repo-search-result summary::marker {
 }
 
 .comment-header::before {
-  border-right-color: var(--color-secondary);
+  border-inline-end-color: var(--color-secondary);
   border-width: 9px;
   margin-top: -9px;
 }
 
 .comment-header::after {
-  border-right-color: var(--color-box-header);
+  border-inline-end-color: var(--color-box-header);
   border-width: 8px;
   margin-top: -8px;
 }
@@ -2320,25 +2061,29 @@ details.repo-search-result summary::marker {
 
 .comment-header.arrow-top::before {
   top: -9px;
-  left: 6px;
+  inset-inline-start: 6px;
 }
 
 .comment-header.arrow-top::after {
   top: -8px;
-  left: 7px;
+  inset-inline-start: 7px;
 }
 
-.comment-header .actions a:not(.label) {
-  padding: 0.5rem !important;
+.comment-header-right.actions a:not(.label) {
+  padding: 0.5rem;
 }
 
-.comment-header .actions .label {
+.comment-header-right.actions .label {
   margin: 0 !important;
 }
 
 .comment-header-left,
 .comment-header-right {
   gap: 4px;
+}
+
+.comment-header-left > .content-history-menu.active s {
+  text-decoration-thickness: 10%;
 }
 
 .comment-body {
@@ -2348,17 +2093,6 @@ details.repo-search-result summary::marker {
   max-width: 100% !important;
   margin: 0 !important;
   padding: 1em;
-}
-
-.edit-label.modal .form .column,
-.new-label.modal .form .column {
-  padding-right: 0;
-}
-
-.edit-label.modal .form .buttons,
-.new-label.modal .form .buttons {
-  margin-left: auto;
-  padding-top: 15px;
 }
 
 .stats-table {
@@ -2377,13 +2111,13 @@ details.repo-search-result summary::marker {
 }
 
 .stats-table .table-cell:first-child {
-  border-top-left-radius: 4px;
-  border-bottom-left-radius: 4px;
+  border-start-start-radius: 4px;
+  border-end-start-radius: 4px;
 }
 
 .stats-table .table-cell:last-child {
-  border-top-right-radius: 4px;
-  border-bottom-right-radius: 4px;
+  border-start-end-radius: 4px;
+  border-end-end-radius: 4px;
 }
 
 .labels-list {
@@ -2407,15 +2141,15 @@ details.repo-search-result summary::marker {
 }
 
 .ui.label.scope-left {
-  border-bottom-right-radius: 0;
-  border-top-right-radius: 0;
-  margin-right: 0;
+  border-end-end-radius: 0;
+  border-start-end-radius: 0;
+  margin-inline-end: 0;
 }
 
 .ui.label.scope-right {
-  border-bottom-left-radius: 0;
-  border-top-left-radius: 0;
-  margin-left: 0;
+  border-end-start-radius: 0;
+  border-start-start-radius: 0;
+  margin-inline-start: 0;
 }
 
 .archived-label {
@@ -2437,7 +2171,7 @@ details.repo-search-result summary::marker {
 }
 
 .repo-button-row .button.dropdown:not(.icon) {
-  padding-right: 22px !important; /* normal buttons have !important paddings, so we need to override it for dropdown (Add File) icons */
+  padding-inline-end: 22px !important; /* normal buttons have !important paddings, so we need to override it for dropdown (Add File) icons */
 }
 
 .repo-button-row .button strong {
@@ -2514,14 +2248,14 @@ tbody.commit-list {
 }
 
 .git-notes.top {
-  text-align: left;
+  text-align: start;
 }
 
 .comment-diff-data {
   background: var(--color-code-bg);
   min-height: 12em;
   max-height: calc(100vh - 10.5rem);
-  overflow-y: auto;
+  overflow-block: auto;
   tab-size: 4;
 }
 
@@ -2538,17 +2272,28 @@ tbody.commit-list {
   top: -2px;
 }
 
-#repo-topics .repo-topic {
+.repo-topics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.repo-topics .repo-topic {
   font-weight: var(--font-weight-normal);
   cursor: pointer;
   margin: 0;
+}
+
+.repo-topics .repo-topic:last-of-type {
+  margin-inline-end: 0.5rem;
 }
 
 #new-dependency-drop-list.ui.selection.dropdown {
   min-width: 0;
   width: 100%;
   border-radius: var(--border-radius) 0 0 var(--border-radius);
-  border-right: 0;
+  border-inline-end: 0;
   white-space: nowrap;
 }
 
@@ -2595,9 +2340,10 @@ tbody.commit-list {
   align-items: center;
   display: flex;
   justify-content: space-between;
-  overflow-x: auto;
+  overflow-inline: auto;
   padding: 6px 12px !important;
   font-size: 13px !important;
+  min-height: 46px;
 }
 
 .file-info {
@@ -2612,17 +2358,30 @@ tbody.commit-list {
 }
 
 .file-info-entry + .file-info-entry {
-  border-left: 1px solid currentcolor;
-  margin-left: 8px;
-  padding-left: 8px;
+  border-inline-start: 1px solid currentcolor;
+  margin-inline-start: 8px;
+  padding-inline-start: 8px;
 }
 
 #diff-container {
   display: flex;
 }
 
-#diff-file-boxes {
+#diff-content-container {
   flex: 1;
+}
+
+#diff-commit-header {
+  /* Counteract the `+2px` for width in `.segment` */
+  padding: 0 2px;
+}
+
+#diff-commit-header + h4,
+#diff-commit-header + #diff-file-boxes {
+  margin-top: 8px;
+}
+
+#diff-file-boxes {
   max-width: 100%;
   display: flex;
   flex-direction: column;
@@ -2638,7 +2397,7 @@ tbody.commit-list {
   top: 47px;
   max-height: calc(100vh - 47px);
   height: 100%;
-  overflow-y: auto;
+  overflow-block: auto;
 }
 
 .ui.message.unicode-escape-prompt {
@@ -2650,8 +2409,8 @@ tbody.commit-list {
 
 /* fomantic's last-child selector does not work with hidden last child */
 .ui.buttons .unescape-button {
-  border-top-right-radius: 0.28571429rem;
-  border-bottom-right-radius: 0.28571429rem;
+  border-start-end-radius: 0.28571429rem;
+  border-end-end-radius: 0.28571429rem;
 }
 
 .webhook-info {
@@ -2699,7 +2458,7 @@ tbody.commit-list {
 }
 
 .diff-file-name .ui.label {
-  margin-left: 0 !important;
+  margin-inline-start: 0 !important;
 }
 
 .diff-stats-bar {
@@ -2715,8 +2474,7 @@ tbody.commit-list {
 }
 
 .ui.form .right .ui.button {
-  margin-left: 0.25em;
-  margin-right: 0;
+  margin-inline: 0.25em 0;
 }
 
 .removed-code {
@@ -2764,38 +2522,7 @@ tbody.commit-list {
 
 .code-diff-split tbody tr td:nth-child(5),
 .code-diff-split tbody tr td.add-comment-right {
-  border-left: 1px solid var(--color-secondary);
-}
-
-.migrate-entries {
-  display: grid !important;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 25px;
-  margin: 0 !important;
-}
-
-@media (max-width: 767.98px) {
-  .migrate-entries {
-    grid-template-columns: repeat(1, 1fr);
-  }
-}
-
-.migrate-entry {
-  transition: all 0.1s ease-in-out;
-  box-shadow: none !important;
-  border: 1px solid var(--color-secondary);
-  color: var(--color-text) !important;
-  width: auto !important;
-  margin: 0 !important;
-}
-
-.migrate-entry:hover {
-  transform: scale(105%);
-  box-shadow: 0 0.5rem 1rem var(--color-shadow) !important;
-}
-
-.migrate-entry .description {
-  text-wrap: balance;
+  border-inline-start: 1px solid var(--color-secondary);
 }
 
 .commits-table .commits-table-right form {
@@ -2818,7 +2545,7 @@ tbody.commit-list {
   .repository.file.list #repo-files-table .commit-list td.age,
   .repository.file.list #repo-files-table .entry th.age,
   .repository.file.list #repo-files-table .commit-list th.age {
-    margin-left: auto;
+    margin-inline-start: auto;
   }
   .repository.file.list #repo-files-table .entry td.message,
   .repository.file.list #repo-files-table .commit-list td.message,
@@ -2828,19 +2555,18 @@ tbody.commit-list {
   }
   .repository.view.issue .comment-list .timeline,
   .repository.view.issue .comment-list .timeline-item {
-    margin-left: 0;
+    margin-inline-start: 0;
   }
   .repository.view.issue .comment-list .timeline::before {
-    left: 14px;
+    inset-inline-start: 14px;
   }
   .repository.view.issue .comment-list .timeline .inline-timeline-avatar {
     display: flex;
     margin-bottom: auto;
-    margin-left: 6px;
-    margin-right: 2px;
+    margin-inline: 6px 2px;
   }
   .repository.view.issue .comment-list .timeline .comment-header {
-    padding-left: 4px;
+    padding-inline-start: 4px;
   }
   .repository.view.issue .comment-list .timeline .comment-header::before,
   .repository.view.issue .comment-list .timeline .comment-header::after {
@@ -2854,7 +2580,7 @@ tbody.commit-list {
   }
   .commit-header-row .ui.horizontal.list {
     width: 100%;
-    overflow-x: auto;
+    overflow-inline: auto;
     margin-top: 2px;
   }
   .commit-header-row .ui.horizontal.list .item {
@@ -2884,7 +2610,7 @@ tbody.commit-list {
     order: 2; /* the "search" button */
   }
   .commit-table {
-    overflow-x: auto;
+    overflow-inline: auto;
   }
   .commit-table td.sha,
   .commit-table th.sha {
@@ -2897,7 +2623,7 @@ tbody.commit-list {
     flex-wrap: wrap;
   }
   .comment-header .comment-header-right {
-    margin-left: auto;
+    margin-inline-start: auto;
   }
 }
 
@@ -2929,7 +2655,7 @@ tbody.commit-list {
 
 .commit-status-list {
   max-height: 240px; /* fit exactly 6 items, commit-status-item.height * 6 */
-  overflow-x: hidden;
+  overflow-inline: hidden;
   transition: max-height .2s;
 }
 
@@ -2961,16 +2687,8 @@ tbody.commit-list {
   gap: 8px;
 }
 
-@media (max-width: 767.98px) {
-  .commit-status-item .status-details {
-    flex-direction: column;
-    align-items: flex-end;
-    justify-content: center;
-  }
-}
-
 .commit-status-item .status-details > span {
-  padding-right: 0.5em; /* To match the alignment with the "required" label */
+  padding-inline-end: 0.5em; /* To avoid scrollbar occlusion */
 }
 
 .search-fullname {
@@ -3013,8 +2731,8 @@ tbody.commit-list {
 .repository .issue-content .issue-content-right .ui.grid .column.muted .text.black {
   border-color: var(--color-secondary);
   background: var(--color-menu);
-  border-top-left-radius: var(--border-radius);
-  border-top-right-radius: var(--border-radius);
+  border-top-left-radius: var(--border-radius); /* stylelint-disable-line logical-css/require-logical-properties */
+  border-top-right-radius: var(--border-radius); /* stylelint-disable-line logical-css/require-logical-properties */
 }
 .repository .issue-content .issue-content-right .ui.dropdown  .scrolling.menu {
   border-top: none;

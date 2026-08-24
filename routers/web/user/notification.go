@@ -1,4 +1,5 @@
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2026 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package user
@@ -9,14 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	activities_model "forgejo.org/models/activities"
 	"forgejo.org/models/db"
-	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unit"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
@@ -111,24 +111,17 @@ func getNotifications(ctx *context.Context) {
 		return
 	}
 
-	sess := db.GetEngine(ctx).Table("notification")
-	if setting.Database.Type.IsMySQL() {
-		sess = sess.IndexHint("USE", "", "IDX_notification_user_id")
-	}
-	sess.Where("user_id = ?", ctx.Doer.ID).
-		And("status = ? OR status = ?", status, activities_model.NotificationStatusPinned).
-		OrderBy("notification.updated_unix DESC")
-
-	if perPage > 0 {
-		if page == 0 {
-			page = 1
-		}
-		sess.Limit(perPage, (page-1)*perPage)
-	}
-
-	nls := make([]*activities_model.Notification, 0, perPage)
-	if err := sess.Find(&nls); err != nil {
-		ctx.ServerError("FindNotifications", err)
+	statuses := []activities_model.NotificationStatus{status, activities_model.NotificationStatusPinned}
+	nls, err := db.Find[activities_model.Notification](ctx, activities_model.FindNotificationOptions{
+		ListOptions: db.ListOptions{
+			PageSize: perPage,
+			Page:     page,
+		},
+		UserID: ctx.Doer.ID,
+		Status: statuses,
+	})
+	if err != nil {
+		ctx.ServerError("db.Find[activities_model.Notification]", err)
 		return
 	}
 	notifications := activities_model.NotificationList(nls)
@@ -210,6 +203,7 @@ func NotificationStatusPost(ctx *context.Context) {
 	if !ctx.FormBool("noredirect") {
 		url := fmt.Sprintf("%s/notifications?page=%s", setting.AppSubURL, url.QueryEscape(ctx.FormString("page")))
 		ctx.Redirect(url, http.StatusSeeOther)
+		return
 	}
 
 	getNotifications(ctx)
@@ -235,10 +229,7 @@ func NotificationPurgePost(ctx *context.Context) {
 
 // NotificationSubscriptions returns the list of subscribed issues
 func NotificationSubscriptions(ctx *context.Context) {
-	page := ctx.FormInt("page")
-	if page < 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 
 	sortType := ctx.FormString("sort")
 	ctx.Data["SortType"] = sortType
@@ -272,11 +263,14 @@ func NotificationSubscriptions(ctx *context.Context) {
 	var labelIDs []int64
 	selectedLabels := ctx.FormString("labels")
 	ctx.Data["Labels"] = selectedLabels
-	if len(selectedLabels) > 0 && selectedLabels != "0" {
+	if len(selectedLabels) > 0 {
 		var err error
 		labelIDs, err = base.StringsToInt64s(strings.Split(selectedLabels, ","))
 		if err != nil {
 			ctx.Flash.Error(ctx.Tr("invalid_data", selectedLabels), true)
+		}
+		if slices.Contains(labelIDs, 0) {
+			labelIDs = []int64{0}
 		}
 	}
 
@@ -311,11 +305,6 @@ func NotificationSubscriptions(ctx *context.Context) {
 		ctx.ServerError("GetIssuesAllCommitStatus", err)
 		return
 	}
-	if !ctx.Repo.CanRead(unit.TypeActions) {
-		for key := range commitStatuses {
-			git_model.CommitStatusesHideActionsURL(ctx, commitStatuses[key])
-		}
-	}
 	ctx.Data["CommitLastStatus"] = lastStatus
 	ctx.Data["CommitStatuses"] = commitStatuses
 	ctx.Data["Issues"] = issues
@@ -340,9 +329,10 @@ func NotificationSubscriptions(ctx *context.Context) {
 			return 0
 		}
 		reviewTyp := issues_model.ReviewTypeApprove
-		if typ == "reject" {
+		switch typ {
+		case "reject":
 			reviewTyp = issues_model.ReviewTypeReject
-		} else if typ == "waiting" {
+		case "waiting":
 			reviewTyp = issues_model.ReviewTypeRequest
 		}
 		for _, count := range counts {
@@ -371,10 +361,7 @@ func NotificationSubscriptions(ctx *context.Context) {
 
 // NotificationWatching returns the list of watching repos
 func NotificationWatching(ctx *context.Context) {
-	page := ctx.FormInt("page")
-	if page < 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 
 	keyword := ctx.FormTrim("q")
 	ctx.Data["Keyword"] = keyword
@@ -452,20 +439,20 @@ func NotificationWatching(ctx *context.Context) {
 	// redirect to last page if request page is more than total pages
 	pager := context.NewPagination(total, setting.UI.User.RepoPagingNum, page, 5)
 	pager.SetDefaultParams(ctx)
-	if archived.Has() {
-		pager.AddParamString("archived", fmt.Sprint(archived.Value()))
+	if has, value := archived.Get(); has {
+		pager.AddParamString("archived", fmt.Sprint(value))
 	}
-	if fork.Has() {
-		pager.AddParamString("fork", fmt.Sprint(fork.Value()))
+	if has, value := fork.Get(); has {
+		pager.AddParamString("fork", fmt.Sprint(value))
 	}
-	if mirror.Has() {
-		pager.AddParamString("mirror", fmt.Sprint(mirror.Value()))
+	if has, value := mirror.Get(); has {
+		pager.AddParamString("mirror", fmt.Sprint(value))
 	}
-	if template.Has() {
-		pager.AddParamString("template", fmt.Sprint(template.Value()))
+	if has, value := template.Get(); has {
+		pager.AddParamString("template", fmt.Sprint(value))
 	}
-	if private.Has() {
-		pager.AddParamString("private", fmt.Sprint(private.Value()))
+	if has, value := private.Get(); has {
+		pager.AddParamString("private", fmt.Sprint(value))
 	}
 	ctx.Data["Page"] = pager
 

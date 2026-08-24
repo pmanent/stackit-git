@@ -1,4 +1,5 @@
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package markdown
@@ -9,6 +10,8 @@ import (
 	"strings"
 
 	"forgejo.org/modules/markup"
+	"forgejo.org/modules/markup/common"
+	markdownutil "forgejo.org/modules/markup/markdown/util"
 	"forgejo.org/modules/setting"
 
 	"github.com/yuin/goldmark/ast"
@@ -35,8 +38,8 @@ func (g *ASTTransformer) applyElementDir(n ast.Node) {
 func (g *ASTTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
 	firstChild := node.FirstChild()
 	tocMode := ""
-	ctx := pc.Get(renderContextKey).(*markup.RenderContext)
-	rc := pc.Get(renderConfigKey).(*RenderConfig)
+	ctx := pc.Get(markdownutil.RenderContextKey).(*markup.RenderContext)
+	rc := pc.Get(markdownutil.RenderConfigKey).(*RenderConfig)
 
 	tocList := make([]markup.Header, 0, 20)
 	if rc.yamlNode != nil {
@@ -73,6 +76,22 @@ func (g *ASTTransformer) Transform(node *ast.Document, reader text.Reader, pc pa
 			}
 		case *ast.CodeSpan:
 			g.transformCodeSpan(ctx, v, reader)
+		case *common.Footnote:
+			if scope, found := ctx.Metas["scope"]; found {
+				v.Name = fmt.Appendf(v.Name, "-%s", scope)
+			}
+		case *common.FootnoteLink:
+			if scope, found := ctx.Metas["scope"]; found {
+				v.Name = fmt.Appendf(v.Name, "-%s", scope)
+			}
+		case *common.FootnoteBackLink:
+			if scope, found := ctx.Metas["scope"]; found {
+				v.Name = fmt.Appendf(v.Name, "-%s", scope)
+			}
+		case *ast.RawHTML:
+			g.transformRawHTML(ctx, v, reader)
+		case *ast.FencedCodeBlock:
+			g.transformCodeblockLanguage(v, reader)
 		}
 		return ast.WalkContinue, nil
 	})
@@ -131,7 +150,7 @@ func (r *HTMLRenderer) renderDocument(w util.BufWriter, source []byte, node ast.
 		if entering {
 			_, err = w.WriteString("<div")
 			if err == nil {
-				_, err = w.WriteString(fmt.Sprintf(` lang=%q`, val))
+				_, err = fmt.Fprintf(w, ` lang=%q`, val)
 			}
 			if err == nil {
 				_, err = w.WriteRune('>')
@@ -203,7 +222,7 @@ func (r *HTMLRenderer) renderIcon(w util.BufWriter, source []byte, node ast.Node
 		return ast.WalkContinue, nil
 	}
 
-	_, err := w.WriteString(fmt.Sprintf(`<i class="icon %s"></i>`, name))
+	_, err := fmt.Fprintf(w, `<i class="icon %s"></i>`, name)
 	if err != nil {
 		return ast.WalkStop, err
 	}

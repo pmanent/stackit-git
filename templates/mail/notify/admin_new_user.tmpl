@@ -7,7 +7,7 @@
 		blockquote { padding-left: 1em; margin: 1em 0; border-left: 1px solid grey; color: #777}
 		.footer { font-size:small; color:#666;}
 		body {
-			font-family: Aptos, Arial, sans-serif; 
+			font-family: Aptos, Arial, sans-serif;
 			font-size: 11px;
 		}
 	</style>
@@ -16,8 +16,8 @@
 
 <body>
 	<ul>
-		<h3>{{.Locale.Tr "mail.admin.new_user.user_info"}}: <a href="{{.NewUserUrl}}">@{{.NewUser.Name}}</a></h3>
-		<li>{{.Locale.Tr "admin.users.created"}}: {{DateTime "full" .NewUser.CreatedUnix}}</li>
+		<h3>{{.locale.Tr "mail.admin.new_user.user_info"}}: <a href="{{.NewUserUrl}}">@{{.NewUser.Name}}</a></h3>
+		<li>{{.locale.Tr "admin.users.created"}}: {{DateTime "full" .NewUser.CreatedUnix}}</li>
 	</ul>
 	<p> {{.Body | SanitizeHTML}} </p>
 </body>

@@ -17,13 +17,14 @@ import (
 )
 
 // GetStarredRepos returns the repos starred by a particular user
-func GetStarredRepos(ctx context.Context, userID int64, private bool, listOptions db.ListOptions) ([]*Repository, error) {
+func GetStarredRepos(ctx context.Context, userID int64, private bool, listOptions db.ListOptions, reducer RepositoryAuthorizationReducer) ([]*Repository, error) {
 	sess := db.GetEngine(ctx).
 		Where("star.uid=?", userID).
 		Join("LEFT", "star", "`repository`.id=`star`.repo_id")
 	if !private {
 		sess = sess.And("is_private=?", false)
 	}
+	sess = sess.And(reducer.RepoReadAccessFilter())
 
 	if listOptions.Page != 0 {
 		sess = db.SetSessionPagination(sess, &listOptions)
@@ -37,14 +38,15 @@ func GetStarredRepos(ctx context.Context, userID int64, private bool, listOption
 }
 
 // GetWatchedRepos returns the repos watched by a particular user
-func GetWatchedRepos(ctx context.Context, userID int64, private bool, listOptions db.ListOptions) ([]*Repository, int64, error) {
+func GetWatchedRepos(ctx context.Context, userID int64, private bool, listOptions db.ListOptions, reducer RepositoryAuthorizationReducer) ([]*Repository, int64, error) {
 	sess := db.GetEngine(ctx).
 		Where("watch.user_id=?", userID).
-		And("`watch`.mode<>?", WatchModeDont).
+		And(BuilderWatchAnything()).
 		Join("LEFT", "watch", "`repository`.id=`watch`.repo_id")
 	if !private {
 		sess = sess.And("is_private=?", false)
 	}
+	sess = sess.And(reducer.RepoReadAccessFilter())
 
 	if listOptions.Page != 0 {
 		sess = db.SetSessionPagination(sess, &listOptions)
@@ -151,7 +153,10 @@ func GetReviewers(ctx context.Context, repo *Repository, doerID, posterID int64)
 		).Or(builder.In("`user`.id",
 			builder.Select("user_id").From("watch").
 				Where(builder.Eq{"repo_id": repo.ID}.
-					And(builder.In("mode", WatchModeNormal, WatchModeAuto))),
+					And(
+						// Only care about user watching this repo's pull requests.
+						builder.Eq{"`watch`.watch_selection_pull_requests": true},
+					)),
 		).Or(builder.In("`user`.id",
 			builder.Select("uid").From("org_user").
 				Where(builder.Eq{"org_id": repo.OwnerID}),
@@ -162,14 +167,12 @@ func GetReviewers(ctx context.Context, repo *Repository, doerID, posterID int64)
 	return users, db.GetEngine(ctx).Where(cond).OrderBy(user_model.GetOrderByName()).Find(&users)
 }
 
-// GetIssuePostersWithSearch returns users with limit of 30 whose username started with prefix that have authored an issue/pull request for the given repository
-// If isShowFullName is set to true, also include full name prefix search
-func GetIssuePostersWithSearch(ctx context.Context, repo *Repository, isPull bool, search string, isShowFullName bool) ([]*user_model.User, error) {
+// GetIssuePostersWithSearch returns up to 30 users whose username starts with or full_name contains the given search string for the given repository.
+func GetIssuePostersWithSearch(ctx context.Context, repo *Repository, isPull bool, search string) ([]*user_model.User, error) {
 	users := make([]*user_model.User, 0, 30)
-	prefixCond := db.BuildCaseInsensitiveLike("name", search+"%")
-	if isShowFullName {
-		prefixCond = db.BuildCaseInsensitiveLike("full_name", "%"+search+"%")
-	}
+	prefixCond := builder.Or(
+		db.BuildCaseInsensitiveLike("name", search+"%"),
+		db.BuildCaseInsensitiveLike("full_name", "%"+search+"%"))
 
 	cond := builder.In("`user`.id",
 		builder.Select("poster_id").From("issue").Where(
@@ -193,7 +196,7 @@ func GetWatchedRepoIDsOwnedBy(ctx context.Context, userID, ownedByUserID int64) 
 		Select("`repository`.id").
 		Join("LEFT", "watch", "`repository`.id=`watch`.repo_id").
 		Where("`watch`.user_id=?", userID).
-		And("`watch`.mode<>?", WatchModeDont).
+		And(BuilderWatchAnything()).
 		And("`repository`.owner_id=?", ownedByUserID).Find(&repoIDs)
 	return repoIDs, err
 }

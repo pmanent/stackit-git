@@ -10,13 +10,17 @@ import (
 
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
+	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
+	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 	"forgejo.org/modules/translation"
 
 	"github.com/stretchr/testify/assert"
 )
 
-const testInput = `  space @mention-user  
+const testInput = `  space @mention-user
 /just/a/path.bin
 https://example.com/file.bin
 [local link](file.bin)
@@ -47,12 +51,12 @@ var testMetas = map[string]string{
 
 func TestApostrophesInMentions(t *testing.T) {
 	rendered := RenderMarkdownToHtml(t.Context(), "@mention-user's comment")
-	assert.EqualValues(t, template.HTML("<p><a href=\"/mention-user\" class=\"mention\" rel=\"nofollow\">@mention-user</a>&#39;s comment</p>\n"), rendered)
+	assert.Equal(t, template.HTML("<p><a href=\"/mention-user\" class=\"mention\" rel=\"nofollow\">@mention-user</a>&#39;s comment</p>\n"), rendered)
 }
 
-func TestNonExistantUserMention(t *testing.T) {
+func TestNonExistentUserMention(t *testing.T) {
 	rendered := RenderMarkdownToHtml(t.Context(), "@ThisUserDoesNotExist @mention-user")
-	assert.EqualValues(t, template.HTML("<p>@ThisUserDoesNotExist <a href=\"/mention-user\" class=\"mention\" rel=\"nofollow\">@mention-user</a></p>\n"), rendered)
+	assert.Equal(t, template.HTML("<p>@ThisUserDoesNotExist <a href=\"/mention-user\" class=\"mention\" rel=\"nofollow\">@mention-user</a></p>\n"), rendered)
 }
 
 func TestRenderCommitBody(t *testing.T) {
@@ -109,7 +113,7 @@ func TestRenderCommitBody(t *testing.T) {
 [[remote link|<a href="https://example.com/image.jpg" class="link">https://example.com/image.jpg</a>]]
 <a href="https://example.com/user/repo/compare/88fc37a3c0a4dda553bdcfc80c178a58247f42fb...12fc37a3c0a4dda553bdcfc80c178a58247f42fb#hash" class="compare"><code class="nohighlight">88fc37a3c0...12fc37a3c0 (hash)</code></a>
 com 88fc37a3c0a4dda553bdcfc80c178a58247f42fb...12fc37a3c0a4dda553bdcfc80c178a58247f42fb pare
-<a href="https://example.com/user/repo/commit/88fc37a3c0a4dda553bdcfc80c178a58247f42fb" class="commit"><code class="nohighlight">88fc37a3c0</code></a>
+<a href="https://example.com/user/repo/commit/88fc37a3c0a4dda553bdcfc80c178a58247f42fb"><code class="nohighlight">88fc37a3c0</code></a>
 com 88fc37a3c0a4dda553bdcfc80c178a58247f42fb mit
 <span class="emoji" aria-label="thumbs up" data-alias="+1">👍</span>
 <a href="mailto:mail@domain.com" class="mailto">mail@domain.com</a>
@@ -121,7 +125,7 @@ com 88fc37a3c0a4dda553bdcfc80c178a58247f42fb mit
 }
 
 func TestRenderCommitMessage(t *testing.T) {
-	expected := `space <a href="/mention-user" class="mention">@mention-user</a>  `
+	expected := `space <a href="/mention-user" class="mention">@mention-user</a>`
 
 	assert.EqualValues(t, expected, RenderCommitMessage(t.Context(), testInput, testMetas))
 }
@@ -133,7 +137,7 @@ func TestRenderCommitMessageLinkSubject(t *testing.T) {
 }
 
 func TestRenderIssueTitle(t *testing.T) {
-	expected := `  space @mention-user  
+	expected := `  space @mention-user
 /just/a/path.bin
 https://example.com/file.bin
 [local link](file.bin)
@@ -159,7 +163,7 @@ mail@domain.com
 }
 
 func TestRenderRefIssueTitle(t *testing.T) {
-	expected := `  space @mention-user  
+	expected := `  space @mention-user
 /just/a/path.bin
 https://example.com/file.bin
 [local link](file.bin)
@@ -185,7 +189,7 @@ mail@domain.com
 }
 
 func TestRenderMarkdownToHtml(t *testing.T) {
-	expected := `<p>space <a href="/mention-user" class="mention" rel="nofollow">@mention-user</a><br/>
+	expected := `<p>space <a href="/mention-user" class="mention" rel="nofollow">@mention-user</a>
 /just/a/path.bin
 <a href="https://example.com/file.bin" rel="nofollow">https://example.com/file.bin</a>
 <a href="/file.bin" rel="nofollow">local link</a>
@@ -215,9 +219,71 @@ func TestRenderLabels(t *testing.T) {
 
 	tr := &translation.MockLocale{}
 	label := unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 1})
+	labelScoped := unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 7})
+	labelMalicious := unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 11})
+	labelArchived := unittest.AssertExistsAndLoadBean(t, &issues_model.Label{ID: 12})
 
-	assert.Contains(t, RenderLabels(db.DefaultContext, tr, []*issues_model.Label{label}, "user2/repo1", false),
-		"user2/repo1/issues?labels=1")
-	assert.Contains(t, RenderLabels(db.DefaultContext, tr, []*issues_model.Label{label}, "user2/repo1", true),
-		"user2/repo1/pulls?labels=1")
+	ctx := NewContext(t.Context())
+	ctx.Locale = tr
+
+	rendered := RenderLabels(ctx, []*issues_model.Label{label}, "user2/repo1", false)
+	assert.Contains(t, rendered, "user2/repo1/issues?labels=1")
+	assert.Contains(t, rendered, ">label1<")
+	assert.Contains(t, rendered, "data-tooltip-content='First label'")
+	assert.Contains(t, rendered, "aria-description='First label'")
+	rendered = RenderLabels(ctx, []*issues_model.Label{label}, "user2/repo1", true)
+	assert.Contains(t, rendered, "user2/repo1/pulls?labels=1")
+	assert.Contains(t, rendered, ">label1<")
+	rendered = RenderLabels(ctx, []*issues_model.Label{labelScoped}, "user2/repo1", false)
+	assert.Contains(t, rendered, "user2/repo1/issues?labels=7")
+	assert.Contains(t, rendered, ">scope<")
+	assert.Contains(t, rendered, ">label1<")
+	rendered = RenderLabels(ctx, []*issues_model.Label{labelMalicious}, "user2/repo1", false)
+	assert.Contains(t, rendered, "user2/repo1/issues?labels=11")
+	assert.Contains(t, rendered, ">  &lt;script&gt;malicious&lt;/script&gt; <")
+	assert.Contains(t, rendered, ">&#39;?&amp;<")
+	assert.Contains(t, rendered, "data-tooltip-content='Malicious label &#39; &lt;script&gt;malicious&lt;/script&gt;'")
+	assert.Contains(t, rendered, "aria-description='Malicious label &#39; &lt;script&gt;malicious&lt;/script&gt;'")
+	rendered = RenderLabels(ctx, []*issues_model.Label{labelArchived}, "user2/repo1", false)
+	assert.Contains(t, rendered, "user2/repo1/issues?labels=12")
+	assert.Contains(t, rendered, ">archived label&lt;&gt;<")
+}
+
+func TestRenderUser(t *testing.T) {
+	unittest.PrepareTestEnv(t)
+
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	org := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
+	ghost := user_model.NewGhostUser()
+
+	assert.Contains(t, RenderUser(db.DefaultContext, *user),
+		"<a href='/user2' rel='nofollow'><strong>user2</strong></a>")
+	assert.Contains(t, RenderUser(db.DefaultContext, *org),
+		"<a href='/org3' rel='nofollow'><strong>org3</strong></a>")
+	assert.Contains(t, RenderUser(db.DefaultContext, *ghost),
+		"<strong>Ghost</strong>")
+
+	defer test.MockVariableValue(&setting.UI.DefaultShowFullName, true)()
+	assert.Contains(t, RenderUser(db.DefaultContext, *user),
+		"<a href='/user2' rel='nofollow'><strong>&lt; U&lt;se&gt;r Tw&lt;o &gt; &gt;&lt;</strong></a>")
+	assert.Contains(t, RenderUser(db.DefaultContext, *org),
+		"<a href='/org3' rel='nofollow'><strong>&lt;&lt;&lt;&lt; &gt;&gt; &gt;&gt; &gt; &gt;&gt; &gt; &gt;&gt;&gt; &gt;&gt;</strong></a>")
+	assert.Contains(t, RenderUser(db.DefaultContext, *ghost),
+		"<strong>Ghost</strong>")
+}
+
+func TestRenderReviewRequest(t *testing.T) {
+	unittest.PrepareTestEnv(t)
+
+	target1 := issues_model.RequestReviewTarget{User: &user_model.User{ID: 1, Name: "user1", FullName: "User <One>"}}
+	target2 := issues_model.RequestReviewTarget{Team: &org_model.Team{ID: 2, Name: "Team2", OrgID: 3}}
+	target3 := issues_model.RequestReviewTarget{Team: org_model.NewGhostTeam()}
+	assert.Contains(t, RenderReviewRequest(db.DefaultContext, []issues_model.RequestReviewTarget{target1, target2, target3}),
+		"<a href='/user1' rel='nofollow'><strong>user1</strong></a>, "+
+			"<a href='/org/org3/teams/Team2' rel='nofollow'><strong>Team2</strong></a>, "+
+			"<strong>Ghost team</strong>")
+
+	defer test.MockVariableValue(&setting.UI.DefaultShowFullName, true)()
+	assert.Contains(t, RenderReviewRequest(db.DefaultContext, []issues_model.RequestReviewTarget{target1}),
+		"<a href='/user1' rel='nofollow'><strong>User &lt;One&gt;</strong></a>")
 }

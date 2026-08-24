@@ -1,6 +1,6 @@
 // @ts-check
 import {expect} from '@playwright/test';
-import {test} from './utils_e2e.js';
+import {test} from './utils_e2e.ts';
 
 for (const searchTerm of ['space', 'consectetur']) {
   for (const width of [null, 2560, 4000]) {

@@ -11,7 +11,6 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/timeutil"
-	"forgejo.org/modules/util"
 
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/stretchr/testify/assert"
@@ -293,7 +292,7 @@ heiQvzkApQup5c+BhH5zFDFdKJ2CBByxw9+7QjMFI/wgLixKuE0Ob2kAokXf7RlB
 	require.NoError(t, err)
 	assert.Len(t, keys, 1)
 	assert.Len(t, keys[0].Emails, 1)
-	assert.EqualValues(t, "no-reply@golang.com", keys[0].Emails[0].Email)
+	assert.Equal(t, "no-reply@golang.com", keys[0].Emails[0].Email)
 
 	primaryKeyID := "D68172F48E9C5283"
 	// Assert primary key
@@ -458,7 +457,7 @@ epiDVQ==
 func TestTryGetKeyIDFromSignature(t *testing.T) {
 	assert.Empty(t, tryGetKeyIDFromSignature(&packet.Signature{}))
 	assert.Equal(t, "038D1A3EADDBEA9C", tryGetKeyIDFromSignature(&packet.Signature{
-		IssuerKeyId: util.ToPointer(uint64(0x38D1A3EADDBEA9C)),
+		IssuerKeyId: new(uint64(0x38D1A3EADDBEA9C)),
 	}))
 	assert.Equal(t, "038D1A3EADDBEA9C", tryGetKeyIDFromSignature(&packet.Signature{
 		IssuerFingerprint: []uint8{0xb, 0x23, 0x24, 0xc7, 0xe6, 0xfe, 0x4f, 0x3a, 0x6, 0x26, 0xc1, 0x21, 0x3, 0x8d, 0x1a, 0x3e, 0xad, 0xdb, 0xea, 0x9c},

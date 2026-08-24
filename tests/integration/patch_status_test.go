@@ -10,46 +10,40 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
-	unit_model "forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
-	"forgejo.org/modules/optional"
 	"forgejo.org/modules/test"
 	pull_service "forgejo.org/services/pull"
-	files_service "forgejo.org/services/repository/files"
 	shared_automerge "forgejo.org/services/shared/automerge"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPatchStatus(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 		session := loginUser(t, user2.Name)
 
-		repo, _, f := tests.CreateDeclarativeRepoWithOptions(t, user2, tests.DeclarativeRepoOptions{
-			AutoInit:     optional.Some(true),
-			EnabledUnits: optional.Some([]unit_model.Type{unit_model.TypeCode}),
-			// commented out for the sake of backporting the test to v11.0
-			//			ObjectFormat: optional.Some("sha256"),
-			Files: optional.Some([]*files_service.ChangeRepoFile{
-				{
-					Operation:     "create",
-					TreePath:      ".spokeperson",
-					ContentReader: strings.NewReader("n0toose"),
-				},
-			}),
+		var objectFormat git.ObjectFormat
+		if git.SupportHashSha256 {
+			objectFormat = git.Sha256ObjectFormat
+		}
+
+		repo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+			Files: forgery.MapFS{
+				".spokeperson": forgery.MapFile("n0toose"),
+			},
+			ObjectFormat: objectFormat,
 		})
-		defer f()
 
 		testAutomergeQueued := func(t *testing.T, pr *issues_model.PullRequest, expected issues_model.PullRequestStatus) {
 			t.Helper()
@@ -144,8 +138,8 @@ func TestPatchStatus(t *testing.T) {
 				t.Helper()
 				var found *issues_model.PullRequest
 				assert.Eventually(t, func() bool {
-					examplar := pr
-					found = unittest.AssertExistsAndLoadBean(t, &examplar, flow)
+					exemplar := pr
+					found = unittest.AssertExistsAndLoadBean(t, &exemplar, flow)
 					return found.Status == issues_model.PullRequestStatusConflict
 				}, time.Second*30, time.Millisecond*200)
 				return found
@@ -265,7 +259,6 @@ func TestPatchStatus(t *testing.T) {
 			// Add protected branch.
 			link := fmt.Sprintf("/%s/settings/branches/edit", repo.FullName())
 			session.MakeRequest(t, NewRequestWithValues(t, "POST", link, map[string]string{
-				"_csrf":                   GetCSRF(t, session, link),
 				"rule_name":               "main",
 				"protected_file_patterns": "LICENSE",
 			}), http.StatusSeeOther)
@@ -294,7 +287,7 @@ can buy me/us a Paulaner Spezi in return.        ~sdomi, Project SERVFAIL`), 0o6
 				defer tests.PrintCurrentTest(t)()
 
 				require.NoError(t, git.NewCommand(t.Context(), "push", "fork", "HEAD:protected").Run(&git.RunOpts{Dir: dstPath}))
-				testPullCreateDirectly(t, session, repo.OwnerName, repo.Name, repo.DefaultBranch, forkRepo.OwnerName, forkRepo.Name, "protected", "accros repo protected")
+				testPullCreateDirectly(t, session, repo.OwnerName, repo.Name, repo.DefaultBranch, forkRepo.OwnerName, forkRepo.Name, "protected", "across repo protected")
 
 				test(t, unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: repo.ID, HeadRepoID: forkRepo.ID, HeadBranch: "protected"}, "flow = 0"))
 			})
@@ -336,7 +329,7 @@ can buy me/us a Paulaner Spezi in return.        ~sdomi, Project SERVFAIL`), 0o6
 				defer tests.PrintCurrentTest(t)()
 
 				require.NoError(t, git.NewCommand(t.Context(), "push", "fork", "HEAD:ancestor").Run(&git.RunOpts{Dir: dstPath}))
-				testPullCreateDirectly(t, session, repo.OwnerName, repo.Name, "protected", forkRepo.OwnerName, forkRepo.Name, "ancestor", "accros repo ancestor")
+				testPullCreateDirectly(t, session, repo.OwnerName, repo.Name, "protected", forkRepo.OwnerName, forkRepo.Name, "ancestor", "across repo ancestor")
 
 				test(t, unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: repo.ID, HeadRepoID: forkRepo.ID, HeadBranch: "ancestor"}, "flow = 0"))
 			})

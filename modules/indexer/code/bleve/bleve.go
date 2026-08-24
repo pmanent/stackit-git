@@ -177,9 +177,10 @@ func (b *Indexer) addUpdate(ctx context.Context, batchWriter git.WriteCloserErro
 	fileContents, err := io.ReadAll(io.LimitReader(batchReader, size))
 	if err != nil {
 		return err
-	} else if !typesniffer.DetectContentType(fileContents).IsText() {
+	} else if !typesniffer.DetectContentType(fileContents, update.Filename).IsText() {
 		// FIXME: UTF-16 files will probably fail here
-		return nil
+		// Even if the file is not recognized as a "text file", we could still put its name into the indexers to make the filename become searchable, while leave the content to empty.
+		fileContents = nil
 	}
 
 	if _, err = batchReader.Discard(1); err != nil {
@@ -258,12 +259,16 @@ func (b *Indexer) Search(ctx context.Context, opts *internal.SearchOptions) (int
 
 	if opts.Mode == internal.CodeSearchModeUnion {
 		query := bleve.NewDisjunctionQuery()
-		for _, field := range strings.Fields(opts.Keyword) {
-			query.AddQuery(inner_bleve.MatchPhraseQuery(field, "Content", repoIndexerAnalyzer, false))
+		for field := range strings.FieldsSeq(opts.Keyword) {
+			query.AddQuery(inner_bleve.MatchPhraseQuery(field, "Content", repoIndexerAnalyzer, false, 1.0))
 		}
 		keywordQuery = query
 	} else {
-		keywordQuery = inner_bleve.MatchPhraseQuery(opts.Keyword, "Content", repoIndexerAnalyzer, false)
+		keywordQuery = inner_bleve.MatchPhraseQuery(opts.Keyword,
+			"Content",
+			repoIndexerAnalyzer,
+			opts.Mode == internal.CodeSearchModeFuzzy,
+			1.0)
 	}
 
 	if len(opts.RepoIDs) > 0 {
@@ -378,4 +383,8 @@ func (b *Indexer) Search(ctx context.Context, opts *internal.SearchOptions) (int
 		})
 	}
 	return total, searchResults, searchResultLanguages, nil
+}
+
+func (b *Indexer) Formatter() internal.ResultFormatter {
+	return nil
 }

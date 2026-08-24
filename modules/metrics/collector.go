@@ -9,6 +9,7 @@ import (
 	activities_model "forgejo.org/models/activities"
 	"forgejo.org/models/db"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/storage"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -28,16 +29,16 @@ type Collector struct {
 	RunJobsAverageDurationThisMonth *prometheus.Desc
 	RunJobsMaxDurationThisMonth     *prometheus.Desc
 	RunJobsCountThisMonth           *prometheus.Desc
-	ApiCallsCount                   *prometheus.Desc
-	ApiCallsAverageLatency          *prometheus.Desc
-	ApiCallsMaxLatency              *prometheus.Desc
-	ApiCallsMinLatency              *prometheus.Desc
-	ApiCalls1xxStat                 *prometheus.Desc
-	ApiCalls2xxStat                 *prometheus.Desc
-	ApiCalls3xxStat                 *prometheus.Desc
-	ApiCalls4xxStat                 *prometheus.Desc
-	ApiCalls5xxStat                 *prometheus.Desc
-	ApiCallsUnknownStat             *prometheus.Desc
+	APICallsCount                   *prometheus.Desc
+	APICallsAverageLatency          *prometheus.Desc
+	APICallsMaxLatency              *prometheus.Desc
+	APICallsMinLatency              *prometheus.Desc
+	APICalls1xxStat                 *prometheus.Desc
+	APICalls2xxStat                 *prometheus.Desc
+	APICalls3xxStat                 *prometheus.Desc
+	APICalls4xxStat                 *prometheus.Desc
+	APICalls5xxStat                 *prometheus.Desc
+	APICallsUnknownStat             *prometheus.Desc
 	// >>> @@@ STACKIT CODE @@@
 	Follows            *prometheus.Desc
 	HookTasks          *prometheus.Desc
@@ -119,52 +120,52 @@ func NewCollector() Collector {
 			"Run Jobs Count This Month",
 			nil, nil,
 		),
-		ApiCallsCount: prometheus.NewDesc(
+		APICallsCount: prometheus.NewDesc(
 			namespace+"api_calls_count",
 			"Number of API Calls",
 			nil, nil,
 		),
-		ApiCallsAverageLatency: prometheus.NewDesc(
+		APICallsAverageLatency: prometheus.NewDesc(
 			namespace+"api_calls_average_latency",
 			"Average Latency of API Calls",
 			nil, nil,
 		),
-		ApiCallsMaxLatency: prometheus.NewDesc(
+		APICallsMaxLatency: prometheus.NewDesc(
 			namespace+"api_calls_max_latency",
 			"Maximum Latency of API Calls",
 			nil, nil,
 		),
-		ApiCallsMinLatency: prometheus.NewDesc(
+		APICallsMinLatency: prometheus.NewDesc(
 			namespace+"api_calls_min_latency",
 			"Minimum Latency of API Calls",
 			nil, nil,
 		),
-		ApiCalls1xxStat: prometheus.NewDesc(
+		APICalls1xxStat: prometheus.NewDesc(
 			namespace+"api_calls_1xx_stat",
 			"API Calls 1xx Status",
 			nil, nil,
 		),
-		ApiCalls2xxStat: prometheus.NewDesc(
+		APICalls2xxStat: prometheus.NewDesc(
 			namespace+"api_calls_2xx_stat",
 			"API Calls 2xx Status",
 			nil, nil,
 		),
-		ApiCalls3xxStat: prometheus.NewDesc(
+		APICalls3xxStat: prometheus.NewDesc(
 			namespace+"api_calls_3xx_stat",
 			"API Calls 3xx Status",
 			nil, nil,
 		),
-		ApiCalls4xxStat: prometheus.NewDesc(
+		APICalls4xxStat: prometheus.NewDesc(
 			namespace+"api_calls_4xx_stat",
 			"API Calls 4xx Status",
 			nil, nil,
 		),
-		ApiCalls5xxStat: prometheus.NewDesc(
+		APICalls5xxStat: prometheus.NewDesc(
 			namespace+"api_calls_5xx_stat",
 			"API Calls 5xx Status",
 			nil, nil,
 		),
-		ApiCallsUnknownStat: prometheus.NewDesc(
+		APICallsUnknownStat: prometheus.NewDesc(
 			namespace+"api_calls_unknown_stat",
 			"API Calls Unknown Status",
 			nil, nil,
@@ -305,16 +306,16 @@ func (c Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.RunJobsAverageDurationThisMonth
 	ch <- c.RunJobsMaxDurationThisMonth
 	ch <- c.RunJobsCountThisMonth
-	ch <- c.ApiCallsCount
-	ch <- c.ApiCallsAverageLatency
-	ch <- c.ApiCallsMaxLatency
-	ch <- c.ApiCallsMinLatency
-	ch <- c.ApiCalls1xxStat
-	ch <- c.ApiCalls2xxStat
-	ch <- c.ApiCalls3xxStat
-	ch <- c.ApiCalls4xxStat
-	ch <- c.ApiCalls5xxStat
-	ch <- c.ApiCallsUnknownStat
+	ch <- c.APICallsCount
+	ch <- c.APICallsAverageLatency
+	ch <- c.APICallsMaxLatency
+	ch <- c.APICallsMinLatency
+	ch <- c.APICalls1xxStat
+	ch <- c.APICalls2xxStat
+	ch <- c.APICalls3xxStat
+	ch <- c.APICalls4xxStat
+	ch <- c.APICalls5xxStat
+	ch <- c.APICallsUnknownStat
 	// >>> @@@ STACKIT CODE @@@
 	ch <- c.Follows
 	ch <- c.HookTasks
@@ -371,10 +372,11 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 		float64(stats.Counter.Comment),
 	)
 	// >>> @@@ STACKIT CODE @@@
+	_, diskBytes := storage.GetDiskUsage()
 	ch <- prometheus.MustNewConstMetric(
 		c.DiskSpaceUsage,
 		prometheus.GaugeValue,
-		float64(stats.Counter.DiskSpaceUsage.Bytes),
+		float64(diskBytes),
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.RunJobsDurationThisMonth,
@@ -398,54 +400,54 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 	)
 
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCallsCount,
+		c.APICallsCount,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCallsCount),
+		float64(stats.Counter.APICallsCount),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCallsAverageLatency,
+		c.APICallsAverageLatency,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCallsAverageLatency),
+		float64(stats.Counter.APICallsAverageLatency),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCallsMaxLatency,
+		c.APICallsMaxLatency,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCallsMaxLatency),
+		float64(stats.Counter.APICallsMaxLatency),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCallsMinLatency,
+		c.APICallsMinLatency,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCallsMinLatency),
+		float64(stats.Counter.APICallsMinLatency),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCalls1xxStat,
+		c.APICalls1xxStat,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCalls1xxStat),
+		float64(stats.Counter.APICalls1xxStat),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCalls2xxStat,
+		c.APICalls2xxStat,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCalls2xxStat),
+		float64(stats.Counter.APICalls2xxStat),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCalls3xxStat,
+		c.APICalls3xxStat,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCalls3xxStat),
+		float64(stats.Counter.APICalls3xxStat),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCalls4xxStat,
+		c.APICalls4xxStat,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCalls4xxStat),
+		float64(stats.Counter.APICalls4xxStat),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCalls5xxStat,
+		c.APICalls5xxStat,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCalls5xxStat),
+		float64(stats.Counter.APICalls5xxStat),
 	)
 	ch <- prometheus.MustNewConstMetric(
-		c.ApiCallsUnknownStat,
+		c.APICallsUnknownStat,
 		prometheus.GaugeValue,
-		float64(stats.Counter.ApiCallsUnknownStat),
+		float64(stats.Counter.APICallsUnknownStat),
 	)
 	// >>> @@@ STACKIT CODE @@@
 	ch <- prometheus.MustNewConstMetric(

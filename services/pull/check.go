@@ -17,7 +17,6 @@ import (
 	issues_model "forgejo.org/models/issues"
 	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
@@ -25,9 +24,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/process"
 	"forgejo.org/modules/queue"
-	"forgejo.org/modules/timeutil"
 	asymkey_service "forgejo.org/services/asymkey"
-	notify_service "forgejo.org/services/notify"
 	shared_automerge "forgejo.org/services/shared/automerge"
 )
 
@@ -68,7 +65,7 @@ const (
 )
 
 // CheckPullMergeable check if the pull mergeable based on all conditions (branch protection, merge options, ...)
-func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *access_model.Permission, pr *issues_model.PullRequest, mergeCheckType MergeCheckType, adminSkipProtectionCheck bool) error {
+func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *access_model.Permission, pr *issues_model.PullRequest, mergeCheckType MergeCheckType, adminSkipProtectionCheck bool, mergeStyle repo_model.MergeStyle) error {
 	return db.WithTx(stdCtx, func(ctx context.Context) error {
 		if pr.HasMerged {
 			return ErrHasMerged
@@ -139,7 +136,7 @@ func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *acc
 			}
 		}
 
-		if _, err := isSignedIfRequired(ctx, pr, doer); err != nil {
+		if _, err := isSignedIfRequired(ctx, pr, doer, mergeStyle); err != nil {
 			return err
 		}
 
@@ -154,7 +151,7 @@ func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *acc
 }
 
 // isSignedIfRequired check if merge will be signed if required
-func isSignedIfRequired(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.User) (bool, error) {
+func isSignedIfRequired(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.User, mergeStyle repo_model.MergeStyle) (bool, error) {
 	pb, err := git_model.GetFirstMatchProtectedBranchRule(ctx, pr.BaseRepoID, pr.BaseBranch)
 	if err != nil {
 		return false, err
@@ -164,9 +161,20 @@ func isSignedIfRequired(ctx context.Context, pr *issues_model.PullRequest, doer 
 		return true, nil
 	}
 
+	if !isMergeSigningRequired(mergeStyle) {
+		return true, nil
+	}
+
 	sign, _, _, err := asymkey_service.SignMerge(ctx, pr, doer, pr.BaseRepo.RepoPath(), pr.BaseBranch, pr.GetGitRefName())
 
 	return sign, err
+}
+
+func isMergeSigningRequired(mergeStyle repo_model.MergeStyle) bool {
+	// Only fast-forward-only is guaranteed not to create a new commit. Rebase
+	// rewrites commits when the pull request is behind, and it can also amend
+	// the tip commit when a REBASE_TEMPLATE is configured.
+	return mergeStyle != repo_model.MergeStyleFastForwardOnly
 }
 
 // checkAndUpdateStatus checks if pull request is possible to leaving checking status,
@@ -251,66 +259,6 @@ func getMergeCommit(ctx context.Context, pr *issues_model.PullRequest) (*git.Com
 	}
 
 	return commit, nil
-}
-
-// manuallyMerged checks if a pull request got manually merged
-// When a pull request got manually merged mark the pull request as merged
-func manuallyMerged(ctx context.Context, pr *issues_model.PullRequest) bool {
-	if err := pr.LoadBaseRepo(ctx); err != nil {
-		log.Error("%-v LoadBaseRepo: %v", pr, err)
-		return false
-	}
-
-	if unit, err := pr.BaseRepo.GetUnit(ctx, unit.TypePullRequests); err == nil {
-		config := unit.PullRequestsConfig()
-		if !config.AutodetectManualMerge {
-			return false
-		}
-	} else {
-		log.Error("%-v BaseRepo.GetUnit(unit.TypePullRequests): %v", pr, err)
-		return false
-	}
-
-	commit, err := getMergeCommit(ctx, pr)
-	if err != nil {
-		log.Error("%-v getMergeCommit: %v", pr, err)
-		return false
-	}
-
-	if commit == nil {
-		// no merge commit found
-		return false
-	}
-
-	pr.MergedCommitID = commit.ID.String()
-	pr.MergedUnix = timeutil.TimeStamp(commit.Author.When.Unix())
-	pr.Status = issues_model.PullRequestStatusManuallyMerged
-	merger, _ := user_model.GetUserByEmail(ctx, commit.Author.Email)
-
-	// When the commit author is unknown set the BaseRepo owner as merger
-	if merger == nil {
-		if pr.BaseRepo.Owner == nil {
-			if err = pr.BaseRepo.LoadOwner(ctx); err != nil {
-				log.Error("%-v BaseRepo.LoadOwner: %v", pr, err)
-				return false
-			}
-		}
-		merger = pr.BaseRepo.Owner
-	}
-	pr.Merger = merger
-	pr.MergerID = merger.ID
-
-	if merged, err := pr.SetMerged(ctx); err != nil {
-		log.Error("%-v setMerged : %v", pr, err)
-		return false
-	} else if !merged {
-		return false
-	}
-
-	notify_service.MergePullRequest(ctx, merger, pr)
-
-	log.Info("manuallyMerged[%-v]: Marked as manually merged into %s/%s by commit id: %s", pr, pr.BaseRepo.Name, pr.BaseBranch, commit.ID.String())
-	return true
 }
 
 // InitializePullRequests checks and tests untested patches of pull requests.
@@ -404,10 +352,14 @@ func CheckPRsForBaseBranch(ctx context.Context, baseRepo *repo_model.Repository,
 
 // Init runs the task queue to test all the checking status pull requests
 func Init() error {
+	if err := LoadMergeMessageTemplates(); err != nil {
+		return err
+	}
+
 	prPatchCheckerQueue = queue.CreateUniqueQueue(graceful.GetManager().ShutdownContext(), "pr_patch_checker", handler)
 
 	if prPatchCheckerQueue == nil {
-		return fmt.Errorf("unable to create pr_patch_checker queue")
+		return errors.New("unable to create pr_patch_checker queue")
 	}
 
 	go graceful.GetManager().RunWithCancel(prPatchCheckerQueue)

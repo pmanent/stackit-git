@@ -22,10 +22,10 @@ func TestTestHook(t *testing.T) {
 	contexttest.LoadUser(t, ctx, 2)
 	contexttest.LoadRepo(t, ctx, 1)
 	contexttest.LoadGitRepo(t, ctx)
-	defer ctx.Repo.GitRepo.Close()
+	defer ctx.Repo().GitRepo.Close()
 	contexttest.LoadRepoCommit(t, ctx)
 	TestHook(ctx)
-	assert.EqualValues(t, http.StatusNoContent, ctx.Resp.Status())
+	assert.Equal(t, http.StatusNoContent, ctx.Resp.Status())
 
 	unittest.AssertExistsAndLoadBean(t, &webhook.HookTask{
 		HookID: 1,

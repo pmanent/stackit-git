@@ -4,9 +4,14 @@
 package integration
 
 import (
+	"bytes"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -19,13 +24,14 @@ import (
 	webhook_module "forgejo.org/modules/webhook"
 	"forgejo.org/services/release"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWebhookPayloadRef(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, giteaURL *url.URL) {
+	onApplicationRun(t, func(t *testing.T, giteaURL *url.URL) {
 		w := unittest.AssertExistsAndLoadBean(t, &webhook_model.Webhook{ID: 1})
 		w.HookEvent = &webhook_module.HookEvent{
 			SendEverything: true,
@@ -38,21 +44,15 @@ func TestWebhookPayloadRef(t *testing.T) {
 
 		session := loginUser(t, "user2")
 		// create new branch
-		csrf := GetCSRF(t, session, "user2/repo1")
-		req := NewRequestWithValues(t, "POST", "user2/repo1/branches/_new/branch/master",
-			map[string]string{
-				"_csrf":           csrf,
-				"new_branch_name": "arbre",
-				"create_tag":      "false",
-			},
-		)
+		req := NewRequestWithValues(t, "POST", "user2/repo1/branches/_new/branch/master", map[string]string{
+			"new_branch_name": "arbre",
+			"create_tag":      "false",
+		})
 		session.MakeRequest(t, req, http.StatusSeeOther)
 		// delete the created branch
-		req = NewRequestWithValues(t, "POST", "user2/repo1/branches/delete?name=arbre",
-			map[string]string{
-				"_csrf": csrf,
-			},
-		)
+		req = NewRequestWithValues(t, "POST", "user2/repo1/branches/delete", map[string]string{
+			"name": "arbre",
+		})
 		session.MakeRequest(t, req, http.StatusOK)
 
 		// check the newly created hooktasks
@@ -139,7 +139,8 @@ func TestWebhookReleaseEvents(t *testing.T) {
 	})
 
 	t.Run("CreateNewTag", func(t *testing.T) {
-		require.NoError(t, release.CreateNewTag(db.DefaultContext,
+		require.NoError(t, release.CreateNewTag(
+			db.DefaultContext,
 			user,
 			repo,
 			"master",
@@ -186,4 +187,86 @@ func checkHookTasks(t *testing.T, expectedActions map[webhook_module.HookEventTy
 		delete(expectedActions, hookTask.EventType)
 	}
 	assert.Empty(t, expectedActions)
+}
+
+func TestWebHooksDelivery(t *testing.T) {
+	requests := make(chan *http.Request, 5)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// the body can't be read when the handler returns
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		requests <- req
+	}))
+	t.Cleanup(receiver.Close)
+	maxPayloadDelay := 1 * time.Second
+	receiveWebHook := func(t *testing.T) *http.Request {
+		select {
+		case req := <-requests:
+			return req
+		case <-time.After(maxPayloadDelay):
+			t.Fatalf("no webhook received within %v", maxPayloadDelay)
+			return nil
+		}
+	}
+
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		owner := forgery.CreateUser(t, nil)
+		session := loginUser(t, owner.Name)
+		repo := forgery.CreateRepository(t, owner, nil)
+		repoURL := repo.HTMLURL() + "/"
+
+		matrixURL := receiver.URL + "/matrix"
+		resp := session.MakeRequest(t, NewRequestWithValues(t, "POST", repoURL+"settings/hooks/matrix/new", map[string]string{
+			"homeserver_url": matrixURL,
+			"access_token":   "123456",
+			"room_id":        "123",
+			"events":         "send_everything",
+			"active":         "1",
+		}), http.StatusSeeOther)
+		assertHasFlashMessages(t, resp, "success")
+
+		t.Run("Issue/comments", func(t *testing.T) {
+			session.MakeRequest(t, NewRequestWithValues(t, "POST", repoURL+"issues/new", map[string]string{
+				"title":   "First Issue",
+				"content": "wait for it",
+			}), http.StatusOK)
+
+			req := receiveWebHook(t)
+			assert.True(t, strings.HasPrefix(req.URL.Path, "/matrix/_matrix/client/v3/rooms/123/send/m.room.message/"), req.URL.Path)
+			body, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(body), "Issue opened")
+
+			var firstCommentURL, secondCommentURL string
+			var firstCommentPayload, secondCommentPayload []byte
+			session.MakeRequest(t, NewRequestWithValues(t, "POST", repoURL+"issues/1/comments", map[string]string{
+				"content": "eager to see it",
+			}), http.StatusOK)
+			req = receiveWebHook(t)
+			assert.True(t, strings.HasPrefix(req.URL.Path, "/matrix/_matrix/client/v3/rooms/123/send/m.room.message/"), req.URL.Path)
+			firstCommentURL = req.URL.Path
+
+			firstCommentPayload, err = io.ReadAll(req.Body)
+			require.NoError(t, err)
+
+			session.MakeRequest(t, NewRequestWithValues(t, "POST", repoURL+"issues/1/comments", map[string]string{
+				"content": "me too",
+			}), http.StatusOK)
+			req = receiveWebHook(t)
+			assert.True(t, strings.HasPrefix(req.URL.Path, "/matrix/_matrix/client/v3/rooms/123/send/m.room.message/"), req.URL.Path)
+			secondCommentURL = req.URL.Path
+
+			secondCommentPayload, err = io.ReadAll(req.Body)
+			require.NoError(t, err)
+
+			// even though the body is the same, the second comment
+			// should be considered different from the first (stateKey)
+			assert.NotEqual(t, firstCommentURL, secondCommentURL)
+			assert.Equal(t, string(firstCommentPayload), string(secondCommentPayload))
+		})
+	})
 }

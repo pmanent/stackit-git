@@ -5,6 +5,7 @@ package issues
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -349,7 +350,7 @@ func CreateReview(ctx context.Context, opts CreateReviewOptions) (*Review, error
 		review.Type = ReviewTypeRequest
 		review.ReviewerTeamID = opts.ReviewerTeam.ID
 	} else {
-		return nil, fmt.Errorf("provide either reviewer or reviewer team")
+		return nil, errors.New("provide either reviewer or reviewer team")
 	}
 
 	if _, err := sess.Insert(review); err != nil {
@@ -456,6 +457,11 @@ func SubmitReview(ctx context.Context, doer *user_model.User, issue *Issue, revi
 			if official, err = IsOfficialReviewer(ctx, issue, doer); err != nil {
 				return nil, nil, err
 			}
+			// delete previous review requests from the same user
+			reviewCond := builder.Eq{"reviewer_id": doer.ID, "issue_id": issue.ID}
+			if _, err := sess.Where(reviewCond.And(builder.Eq{"type": ReviewTypeRequest})).Delete(new(Review)); err != nil {
+				return nil, nil, err
+			}
 		}
 
 		review.Official = official
@@ -510,10 +516,14 @@ func SubmitReview(ctx context.Context, doer *user_model.User, issue *Issue, revi
 
 // GetReviewByIssueIDAndUserID get the latest review of reviewer for a pull request
 func GetReviewByIssueIDAndUserID(ctx context.Context, issueID, userID int64) (*Review, error) {
+	return GetReviewByIssueIDUserIDAndTypes(ctx, issueID, userID, []ReviewType{ReviewTypeApprove, ReviewTypeReject, ReviewTypeRequest})
+}
+
+func GetReviewByIssueIDUserIDAndTypes(ctx context.Context, issueID, userID int64, types []ReviewType) (*Review, error) {
 	review := new(Review)
 
 	has, err := db.GetEngine(ctx).Where(
-		builder.In("type", ReviewTypeApprove, ReviewTypeReject, ReviewTypeRequest).
+		builder.In("type", types).
 			And(builder.Eq{"issue_id": issueID, "reviewer_id": userID, "original_author_id": 0})).
 		Desc("id").
 		Get(review)
@@ -706,12 +716,12 @@ func RemoveReviewRequest(ctx context.Context, issue *Issue, reviewer, doer *user
 	}
 	defer committer.Close()
 
-	review, err := GetReviewByIssueIDAndUserID(ctx, issue.ID, reviewer.ID)
+	review, err := GetReviewByIssueIDUserIDAndTypes(ctx, issue.ID, reviewer.ID, []ReviewType{ReviewTypeRequest})
 	if err != nil && !IsErrReviewNotExist(err) {
 		return nil, err
 	}
 
-	if review == nil || review.Type != ReviewTypeRequest {
+	if review == nil {
 		return nil, nil
 	}
 
@@ -780,10 +790,6 @@ func AddTeamReviewRequest(ctx context.Context, issue *Issue, reviewer *organizat
 	official, err := IsOfficialReviewerTeam(ctx, issue, reviewer)
 	if err != nil {
 		return nil, fmt.Errorf("isOfficialReviewerTeam(): %w", err)
-	} else if !official {
-		if official, err = IsOfficialReviewer(ctx, issue, doer); err != nil {
-			return nil, fmt.Errorf("isOfficialReviewer(): %w", err)
-		}
 	}
 
 	if review, err = CreateReview(ctx, CreateReviewOptions{
@@ -794,12 +800,6 @@ func AddTeamReviewRequest(ctx context.Context, issue *Issue, reviewer *organizat
 		Stale:        false,
 	}); err != nil {
 		return nil, err
-	}
-
-	if official {
-		if _, err := db.Exec(ctx, "UPDATE `review` SET official=? WHERE issue_id=? AND reviewer_team_id=?", false, issue.ID, reviewer.ID); err != nil {
-			return nil, err
-		}
 	}
 
 	comment, err := CreateComment(ctx, &CreateCommentOptions{
@@ -908,7 +908,7 @@ func MarkConversation(ctx context.Context, comment *Comment, doer *user_model.Us
 // the PR writer , offfcial reviewer and poster can do it
 func CanMarkConversation(ctx context.Context, issue *Issue, doer *user_model.User) (permResult bool, err error) {
 	if doer == nil || issue == nil {
-		return false, fmt.Errorf("issue or doer is nil")
+		return false, errors.New("issue or doer is nil")
 	}
 
 	if doer.ID != issue.PosterID {
@@ -945,11 +945,11 @@ func DeleteReview(ctx context.Context, r *Review) error {
 	defer committer.Close()
 
 	if r.ID == 0 {
-		return fmt.Errorf("review is not allowed to be 0")
+		return errors.New("review is not allowed to be 0")
 	}
 
 	if r.Type == ReviewTypeRequest {
-		return fmt.Errorf("review request can not be deleted using this method")
+		return errors.New("review request can not be deleted using this method")
 	}
 
 	opts := FindCommentsOptions{

@@ -1,12 +1,11 @@
 FROM --platform=$BUILDPLATFORM data.forgejo.org/oci/xx AS xx
 
-FROM --platform=$BUILDPLATFORM data.forgejo.org/oci/golang:1.25-alpine3.22 AS build-env
+FROM --platform=$BUILDPLATFORM data.forgejo.org/oci/golang:1.26-alpine3.23 AS build-env
 
 ARG GOPROXY
-ENV GOPROXY=${GOPROXY:-direct}
+ENV GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
 
 ARG RELEASE_VERSION
-ARG GITEA_VERSION
 ARG TAGS="sqlite sqlite_unlock_notify"
 ENV TAGS="bindata timetzdata $TAGS"
 ARG CGO_EXTRA_CFLAGS
@@ -34,10 +33,10 @@ RUN apk --no-cache add build-base git nodejs npm
 COPY . ${GOPATH}/src/forgejo.org
 WORKDIR ${GOPATH}/src/forgejo.org
 
-RUN make clean
+RUN make clean-no-bindata
 RUN make frontend
 RUN go build contrib/environment-to-ini/environment-to-ini.go && xx-verify environment-to-ini
-RUN LDFLAGS="-buildid=" make GITEA_VERSION=$GITEA_VERSION RELEASE_VERSION=$RELEASE_VERSION GOFLAGS="-trimpath" go-check generate-backend static-executable && xx-verify gitea
+RUN LDFLAGS="-buildid=" make FORGEJO_GENERATE_SKIP_HASH=true RELEASE_VERSION=$RELEASE_VERSION GOFLAGS="-trimpath" go-check generate-backend static-executable && xx-verify gitea
 
 # Copy local files
 COPY docker/root /tmp/local
@@ -52,7 +51,7 @@ RUN chmod 755 /tmp/local/usr/bin/entrypoint \
               /go/src/forgejo.org/environment-to-ini
 RUN chmod 644 /go/src/forgejo.org/contrib/autocompletion/bash_autocomplete
 
-FROM data.forgejo.org/oci/alpine:3.22
+FROM data.forgejo.org/oci/alpine:3.23
 ARG RELEASE_VERSION
 LABEL maintainer="git@stackit.cloud" \
   org.opencontainers.image.authors="Stackit" \
@@ -68,29 +67,29 @@ LABEL maintainer="git@stackit.cloud" \
 EXPOSE 22 3000
 
 RUN apk --no-cache add \
-  bash \
-  ca-certificates \
-  curl \
-  gettext \
-  git \
-  linux-pam \
-  openssh \
-  s6 \
-  sqlite \
-  su-exec \
-  gnupg \
-  && rm -rf /var/cache/apk/*
+    bash \
+    ca-certificates \
+    curl \
+    gettext \
+    git \
+    linux-pam \
+    openssh \
+    s6 \
+    sqlite \
+    su-exec \
+    gnupg \
+    && rm -rf /var/cache/apk/*
 
 RUN addgroup \
-  -S -g 1000 \
-  git && \
+    -S -g 1000 \
+    git && \
   adduser \
-  -S -H -D \
-  -h /data/git \
-  -s /bin/bash \
-  -u 1000 \
-  -G git \
-  git && \
+    -S -H -D \
+    -h /data/git \
+    -s /bin/bash \
+    -u 1000 \
+    -G git \
+    git && \
   echo "git:*" | chpasswd -e
 
 ENV USER=git
@@ -107,3 +106,6 @@ COPY --from=build-env /go/src/forgejo.org/gitea /app/gitea/gitea
 RUN ln -s /app/gitea/gitea /app/gitea/forgejo-cli
 COPY --from=build-env /go/src/forgejo.org/environment-to-ini /usr/local/bin/environment-to-ini
 COPY --from=build-env /go/src/forgejo.org/contrib/autocompletion/bash_autocomplete /etc/profile.d/gitea_bash_autocomplete.sh
+# >>> STACKIT: bake custom public assets into the image so they can be copied to GITEA_CUSTOM at startup
+COPY custom/public/ /opt/gitea-custom-public/
+# <<< STACKIT

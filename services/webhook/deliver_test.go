@@ -102,9 +102,7 @@ func TestWebhookDeliverAuthorizationHeader(t *testing.T) {
 		IsActive:    true,
 		Type:        webhook_module.GITEA,
 	}
-	err := hook.SetHeaderAuthorization("Bearer s3cr3t-t0ken")
-	require.NoError(t, err)
-	require.NoError(t, webhook_model.CreateWebhook(db.DefaultContext, hook))
+	require.NoError(t, webhook_model.CreateWebhook(t.Context(), hook, "Bearer s3cr3t-t0ken"))
 
 	hookTask := &webhook_model.HookTask{
 		HookID:         hook.ID,
@@ -112,7 +110,7 @@ func TestWebhookDeliverAuthorizationHeader(t *testing.T) {
 		PayloadVersion: 2,
 	}
 
-	hookTask, err = webhook_model.CreateHookTask(db.DefaultContext, hookTask)
+	hookTask, err := webhook_model.CreateHookTask(db.DefaultContext, hookTask)
 	require.NoError(t, err)
 	assert.NotNil(t, hookTask)
 
@@ -289,8 +287,6 @@ func TestWebhookDeliverSpecificTypes(t *testing.T) {
 	require.NoError(t, err)
 
 	for typ, hc := range cases {
-		typ := typ
-		hc := hc
 		t.Run(typ, func(t *testing.T) {
 			t.Parallel()
 			hook := &webhook_model.Webhook{
@@ -302,7 +298,7 @@ func TestWebhookDeliverSpecificTypes(t *testing.T) {
 				ContentType: 0,  // set to 0 so that falling back to default request fails with "invalid content type"
 				Meta:        "{}",
 			}
-			require.NoError(t, webhook_model.CreateWebhook(db.DefaultContext, hook))
+			require.NoError(t, webhook_model.CreateWebhook(db.DefaultContext, hook, ""))
 
 			hookTask := &webhook_model.HookTask{
 				HookID:         hook.ID,

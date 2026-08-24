@@ -19,7 +19,6 @@ import (
 	packages_cleanup_service "forgejo.org/services/packages/cleanup"
 	repo_service "forgejo.org/services/repository"
 	archiver_service "forgejo.org/services/repository/archiver"
-	"forgejo.org/services/stats"
 )
 
 func registerUpdateMirrorTask() {
@@ -61,17 +60,6 @@ func registerRepoHealthCheck() {
 		rhcConfig := config.(*RepoHealthCheckConfig)
 		// the git args are set by config, they can be safe to be trusted
 		return repo_service.GitFsckRepos(ctx, rhcConfig.Timeout, git.ToTrustedCmdArgs(rhcConfig.Args))
-	})
-}
-
-func registerBucketAndDiskStats() {
-	RegisterTaskFatal("bucket_disk_stats", &BaseConfig{
-		Enabled:    true,
-		RunAtStart: true,
-		Schedule:   "@every 10m",
-	}, func(ctx context.Context, _ *user_model.User, _ Config) error {
-		stats.RefreshStats()
-		return nil
 	})
 }
 
@@ -172,7 +160,6 @@ func initBasicTasks() {
 	if setting.Mirror.Enabled {
 		registerUpdateMirrorTask()
 	}
-	registerBucketAndDiskStats()
 	registerRepoHealthCheck()
 	registerCheckRepoStats()
 	registerArchiveCleanup()

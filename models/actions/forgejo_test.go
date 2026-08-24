@@ -22,11 +22,13 @@ func TestActions_RegisterRunner_Token(t *testing.T) {
 	labels := []string{}
 	name := "runner"
 	version := "v1.2.3"
-	runner, err := RegisterRunner(db.DefaultContext, ownerID, repoID, token, &labels, name, version)
+	ephemeral := true
+	runner, err := RegisterRunner(db.DefaultContext, ownerID, repoID, token, &labels, name, version, ephemeral)
 	require.NoError(t, err)
-	assert.EqualValues(t, name, runner.Name)
+	assert.Equal(t, name, runner.Name)
+	assert.True(t, runner.Ephemeral)
 
-	assert.EqualValues(t, 1, subtle.ConstantTimeCompare([]byte(runner.TokenHash), []byte(auth_model.HashToken(token, runner.TokenSalt))), "the token cannot be verified with the same method as routers/api/actions/runner/interceptor.go as of 8228751c55d6a4263f0fec2932ca16181c09c97d")
+	assert.Equal(t, 1, subtle.ConstantTimeCompare([]byte(runner.TokenHash), []byte(auth_model.HashToken(token, runner.TokenSalt))), "the token cannot be verified with the same method as routers/api/actions/runner/interceptor.go as of 8228751c55d6a4263f0fec2932ca16181c09c97d")
 }
 
 // TestActions_RegisterRunner_TokenUpdate tests that a token's secret is updated
@@ -44,7 +46,7 @@ func TestActions_RegisterRunner_TokenUpdate(t *testing.T) {
 		"the initial token should match the runner's secret",
 	)
 
-	RegisterRunner(db.DefaultContext, before.OwnerID, before.RepoID, newToken, nil, before.Name, before.Version)
+	RegisterRunner(db.DefaultContext, before.OwnerID, before.RepoID, newToken, nil, before.Name, before.Version, false)
 
 	after := unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: recordID})
 
@@ -66,26 +68,29 @@ func TestActions_RegisterRunner_CreateWithLabels(t *testing.T) {
 	token := "0123456789012345678901234567890123456789"
 	name := "runner"
 	version := "v1.2.3"
+	ephemeral := true
 	labels := []string{"woop", "doop"}
 	labelsCopy := labels // labels may be affected by the tested function so we copy them
 
-	runner, err := RegisterRunner(db.DefaultContext, ownerID, repoID, token, &labels, name, version)
+	runner, err := RegisterRunner(db.DefaultContext, ownerID, repoID, token, &labels, name, version, ephemeral)
 	require.NoError(t, err)
 
 	// Check that the returned record has been updated, except for the labels
-	assert.EqualValues(t, ownerID, runner.OwnerID)
-	assert.EqualValues(t, repoID, runner.RepoID)
-	assert.EqualValues(t, name, runner.Name)
-	assert.EqualValues(t, version, runner.Version)
-	assert.EqualValues(t, labelsCopy, runner.AgentLabels)
+	assert.Equal(t, ownerID, runner.OwnerID)
+	assert.Equal(t, repoID, runner.RepoID)
+	assert.Equal(t, name, runner.Name)
+	assert.Equal(t, version, runner.Version)
+	assert.Equal(t, labelsCopy, runner.AgentLabels)
+	assert.Equal(t, ephemeral, runner.Ephemeral)
 
 	// Check that whatever is in the DB has been updated, except for the labels
 	after := unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: runner.ID})
-	assert.EqualValues(t, ownerID, after.OwnerID)
-	assert.EqualValues(t, repoID, after.RepoID)
-	assert.EqualValues(t, name, after.Name)
-	assert.EqualValues(t, version, after.Version)
-	assert.EqualValues(t, labelsCopy, after.AgentLabels)
+	assert.Equal(t, ownerID, after.OwnerID)
+	assert.Equal(t, repoID, after.RepoID)
+	assert.Equal(t, name, after.Name)
+	assert.Equal(t, version, after.Version)
+	assert.Equal(t, labelsCopy, after.AgentLabels)
+	assert.Equal(t, ephemeral, after.Ephemeral)
 }
 
 func TestActions_RegisterRunner_CreateWithoutLabels(t *testing.T) {
@@ -95,24 +100,27 @@ func TestActions_RegisterRunner_CreateWithoutLabels(t *testing.T) {
 	token := "0123456789012345678901234567890123456789"
 	name := "runner"
 	version := "v1.2.3"
+	ephemeral := true
 
-	runner, err := RegisterRunner(db.DefaultContext, ownerID, repoID, token, nil, name, version)
+	runner, err := RegisterRunner(db.DefaultContext, ownerID, repoID, token, nil, name, version, ephemeral)
 	require.NoError(t, err)
 
 	// Check that the returned record has been updated, except for the labels
-	assert.EqualValues(t, ownerID, runner.OwnerID)
-	assert.EqualValues(t, repoID, runner.RepoID)
-	assert.EqualValues(t, name, runner.Name)
-	assert.EqualValues(t, version, runner.Version)
-	assert.EqualValues(t, []string{}, runner.AgentLabels)
+	assert.Equal(t, ownerID, runner.OwnerID)
+	assert.Equal(t, repoID, runner.RepoID)
+	assert.Equal(t, name, runner.Name)
+	assert.Equal(t, version, runner.Version)
+	assert.Equal(t, []string{}, runner.AgentLabels)
+	assert.Equal(t, ephemeral, runner.Ephemeral)
 
 	// Check that whatever is in the DB has been updated, except for the labels
 	after := unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: runner.ID})
-	assert.EqualValues(t, ownerID, after.OwnerID)
-	assert.EqualValues(t, repoID, after.RepoID)
-	assert.EqualValues(t, name, after.Name)
-	assert.EqualValues(t, version, after.Version)
-	assert.EqualValues(t, []string{}, after.AgentLabels)
+	assert.Equal(t, ownerID, after.OwnerID)
+	assert.Equal(t, repoID, after.RepoID)
+	assert.Equal(t, name, after.Name)
+	assert.Equal(t, version, after.Version)
+	assert.Equal(t, []string{}, after.AgentLabels)
+	assert.Equal(t, ephemeral, after.Ephemeral)
 }
 
 func TestActions_RegisterRunner_UpdateWithLabels(t *testing.T) {
@@ -121,30 +129,33 @@ func TestActions_RegisterRunner_UpdateWithLabels(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: recordID})
 
-	newOwnerID := int64(1)
+	newOwnerID := int64(0)
 	newRepoID := int64(1)
 	newName := "rennur"
 	newVersion := "v4.5.6"
+	ephemeral := true
 	newLabels := []string{"warp", "darp"}
 	labelsCopy := newLabels // labels may be affected by the tested function so we copy them
 
-	runner, err := RegisterRunner(db.DefaultContext, newOwnerID, newRepoID, token, &newLabels, newName, newVersion)
+	runner, err := RegisterRunner(db.DefaultContext, newOwnerID, newRepoID, token, &newLabels, newName, newVersion, ephemeral)
 	require.NoError(t, err)
 
 	// Check that the returned record has been updated
-	assert.EqualValues(t, newOwnerID, runner.OwnerID)
-	assert.EqualValues(t, newRepoID, runner.RepoID)
-	assert.EqualValues(t, newName, runner.Name)
-	assert.EqualValues(t, newVersion, runner.Version)
-	assert.EqualValues(t, labelsCopy, runner.AgentLabels)
+	assert.Equal(t, newOwnerID, runner.OwnerID)
+	assert.Equal(t, newRepoID, runner.RepoID)
+	assert.Equal(t, newName, runner.Name)
+	assert.Equal(t, newVersion, runner.Version)
+	assert.Equal(t, labelsCopy, runner.AgentLabels)
+	assert.Equal(t, ephemeral, runner.Ephemeral)
 
 	// Check that whatever is in the DB has been updated
 	after := unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: recordID})
-	assert.EqualValues(t, newOwnerID, after.OwnerID)
-	assert.EqualValues(t, newRepoID, after.RepoID)
-	assert.EqualValues(t, newName, after.Name)
-	assert.EqualValues(t, newVersion, after.Version)
-	assert.EqualValues(t, labelsCopy, after.AgentLabels)
+	assert.Equal(t, newOwnerID, after.OwnerID)
+	assert.Equal(t, newRepoID, after.RepoID)
+	assert.Equal(t, newName, after.Name)
+	assert.Equal(t, newVersion, after.Version)
+	assert.Equal(t, labelsCopy, after.AgentLabels)
+	assert.Equal(t, ephemeral, after.Ephemeral)
 }
 
 func TestActions_RegisterRunner_UpdateWithoutLabels(t *testing.T) {
@@ -153,26 +164,29 @@ func TestActions_RegisterRunner_UpdateWithoutLabels(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	before := unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: recordID})
 
-	newOwnerID := int64(1)
+	newOwnerID := int64(0)
 	newRepoID := int64(1)
 	newName := "rennur"
 	newVersion := "v4.5.6"
+	ephemeral := true
 
-	runner, err := RegisterRunner(db.DefaultContext, newOwnerID, newRepoID, token, nil, newName, newVersion)
+	runner, err := RegisterRunner(db.DefaultContext, newOwnerID, newRepoID, token, nil, newName, newVersion, ephemeral)
 	require.NoError(t, err)
 
 	// Check that the returned record has been updated, except for the labels
-	assert.EqualValues(t, newOwnerID, runner.OwnerID)
-	assert.EqualValues(t, newRepoID, runner.RepoID)
-	assert.EqualValues(t, newName, runner.Name)
-	assert.EqualValues(t, newVersion, runner.Version)
-	assert.EqualValues(t, before.AgentLabels, runner.AgentLabels)
+	assert.Equal(t, newOwnerID, runner.OwnerID)
+	assert.Equal(t, newRepoID, runner.RepoID)
+	assert.Equal(t, newName, runner.Name)
+	assert.Equal(t, newVersion, runner.Version)
+	assert.Equal(t, before.AgentLabels, runner.AgentLabels)
+	assert.Equal(t, ephemeral, runner.Ephemeral)
 
 	// Check that whatever is in the DB has been updated, except for the labels
 	after := unittest.AssertExistsAndLoadBean(t, &ActionRunner{ID: recordID})
-	assert.EqualValues(t, newOwnerID, after.OwnerID)
-	assert.EqualValues(t, newRepoID, after.RepoID)
-	assert.EqualValues(t, newName, after.Name)
-	assert.EqualValues(t, newVersion, after.Version)
-	assert.EqualValues(t, before.AgentLabels, after.AgentLabels)
+	assert.Equal(t, newOwnerID, after.OwnerID)
+	assert.Equal(t, newRepoID, after.RepoID)
+	assert.Equal(t, newName, after.Name)
+	assert.Equal(t, newVersion, after.Version)
+	assert.Equal(t, before.AgentLabels, after.AgentLabels)
+	assert.Equal(t, ephemeral, after.Ephemeral)
 }

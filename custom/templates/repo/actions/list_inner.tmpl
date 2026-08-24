@@ -1,0 +1,137 @@
+<div class="ui stackable grid">
+	<div class="four wide column" id="sidebar_section">
+		<div class="ui fluid vertical menu" id="workflow_sidebar">
+			<a class="item{{if not $.CurWorkflow}} active{{end}}" href="?actor={{$.CurActor}}&status={{$.CurStatus}}">{{ctx.Locale.Tr "actions.runs.all_workflows"}}</a>
+			{{if .HasWorkflows}}
+				{{range .workflows}}
+					<a class="item{{if eq .Entry.Name $.CurWorkflow}} active{{end}}" href="?workflow={{.Entry.Name}}&actor={{$.CurActor}}&status={{$.CurStatus}}">{{.Entry.Name}}
+						{{if .ErrMsg}}
+							<span data-tooltip-content="{{.ErrMsg}}">
+								{{svg "octicon-alert" 16 "text red"}}
+							</span>
+						{{end}}
+
+						{{if $.ActionsConfig.IsWorkflowDisabled .Entry.Name}}
+							<div class="ui red label">{{ctx.Locale.Tr "disabled"}}</div>
+						{{end}}
+					</a>
+				{{end}}
+			{{else}}
+				<a
+					class="item"
+					target="_blank"
+					rel="noopener noreferrer"
+					href="{{ctx.Locale.Tr "actions.runs.workflows.empty_link.href"}}"
+				>
+						{{ctx.Locale.Tr "actions.runs.workflows.empty"}}
+
+						<span data-tooltip-content="{{ctx.Locale.Tr "actions.runs.workflows.empty_link.title"}}">
+							{{svg "octicon-link-external" 16 "text red"}}
+						</span>
+				</a>
+			{{end}}
+		</div>
+	</div>
+
+	<div class="twelve wide column content" id="main_section">
+		{{if not .HasWorkflows}}
+			<h4 class="ui top attached header">
+				{{ctx.Locale.Tr "repo.quick_guide"}}
+			</h4>
+			<div class="ui attached guide table segment">
+				{{template "repo/actions/no_workflows" .}}
+			</div>
+		{{end}}
+
+
+		{{if not .HasStackitRunner}}
+			<h4 class="ui top attached header">
+				{{ctx.Locale.Tr "actions.runs.enable_stackit_runners"}}
+			</h4>
+			<div class="ui attached guide table segment">
+				{{template "repo/actions/no_stackit_runners" .}}
+			</div>
+
+		{{else if not .HasStackitRunnerUsed}}
+
+			<h4 class="ui top attached header">
+				{{ctx.Locale.Tr "actions.runs.start_using_stackit_runners"}}
+			</h4>
+			<div class="ui attached guide table segment">
+				{{template "repo/actions/start_using_stackit_runners" .}}
+			</div>
+		{{end}}
+
+		{{if .HasWorkflowsOrRuns}}
+		<div class="ui secondary filter menu tw-justify-end tw-flex tw-items-center">
+			<div id="reloading-indicator" class="htmx-indicator"></div>
+
+			<!-- Actor -->
+			<div id="actor_dropdown" class="ui{{if not .Actors}} disabled{{end}} dropdown jump item">
+				<span class="text">{{ctx.Locale.Tr "actions.runs.actor"}}</span>
+				{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+				<div class="menu">
+					<div class="ui icon search input">
+						<i class="icon">{{svg "octicon-search"}}</i>
+						<input type="text" placeholder="{{ctx.Locale.Tr "actions.runs.actor"}}">
+					</div>
+					<a class="item{{if not $.CurActor}} active{{end}}" href="?workflow={{$.CurWorkflow}}&status={{$.CurStatus}}&actor=0">
+						{{ctx.Locale.Tr "actions.runs.actors_no_select"}}
+					</a>
+					{{range .Actors}}
+						<a class="item{{if eq .ID $.CurActor}} active{{end}}" href="?workflow={{$.CurWorkflow}}&actor={{.ID}}&status={{$.CurStatus}}">
+							{{ctx.AvatarUtils.Avatar . 20}} {{.GetDisplayName}}
+						</a>
+					{{end}}
+				</div>
+			</div>
+			<!-- Status -->
+			<div id="status_dropdown" class="ui dropdown jump item">
+				<span class="text">{{ctx.Locale.Tr "actions.runs.status"}}</span>
+				{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+				<div class="menu">
+					<div class="ui icon search input">
+						<i class="icon">{{svg "octicon-search"}}</i>
+						<input type="text" placeholder="{{ctx.Locale.Tr "actions.runs.status"}}">
+					</div>
+					<a class="item{{if not $.CurStatus}} active{{end}}" href="?workflow={{$.CurWorkflow}}&actor={{$.CurActor}}&status=0">
+						{{ctx.Locale.Tr "actions.runs.status_no_select"}}
+					</a>
+					{{range .StatusInfoList}}
+						<a class="item{{if eq .Status $.CurStatus}} active{{end}}" href="?workflow={{$.CurWorkflow}}&actor={{$.CurActor}}&status={{.Status}}">
+							{{.DisplayedStatus}}
+						</a>
+					{{end}}
+				</div>
+			</div>
+
+			{{if .AllowDisableOrEnableWorkflow}}
+				<details class="dropdown dir-rtl">
+					<summary class="border">
+						{{svg "octicon-kebab-horizontal"}}
+					</summary>
+					<div class="content">
+						<ul>
+							<li>
+								<a class="link-action" data-url="{{$.Link}}/{{if .CurWorkflowDisabled}}enable{{else}}disable{{end}}?workflow={{$.CurWorkflow}}&actor={{.CurActor}}&status={{$.CurStatus}}" href="#noscroll">
+									{{if .CurWorkflowDisabled}}
+										{{ctx.Locale.Tr "actions.workflow.enable"}}
+									{{else}}
+										{{ctx.Locale.Tr "actions.workflow.disable"}}
+									{{end}}
+								</a>
+							</li>
+						</ul>
+					</div>
+				</details>
+			{{end}}
+		</div>
+
+		{{if $.CurWorkflowDispatch}}
+			{{template "repo/actions/dispatch" .}}
+		{{end}}
+
+		{{template "repo/actions/runs_list" .}}
+		{{end}}
+	</div>
+</div>

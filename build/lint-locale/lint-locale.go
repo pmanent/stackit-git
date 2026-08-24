@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"forgejo.org/modules/locale"
+	"forgejo.org/modules/translation/localeiter"
 
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -52,7 +52,7 @@ func initBlueMondayPolicy() {
 	policy.AllowAttrs("id").Matching(positionalPlaceholderRe).OnElements("code")
 
 	// Allowed elements with no attributes. Must be a recognized tagname.
-	policy.AllowElements("strong", "br", "b", "strike", "code", "i")
+	policy.AllowElements("strong", "br", "b", "strike", "code", "i", "kbd")
 
 	// TODO: Remove <c> in `actions.workflow.dispatch.trigger_found`.
 	policy.AllowNoAttrs().OnElements("c")
@@ -100,7 +100,7 @@ func checkValue(trKey, value string) []string {
 func checkLocaleContent(localeContent []byte) []string {
 	errors := []string{}
 
-	if err := locale.IterateMessagesContent(localeContent, func(trKey, trValue string) error {
+	if err := localeiter.IterateMessagesContent(localeContent, func(trKey, trValue string) error {
 		errors = append(errors, checkValue(trKey, trValue)...)
 		return nil
 	}); err != nil {
@@ -113,8 +113,12 @@ func checkLocaleContent(localeContent []byte) []string {
 func checkLocaleNextContent(localeContent []byte) []string {
 	errors := []string{}
 
-	if err := locale.IterateMessagesNextContent(localeContent, func(trKey, trValue string) error {
-		errors = append(errors, checkValue(trKey, trValue)...)
+	if err := localeiter.IterateMessagesNextContent(localeContent, func(trKey, pluralForm, trValue string) error {
+		fullKey := trKey
+		if pluralForm != "" {
+			fullKey = trKey + "." + pluralForm
+		}
+		errors = append(errors, checkValue(fullKey, trValue)...)
 		return nil
 	}); err != nil {
 		panic(err)
@@ -185,6 +189,25 @@ func main() {
 			fmt.Println()
 			exitCode = 1
 		}
+	}
+
+	if exitCode != 0 {
+		fmt.Println(dmp.DiffPrettyText([]diffmatchpatch.Diff{{
+			Type: diffmatchpatch.DiffEqual,
+			Text: "Please adjust the locale files as suggested above (",
+		}, {
+			Type: diffmatchpatch.DiffDelete,
+			Text: "red",
+		}, {
+			Type: diffmatchpatch.DiffEqual,
+			Text: ": removal, ",
+		}, {
+			Type: diffmatchpatch.DiffInsert,
+			Text: "green",
+		}, {
+			Type: diffmatchpatch.DiffEqual,
+			Text: ": insertion)",
+		}}))
 	}
 
 	os.Exit(exitCode)

@@ -1,4 +1,5 @@
 // Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package unit
@@ -6,6 +7,7 @@ package unit
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -69,7 +71,7 @@ func (u Type) LogString() string {
 }
 
 var (
-	// AllRepoUnitTypes contains all the unit types
+	// AllRepoUnitTypes contains all units
 	AllRepoUnitTypes = []Type{
 		TypeCode,
 		TypeIssues,
@@ -83,7 +85,7 @@ var (
 		TypeActions,
 	}
 
-	// DefaultRepoUnits contains the default unit types
+	// DefaultRepoUnits contains default units for regular repos
 	DefaultRepoUnits = []Type{
 		TypeCode,
 		TypeIssues,
@@ -95,10 +97,20 @@ var (
 		TypeActions,
 	}
 
-	// ForkRepoUnits contains the default unit types for forks
+	// ForkRepoUnits contains default units for forks
 	DefaultForkRepoUnits = []Type{
 		TypeCode,
 		TypePullRequests,
+	}
+
+	// DefaultMirrorRepoUnits contains default units for mirrors
+	DefaultMirrorRepoUnits = []Type{
+		TypeCode,
+		TypeIssues,
+		TypeReleases,
+		TypeWiki,
+		TypeProjects,
+		TypePackages,
 	}
 
 	// NotAllowedDefaultRepoUnits contains units that can't be default
@@ -130,7 +142,7 @@ func DisabledRepoUnitsSet(v []Type) {
 
 // Get valid set of default repository units from settings
 func validateDefaultRepoUnits(defaultUnits, settingDefaultUnits []Type) []Type {
-	units := defaultUnits
+	units := slices.Clone(defaultUnits)
 
 	// Use setting if not empty
 	if len(settingDefaultUnits) > 0 {
@@ -172,6 +184,8 @@ func LoadUnitConfig() error {
 	if len(DefaultRepoUnits) == 0 {
 		return errors.New("no default repository units found")
 	}
+
+	// Default fork repo units
 	setDefaultForkRepoUnits, invalidKeys := FindUnitTypes(setting.Repository.DefaultForkRepoUnits...)
 	if len(invalidKeys) > 0 {
 		log.Warn("Invalid keys in default fork repo units: %s", strings.Join(invalidKeys, ", "))
@@ -179,6 +193,16 @@ func LoadUnitConfig() error {
 	DefaultForkRepoUnits = validateDefaultRepoUnits(DefaultForkRepoUnits, setDefaultForkRepoUnits)
 	if len(DefaultForkRepoUnits) == 0 {
 		return errors.New("no default fork repository units found")
+	}
+
+	// Default mirror repo units
+	setDefaultMirrorRepoUnits, invalidKeys := FindUnitTypes(setting.Repository.DefaultMirrorRepoUnits...)
+	if len(invalidKeys) > 0 {
+		log.Warn("Invalid keys in default mirror repo units: %s", strings.Join(invalidKeys, ", "))
+	}
+	DefaultMirrorRepoUnits = validateDefaultRepoUnits(DefaultMirrorRepoUnits, setDefaultMirrorRepoUnits)
+	if len(DefaultMirrorRepoUnits) == 0 {
+		return errors.New("no default mirror repository units found")
 	}
 
 	// Collect the allowed repo unit groups. Mutually exclusive units are
@@ -224,22 +248,12 @@ func LoadUnitConfig() error {
 
 // UnitGlobalDisabled checks if unit type is global disabled
 func (u Type) UnitGlobalDisabled() bool {
-	for _, ud := range DisabledRepoUnitsGet() {
-		if u == ud {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(DisabledRepoUnitsGet(), u)
 }
 
 // CanBeDefault checks if the unit type can be a default repo unit
 func (u *Type) CanBeDefault() bool {
-	for _, nadU := range NotAllowedDefaultRepoUnits {
-		if *u == nadU {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(NotAllowedDefaultRepoUnits, *u)
 }
 
 // Unit is a section of one repository
@@ -248,7 +262,6 @@ type Unit struct {
 	Name          string
 	NameKey       string
 	URI           string
-	DescKey       string
 	Idx           int
 	MaxAccessMode perm.AccessMode // The max access mode of the unit. i.e. Read means this unit can only be read.
 }
@@ -276,7 +289,6 @@ var (
 		"code",
 		"repo.code",
 		"/",
-		"repo.code.desc",
 		0,
 		perm.AccessModeOwner,
 	}
@@ -286,7 +298,6 @@ var (
 		"issues",
 		"repo.issues",
 		"/issues",
-		"repo.issues.desc",
 		1,
 		perm.AccessModeOwner,
 	}
@@ -296,7 +307,6 @@ var (
 		"ext_issues",
 		"repo.ext_issues",
 		"/issues",
-		"repo.ext_issues.desc",
 		1,
 		perm.AccessModeRead,
 	}
@@ -306,7 +316,6 @@ var (
 		"pulls",
 		"repo.pulls",
 		"/pulls",
-		"repo.pulls.desc",
 		2,
 		perm.AccessModeOwner,
 	}
@@ -316,7 +325,6 @@ var (
 		"releases",
 		"repo.releases",
 		"/releases",
-		"repo.releases.desc",
 		3,
 		perm.AccessModeOwner,
 	}
@@ -326,7 +334,6 @@ var (
 		"wiki",
 		"repo.wiki",
 		"/wiki",
-		"repo.wiki.desc",
 		4,
 		perm.AccessModeOwner,
 	}
@@ -336,7 +343,6 @@ var (
 		"ext_wiki",
 		"repo.ext_wiki",
 		"/wiki",
-		"repo.ext_wiki.desc",
 		4,
 		perm.AccessModeRead,
 	}
@@ -346,7 +352,6 @@ var (
 		"projects",
 		"repo.projects",
 		"/projects",
-		"repo.projects.desc",
 		5,
 		perm.AccessModeOwner,
 	}
@@ -356,7 +361,6 @@ var (
 		"packages",
 		"repo.packages",
 		"/packages",
-		"packages.desc",
 		6,
 		perm.AccessModeRead,
 	}
@@ -366,7 +370,6 @@ var (
 		"actions",
 		"repo.actions",
 		"/actions",
-		"actions.unit.desc",
 		7,
 		perm.AccessModeOwner,
 	}
@@ -419,7 +422,7 @@ func AllUnitKeyNames() []string {
 	return res
 }
 
-// MinUnitAccessMode returns the minial permission of the permission map
+// MinUnitAccessMode returns the minimal permission of the permission map
 func MinUnitAccessMode(unitsMap map[Type]perm.AccessMode) perm.AccessMode {
 	res := perm.AccessModeNone
 	for t, mode := range unitsMap {
@@ -428,7 +431,7 @@ func MinUnitAccessMode(unitsMap map[Type]perm.AccessMode) perm.AccessMode {
 			continue
 		}
 
-		// get the minial permission great than AccessModeNone except all are AccessModeNone
+		// get the minimal permission greater than AccessModeNone except all are AccessModeNone
 		if mode > perm.AccessModeNone && (res == perm.AccessModeNone || mode < res) {
 			res = mode
 		}

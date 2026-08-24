@@ -1,0 +1,79 @@
+# translation tooling test keys
+meta.last_line
+translation_meta.test
+
+# models/admin/task.go: instances of $TranslatableMessage.Format
+# this also gets instantiated as a Messenger once
+repo.migrate.migrating_failed.error
+
+# modules/setting/ui.go
+themes.names.
+
+# services/context/context.go
+relativetime.
+
+# templates/repo/settings/webhook/link_menu.tmpl, templates/webhook/new.tmpl: repo.settings.web_hook_name_
+# tests/integration/repo_archive_text_test.go
+repo.settings.
+
+# Unused msgids that are likely used dynamically or intended for future use
+actions.runners.id
+actions.runners.task_list
+actions.runners.edit_runner
+actions.runners.update_runner
+actions.runners.update_runner_success
+actions.runners.update_runner_failed
+actions.runners.delete_runner
+actions.runners.delete_runner_success
+actions.runners.delete_runner_failed
+actions.runners.delete_runner_header
+actions.runners.delete_runner_notice
+actions.runners.reset_registration_token
+actions.runners.reset_registration_token_success
+actions.runs.commit
+actions.runs.scheduled
+actions.runs.pushed_by
+actions.runs.no_matching_online_runner_helper
+explore.forks_few
+explore.forks_one
+explore.stars_few
+explore.stars_one
+install.secret_key_failed
+org.team_access_desc
+packages.composer.dependencies
+packages.conan.registry
+packages.cran.install
+packages.debian.registry
+packages.debian.install
+packages.debian.repository
+packages.helm.registry
+packages.helm.install
+packages.nuget.registry
+packages.npm.dependencies
+packages.rpm.registry
+packages.rpm.install
+packages.rpm.repository
+packages.swift.registry
+packages.arch.version.depends
+packages.alt.registry
+packages.alt.registry.install
+packages.alt.repository
+repo.activity.active_issues_count_1
+repo.activity.active_issues_count_n
+repo.activity.active_prs_count_1
+repo.activity.active_prs_count_n
+repo.issues.content_history.deleted
+repo.migrate.codebase.description
+repo.migrate.forgejo.description
+repo.migrate.git.description
+repo.migrate.gitbucket.description
+repo.migrate.gitea.description
+repo.migrate.github.description
+repo.migrate.gitlab.description
+repo.migrate.gogs.description
+repo.migrate.onedev.description
+repo.release.download_count_few
+repo.release.download_count_one
+repo.issues.filter_label_exclude
+secrets.creation.name_placeholder
+secrets.creation.value_placeholder

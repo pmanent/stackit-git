@@ -1,6 +1,6 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
 // Copyright 2019 The Gitea Authors. All rights reserved.
-// Copyright 2024 The Forgejo Authors. All rights reserved.
+// Copyright 2024, 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package user
@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"runtime/trace"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -63,8 +65,11 @@ const (
 	// UserTypeBot defines a bot user
 	UserTypeBot // 4
 
-	// UserTypeRemoteUser defines a remote user for federated users
+	// UserTypeRemoteUser defines a remote user for users created from f3
 	UserTypeRemoteUser // 5
+
+	// UserTypeActivityPubUser defines a user created from ActivityPub
+	UserTypeActivityPubUser // 6
 )
 
 const (
@@ -137,9 +142,6 @@ type User struct {
 	AvatarEmail     string `xorm:"NOT NULL"`
 	UseCustomAvatar bool
 
-	// For federation
-	NormalizedFederatedURI string
-
 	// Counters
 	NumFollowers int
 	NumFollowing int `xorm:"NOT NULL DEFAULT 0"`
@@ -158,6 +160,9 @@ type User struct {
 	KeepActivityPrivate bool   `xorm:"NOT NULL DEFAULT false"`
 	KeepPronounsPrivate bool   `xorm:"NOT NULL DEFAULT false"`
 	EnableRepoUnitHints bool   `xorm:"NOT NULL DEFAULT true"`
+
+	// If you add new fields that might be used to store abusive content (mainly string fields),
+	// please also add them in the UserData struct and the corresponding constructor.
 }
 
 func init() {
@@ -199,9 +204,13 @@ func (u *User) BeforeUpdate() {
 
 // AfterLoad is invoked from XORM after filling all the fields of this object.
 func (u *User) AfterLoad() {
-	if u.Theme == "" {
+	if !IsThemeValid(u.Theme) {
 		u.Theme = setting.UI.DefaultTheme
 	}
+}
+
+func IsThemeValid(theme string) bool {
+	return slices.Contains(setting.UI.Themes, theme)
 }
 
 // SetLastLogin set time to last login
@@ -233,6 +242,33 @@ func GetAllUsers(ctx context.Context) ([]*User, error) {
 func GetAllAdmins(ctx context.Context) ([]*User, error) {
 	users := make([]*User, 0)
 	return users, db.GetEngine(ctx).OrderBy("id").Where("type = ?", UserTypeIndividual).And("is_admin = ?", true).Find(&users)
+}
+
+// MustHaveTwoFactor returns true if the user is a individual and requires 2fa
+func (u *User) MustHaveTwoFactor() bool {
+	if u.IsActions() || !u.IsIndividual() || setting.GlobalTwoFactorRequirement.IsNone() {
+		return false
+	}
+
+	return setting.GlobalTwoFactorRequirement.IsAll() || (u.IsAdmin && setting.GlobalTwoFactorRequirement.IsAdmin())
+}
+
+// IsAccessAllowed determines whether the user is permitted to log in based on
+// their activation status, login prohibition, 2FA requirement and 2FA enrollment status.
+func (u *User) IsAccessAllowed(ctx context.Context) bool {
+	if !u.IsActive || u.ProhibitLogin {
+		return false
+	}
+	if !u.MustHaveTwoFactor() {
+		return true
+	}
+
+	hasTwoFactor, err := auth.HasTwoFactorByUID(ctx, u.ID)
+	if err != nil {
+		log.Error("Error getting 2fa: %s", err)
+		return false
+	}
+	return hasTwoFactor
 }
 
 // IsLocal returns true if user login type is LoginPlain.
@@ -297,6 +333,9 @@ func (u *User) CanImportLocal() bool {
 
 // DashboardLink returns the user dashboard page link.
 func (u *User) DashboardLink() string {
+	if u.IsGhost() {
+		return ""
+	}
 	if u.IsOrganization() {
 		return u.OrganisationLink() + "/dashboard"
 	}
@@ -305,28 +344,32 @@ func (u *User) DashboardLink() string {
 
 // HomeLink returns the user or organization home page link.
 func (u *User) HomeLink() string {
+	if u.IsGhost() {
+		return ""
+	}
 	return setting.AppSubURL + "/" + url.PathEscape(u.Name)
 }
 
 // HTMLURL returns the user or organization's full link.
 func (u *User) HTMLURL() string {
+	if u.IsGhost() {
+		return ""
+	}
 	return setting.AppURL + url.PathEscape(u.Name)
-}
-
-// APActorID returns the IRI to the api endpoint of the user
-func (u *User) APActorID() string {
-	return fmt.Sprintf("%vapi/v1/activitypub/user-id/%v", setting.AppURL, url.PathEscape(fmt.Sprintf("%v", u.ID)))
 }
 
 // OrganisationLink returns the organization sub page link.
 func (u *User) OrganisationLink() string {
+	if u.IsGhost() || !u.IsOrganization() {
+		return ""
+	}
 	return setting.AppSubURL + "/org/" + url.PathEscape(u.Name)
 }
 
 // GenerateEmailAuthorizationCode generates an activation code based for the user for the specified purpose.
 // The standard expiry is ActiveCodeLives minutes.
 func (u *User) GenerateEmailAuthorizationCode(ctx context.Context, purpose auth.AuthorizationPurpose) (string, error) {
-	lookup, validator, err := auth.GenerateAuthToken(ctx, u.ID, timeutil.TimeStampNow().Add(int64(setting.Service.ActiveCodeLives)*60), purpose)
+	lookup, validator, err := auth.GenerateAuthToken(ctx, u.ID, optional.None[int64](), timeutil.TimeStampNow().Add(int64(setting.Service.ActiveCodeLives)*60), purpose)
 	if err != nil {
 		return "", err
 	}
@@ -394,9 +437,7 @@ func (u *User) SetPassword(passwd string) (err error) {
 		return err
 	}
 
-	if u.Salt, err = GetUserSalt(); err != nil {
-		return err
-	}
+	u.Salt = GetUserSalt()
 	if u.Passwd, err = hash.Parse(setting.PasswordHashAlgo).Hash(passwd, u.Salt); err != nil {
 		return err
 	}
@@ -406,7 +447,8 @@ func (u *User) SetPassword(passwd string) (err error) {
 }
 
 // ValidatePassword checks if the given password matches the one belonging to the user.
-func (u *User) ValidatePassword(passwd string) bool {
+func (u *User) ValidatePassword(ctx context.Context, passwd string) bool {
+	defer trace.StartRegion(ctx, "Validate user password").End()
 	return hash.Parse(u.PasswdHashAlgo).VerifyPassword(passwd, u.Passwd, u.Salt)
 }
 
@@ -436,6 +478,10 @@ func (u *User) IsBot() bool {
 
 func (u *User) IsRemote() bool {
 	return u.Type == UserTypeRemoteUser
+}
+
+func (u *User) IsActivityPub() bool {
+	return u.Type == UserTypeActivityPubUser
 }
 
 // DisplayName returns full name if it's not empty,
@@ -566,13 +612,9 @@ func IsUserExist(ctx context.Context, uid int64, name string) (bool, error) {
 const SaltByteLength = 16
 
 // GetUserSalt returns a random user salt token.
-func GetUserSalt() (string, error) {
-	rBytes, err := util.CryptoRandomBytes(SaltByteLength)
-	if err != nil {
-		return "", err
-	}
+func GetUserSalt() string {
 	// Returns a 32 bytes long string.
-	return hex.EncodeToString(rBytes), nil
+	return hex.EncodeToString(util.CryptoRandomBytes(SaltByteLength))
 }
 
 // Note: The set of characters here can safely expand without a breaking change,
@@ -620,12 +662,12 @@ var (
 		"user",  // user login/activate/settings, etc
 
 		"admin",
-		"devtest",
 		"explore",
 		"issues",
 		"pulls",
 		"milestones",
 		"notifications",
+		"report_abuse",
 
 		"favicon.ico",
 		"manifest.json", // web app manifests
@@ -654,6 +696,14 @@ func IsUsableUsername(name string) error {
 	return db.IsUsableName(reservedUsernames, reservedUserPatterns, name)
 }
 
+// IsActivityPubUsername returns an error if a fediverse handle (referred to as a username) cannot exist
+func IsActivityPubUsername(name string) error {
+	if !validation.IsValidActivityPubUsername(name) {
+		return db.ErrNameActivityPubInvalid{Name: name}
+	}
+	return db.IsUsableName(reservedUsernames, reservedUserPatterns, name)
+}
+
 // CreateUserOverwriteOptions are an optional options who overwrite system defaults on user creation
 type CreateUserOverwriteOptions struct {
 	KeepEmailPrivate             optional.Option[bool]
@@ -664,6 +714,7 @@ type CreateUserOverwriteOptions struct {
 	Theme                        *string
 	IsRestricted                 optional.Option[bool]
 	IsActive                     optional.Option[bool]
+	IsActivityPub                optional.Option[bool]
 }
 
 // CreateUser creates record of a new user.
@@ -678,12 +729,26 @@ func AdminCreateUser(ctx context.Context, u *User, overwriteDefault ...*CreateUs
 
 // createUser creates record of a new user.
 func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefault ...*CreateUserOverwriteOptions) (err error) {
-	if err = IsUsableUsername(u.Name); err != nil {
+	overwriteDefaultPresent := len(overwriteDefault) != 0 && overwriteDefault[0] != nil
+
+	// If a username is invalid as-is, check whether the username is meant
+	// for an ActivityPub account. Username constraints that belong to "foreign"
+	// ActivityPub servers, whose implementations we cannot control, are expected
+	// to be much less restrictive than those of Forgejo itself.
+	if overwriteDefaultPresent && overwriteDefault[0].IsActivityPub.Has() {
+		if err = IsActivityPubUsername(u.Name); err != nil {
+			return err
+		}
+	} else if err := IsUsableUsername(u.Name); err != nil {
 		return err
 	}
 
 	// Check if the new username can be claimed.
 	// Skip this check if done by an admin.
+	//
+	// Note: This skip should not currently cover usernames that could belong to
+	// fediverse accounts. This "defensive programming" is in place to prevent future
+	// breakage until the ActivityPub component matures more.
 	if !createdByAdmin {
 		if ok, expireTime, err := CanClaimUsername(ctx, u.Name, -1); err != nil {
 			return err
@@ -702,7 +767,8 @@ func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefa
 	u.MaxRepoCreation = -1
 	u.Theme = setting.UI.DefaultTheme
 	u.IsRestricted = setting.Service.DefaultUserIsRestricted
-	u.IsActive = !(setting.Service.RegisterEmailConfirm || setting.Service.RegisterManualConfirm)
+	u.IsActive = !setting.Service.RegisterEmailConfirm && !setting.Service.RegisterManualConfirm
+	u.EnableRepoUnitHints = true
 
 	// Ensure consistency of the dates.
 	if u.UpdatedUnix < u.CreatedUnix {
@@ -710,16 +776,16 @@ func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefa
 	}
 
 	// overwrite defaults if set
-	if len(overwriteDefault) != 0 && overwriteDefault[0] != nil {
+	if overwriteDefaultPresent {
 		overwrite := overwriteDefault[0]
-		if overwrite.KeepEmailPrivate.Has() {
-			u.KeepEmailPrivate = overwrite.KeepEmailPrivate.Value()
+		if has, value := overwrite.KeepEmailPrivate.Get(); has {
+			u.KeepEmailPrivate = value
 		}
 		if overwrite.Visibility != nil {
 			u.Visibility = *overwrite.Visibility
 		}
-		if overwrite.AllowCreateOrganization.Has() {
-			u.AllowCreateOrganization = overwrite.AllowCreateOrganization.Value()
+		if has, value := overwrite.AllowCreateOrganization.Get(); has {
+			u.AllowCreateOrganization = value
 		}
 		if overwrite.EmailNotificationsPreference != nil {
 			u.EmailNotificationsPreference = *overwrite.EmailNotificationsPreference
@@ -730,11 +796,11 @@ func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefa
 		if overwrite.Theme != nil {
 			u.Theme = *overwrite.Theme
 		}
-		if overwrite.IsRestricted.Has() {
-			u.IsRestricted = overwrite.IsRestricted.Value()
+		if has, value := overwrite.IsRestricted.Get(); has {
+			u.IsRestricted = value
 		}
-		if overwrite.IsActive.Has() {
-			u.IsActive = overwrite.IsActive.Value()
+		if has, value := overwrite.IsActive.Get(); has {
+			u.IsActive = value
 		}
 	}
 
@@ -779,9 +845,7 @@ func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefa
 
 	u.LowerName = strings.ToLower(u.Name)
 	u.AvatarEmail = u.Email
-	if u.Rands, err = GetUserSalt(); err != nil {
-		return err
-	}
+	u.Rands = GetUserSalt()
 	if u.Passwd != "" {
 		if err = u.SetPassword(u.Passwd); err != nil {
 			return err
@@ -845,15 +909,15 @@ func CountUsers(ctx context.Context, opts *CountUserFilter) int64 {
 func countUsers(ctx context.Context, opts *CountUserFilter) int64 {
 	sess := db.GetEngine(ctx)
 	cond := builder.NewCond()
-	cond = cond.And(builder.Eq{"type": UserTypeIndividual})
+	cond = cond.And(builder.In("type", UserTypeIndividual, UserTypeRemoteUser))
 
 	if opts != nil {
 		if opts.LastLoginSince != nil {
 			cond = cond.And(builder.Gte{"last_login_unix": *opts.LastLoginSince})
 		}
 
-		if opts.IsAdmin.Has() {
-			cond = cond.And(builder.Eq{"is_admin": opts.IsAdmin.Value()})
+		if has, value := opts.IsAdmin.Get(); has {
+			cond = cond.And(builder.Eq{"is_admin": value})
 		}
 	}
 
@@ -867,46 +931,46 @@ func countUsers(ctx context.Context, opts *CountUserFilter) int64 {
 
 // VerifyUserActiveCode verifies that the code is valid for the given purpose for this user.
 // If delete is specified, the token will be deleted.
-func VerifyUserAuthorizationToken(ctx context.Context, code string, purpose auth.AuthorizationPurpose) (user *User, deleteToken func() error, err error) {
+func VerifyUserAuthorizationToken(ctx context.Context, code string, purpose auth.AuthorizationPurpose) (user *User, authToken *auth.AuthorizationToken, deleteToken func() error, err error) {
 	lookupKey, validator, found := strings.Cut(code, ":")
 	if !found {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
-	authToken, err := auth.FindAuthToken(ctx, lookupKey, purpose)
+	authToken, err = auth.FindAuthToken(ctx, lookupKey, purpose)
 	if err != nil {
 		if errors.Is(err, util.ErrNotExist) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if authToken.IsExpired() {
-		return nil, nil, auth.DeleteAuthToken(ctx, authToken)
+		return nil, nil, nil, auth.DeleteAuthToken(ctx, authToken)
 	}
 
 	rawValidator, err := hex.DecodeString(validator)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if subtle.ConstantTimeCompare([]byte(authToken.HashedValidator), []byte(auth.HashValidator(rawValidator))) == 0 {
-		return nil, nil, errors.New("validator doesn't match")
+		return nil, nil, nil, errors.New("validator doesn't match")
 	}
 
 	u, err := GetUserByID(ctx, authToken.UID)
 	if err != nil {
 		if IsErrUserNotExist(err) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	deleteToken = func() error {
 		return auth.DeleteAuthToken(ctx, authToken)
 	}
 
-	return u, deleteToken, nil
+	return u, authToken, deleteToken, nil
 }
 
 // ValidateUser check if user is valid to insert / update into database
@@ -934,6 +998,14 @@ func (u User) Validate() []string {
 // UpdateUserCols update user according special columns
 func UpdateUserCols(ctx context.Context, u *User, cols ...string) error {
 	if err := ValidateUser(u, cols...); err != nil {
+		return err
+	}
+
+	// If the user was reported as abusive and any of the columns being updated is relevant
+	// for moderation purposes a shadow copy should be created before first update.
+	// Since u is already altered at this point we are sending nil instead as an argument
+	// so that the unaltered version will be retrieved from DB.
+	if err := IfNeededCreateShadowCopyForUser(ctx, u.ID, nil, cols...); err != nil {
 		return err
 	}
 
@@ -1179,8 +1251,8 @@ func GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	}
 
 	// Finally, if email address is the protected email address:
-	if strings.HasSuffix(email, fmt.Sprintf("@%s", setting.Service.NoReplyAddress)) {
-		username := strings.TrimSuffix(email, fmt.Sprintf("@%s", setting.Service.NoReplyAddress))
+	if before, ok := strings.CutSuffix(email, fmt.Sprintf("@%s", setting.Service.NoReplyAddress)); ok {
+		username := before
 		user := &User{}
 		has, err := db.GetEngine(ctx).Where("lower_name=?", username).Get(user)
 		if err != nil {
@@ -1408,8 +1480,8 @@ func GenerateCalculatedLogin(ctx context.Context, user string) (string, error) {
 	}
 
 	// The name doesn't exists so just check the if the leftmost exists
-	var login_name string
-	has, err = db.GetEngine(ctx).Table("user").Where("name = ?", parts[0]).Cols("login_name").Get(&login_name)
+	var loginName string
+	has, err = db.GetEngine(ctx).Table("user").Where("name = ?", parts[0]).Cols("login_name").Get(&loginName)
 	if err != nil {
 		return "", fmt.Errorf("get user existence: %s", user)
 	}

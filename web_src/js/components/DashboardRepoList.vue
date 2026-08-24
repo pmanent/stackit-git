@@ -1,5 +1,4 @@
 <script>
-import {createApp} from 'vue';
 import $ from 'jquery';
 import {SvgIcon} from '../svg.js';
 import {GET} from '../modules/fetch.js';
@@ -10,12 +9,13 @@ const {appSubUrl, assetUrlPrefix, pageData} = window.config;
 const commitStatus = {
   pending: {name: 'octicon-dot-fill', color: 'yellow'},
   success: {name: 'octicon-check', color: 'green'},
+  skipped: {name: 'octicon-skip', color: 'grey'},
   error: {name: 'gitea-exclamation', color: 'red'},
   failure: {name: 'octicon-x', color: 'red'},
   warning: {name: 'gitea-exclamation', color: 'yellow'},
 };
 
-const sfc = {
+export default {
   components: {SvgIcon},
   data() {
     const params = new URLSearchParams(window.location.search);
@@ -323,15 +323,6 @@ const sfc = {
     },
   },
 };
-
-export function initDashboardRepoList() {
-  const el = document.getElementById('dashboard-repo-list');
-  if (el) {
-    createApp(sfc).mount(el);
-  }
-}
-
-export default sfc; // activate the IDE's Vue plugin
 </script>
 <template>
   <div>
@@ -340,10 +331,10 @@ export default sfc; // activate the IDE's Vue plugin
       <a :class="{item: true, active: tab === 'organizations'}" @click="changeTab('organizations')">{{ textMyOrgs }} <span class="ui grey label tw-ml-2">{{ organizationsTotalCount }}</span></a>
     </div>
     <div v-show="tab === 'repos'" class="ui tab active list dashboard-repos">
-      <h4 v-if="isOrganization" class="ui top attached tw-mt-4 tw-flex tw-items-center">
-        <div class="tw-flex-1 tw-flex tw-items-center">
+      <h4 v-if="isOrganization" class="tw-mt-4 tw-flex tw-items-center">
+        <div class="tw-flex-1 tw-flex tw-gap-2 tw-items-center">
           {{ textMyRepos }}
-          <span class="ui grey label tw-ml-2">{{ reposTotalCount }}</span>
+          <span class="ui grey label">{{ reposTotalCount }}</span>
         </div>
       </h4>
       <div class="ui top attached segment repos-search">
@@ -401,7 +392,7 @@ export default sfc; // activate the IDE's Vue plugin
           </div>
         </overflow-menu>
       </div>
-      <div v-if="repos.length" class="ui attached table segment tw-rounded-b">
+      <div v-if="repos.length" class="ui attached table segment">
         <ul class="repo-owner-name-list">
           <li class="tw-flex tw-items-center tw-py-2" v-for="repo, index in repos" :class="{'active': index === activeIndex}" :key="repo.id">
             <a class="repo-list-link muted" :href="repo.link">
@@ -411,7 +402,7 @@ export default sfc; // activate the IDE's Vue plugin
                 <svg-icon name="octicon-archive" :size="16"/>
               </div>
             </a>
-            <a class="tw-flex tw-items-center" v-if="repo.latest_commit_status" :href="repo.latest_commit_status.TargetURL" :data-tooltip-content="repo.locale_latest_commit_status">
+            <a class="tw-flex tw-items-center" v-if="repo.latest_commit_status" :href="repo.latest_commit_status.TargetURL || null" :data-tooltip-content="repo.locale_latest_commit_status">
               <!-- the commit status icon logic is taken from templates/repo/commit_status.tmpl -->
               <svg-icon :name="statusIcon(repo.latest_commit_status.State)" :class="'tw-ml-2 commit-status icon text ' + statusColor(repo.latest_commit_status.State)" :size="16"/>
             </a>
@@ -457,7 +448,7 @@ export default sfc; // activate the IDE's Vue plugin
               <svg-icon name="octicon-organization" :size="16" class="repo-list-icon"/>
               <div class="text truncate">{{ org.name }}</div>
               <div><!-- div to prevent underline of label on hover -->
-                <span class="ui tiny basic label" v-if="org.org_visibility !== 'public'">
+                <span class="ui label" v-if="org.org_visibility !== 'public'">
                   {{ org.org_visibility === 'limited' ? textOrgVisibilityLimited: textOrgVisibilityPrivate }}
                 </span>
               </div>
@@ -476,7 +467,7 @@ export default sfc; // activate the IDE's Vue plugin
 ul {
   list-style: none;
   margin: 0;
-  padding-left: 0;
+  padding-inline-start: 0;
 }
 
 ul li {
@@ -492,15 +483,12 @@ ul li:not(:last-child) {
 }
 
 .repos-filter {
-  padding-top: 0 !important;
   margin-top: 0 !important;
   border-bottom-width: 0 !important;
-  margin-bottom: 2px !important;
 }
 
 .repos-filter .item {
-  padding-left: 6px !important;
-  padding-right: 6px !important;
+  padding-inline: 6px !important;
 }
 
 .repo-list-link {
@@ -517,15 +505,14 @@ ul li:not(:last-child) {
 
 .repo-list-icon {
   min-width: 16px;
-  margin-right: 2px;
+  margin-inline-end: 2px;
 }
 
 /* octicon-mirror has no padding inside the SVG */
 .repo-list-icon.octicon-mirror {
   width: 14px;
   min-width: 14px;
-  margin-left: 1px;
-  margin-right: 3px;
+  margin-inline: 1px 3px;
 }
 
 .repo-owner-name-list li.active {

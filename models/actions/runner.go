@@ -14,14 +14,15 @@ import (
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
-	sharedTypes "forgejo.org/models/shared/types"
+	"forgejo.org/models/shared/types"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/translation"
 	"forgejo.org/modules/util"
 
-	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
+	runnerv1 "code.forgejo.org/forgejo/actions-proto/runner/v1"
 	"xorm.io/builder"
 )
 
@@ -60,6 +61,8 @@ type ActionRunner struct {
 
 	// Store labels defined in state file (default: .runner file) of `act_runner`
 	AgentLabels []string `xorm:"TEXT"`
+	// Store if this is a runner that only ever get one single job assigned
+	Ephemeral bool `xorm:"ephemeral NOT NULL DEFAULT false"`
 
 	Created timeutil.TimeStamp `xorm:"created"`
 	Updated timeutil.TimeStamp `xorm:"updated"`
@@ -75,6 +78,25 @@ const (
 	RunnerIdleTime    = 10 * time.Second
 )
 
+// >>> @@@ STACKIT CODE @@@
+// stackitLabelPrefix identifies runners belonging to the stackit-provided
+// global runner pool, e.g. autoscaled runners that are only online while
+// actively processing a job.
+const stackitLabelPrefix = "stackit"
+
+// IsStackitRunner reports whether the runner is part of the stackit-provided
+// runner pool, identified by its agent labels.
+func (r *ActionRunner) IsStackitRunner() bool {
+	for _, label := range r.AgentLabels {
+		if strings.HasPrefix(label, stackitLabelPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// >>> @@@ STACKIT CODE @@@
+
 // BelongsToOwnerName before calling, should guarantee that all attributes are loaded
 func (r *ActionRunner) BelongsToOwnerName() string {
 	if r.RepoID != 0 {
@@ -86,29 +108,29 @@ func (r *ActionRunner) BelongsToOwnerName() string {
 	return ""
 }
 
-func (r *ActionRunner) BelongsToOwnerType() sharedTypes.OwnerType {
+func (r *ActionRunner) BelongsToOwnerType() types.OwnerType {
 	if r.RepoID != 0 {
-		return sharedTypes.OwnerTypeRepository
+		return types.OwnerTypeRepository
 	}
 	if r.OwnerID != 0 {
-		if r.Owner.Type == user_model.UserTypeOrganization {
-			return sharedTypes.OwnerTypeOrganization
-		} else if r.Owner.Type == user_model.UserTypeIndividual {
-			return sharedTypes.OwnerTypeIndividual
+		switch r.Owner.Type {
+		case user_model.UserTypeOrganization:
+			return types.OwnerTypeOrganization
+		case user_model.UserTypeIndividual:
+			return types.OwnerTypeIndividual
 		}
 	}
-	for _, stackitLabel := range r.AgentLabels {
-		if strings.Contains(stackitLabel, "stackit") {
-			return sharedTypes.OwnerTypeStackit
-		}
+	// >>> @@@ STACKIT CODE @@@
+	if r.IsStackitRunner() {
+		return types.OwnerTypeStackit
 	}
-	return sharedTypes.OwnerTypeSystemGlobal
+	// >>> @@@ STACKIT CODE @@@
+	return types.OwnerTypeSystemGlobal
 }
 
 // if the logic here changed, you should also modify FindRunnerOptions.ToCond
 func (r *ActionRunner) Status() runnerv1.RunnerStatus {
-	// prevent stackit runners from appearing Offline (they should be Idle when not in use)
-	if time.Since(r.LastOnline.AsTime()) > RunnerOfflineTime && r.BelongsToOwnerType() != sharedTypes.OwnerTypeStackit {
+	if time.Since(r.LastOnline.AsTime()) > RunnerOfflineTime {
 		return runnerv1.RunnerStatus_RUNNER_STATUS_OFFLINE
 	}
 	if time.Since(r.LastActive.AsTime()) > RunnerIdleTime {
@@ -133,6 +155,18 @@ func (r *ActionRunner) IsOnline() bool {
 	return false
 }
 
+func (r *ActionRunner) IsActive() bool {
+	return r.Status() == runnerv1.RunnerStatus_RUNNER_STATUS_ACTIVE
+}
+
+func (r *ActionRunner) IsIdle() bool {
+	return r.Status() == runnerv1.RunnerStatus_RUNNER_STATUS_IDLE
+}
+
+func (r *ActionRunner) IsOffline() bool {
+	return r.Status() == runnerv1.RunnerStatus_RUNNER_STATUS_OFFLINE
+}
+
 // Editable checks if the runner is editable by the user
 func (r *ActionRunner) Editable(ownerID, repoID int64) bool {
 	if ownerID == 0 && repoID == 0 {
@@ -146,6 +180,7 @@ func (r *ActionRunner) Editable(ownerID, repoID int64) bool {
 
 // LoadAttributes loads the attributes of the runner
 func (r *ActionRunner) LoadAttributes(ctx context.Context) error {
+	// nosemgrep: forgejo-logic-suspicious-OwnerID-check (system users are not stored in the database)
 	if r.OwnerID > 0 {
 		var user user_model.User
 		has, err := db.GetEngine(ctx).ID(r.OwnerID).Get(&user)
@@ -185,20 +220,14 @@ func (r *ActionRunner) LoadAttributes(ctx context.Context) error {
 	return nil
 }
 
-func (r *ActionRunner) GenerateToken() (err error) {
-	r.Token, r.TokenSalt, r.TokenHash, _, err = generateSaltedToken()
-	return err
+func (r *ActionRunner) GenerateToken() {
+	r.Token, r.TokenSalt, r.TokenHash, _ = generateSaltedToken()
 }
 
 // UpdateSecret updates the hash based on the specified token. It does not
 // ensure that the runner's UUID matches the first 16 bytes of the token.
 func (r *ActionRunner) UpdateSecret(token string) error {
-	saltBytes, err := util.CryptoRandomBytes(16)
-	if err != nil {
-		return fmt.Errorf("CryptoRandomBytes %v", err)
-	}
-
-	salt := hex.EncodeToString(saltBytes)
+	salt := hex.EncodeToString(util.CryptoRandomBytes(16))
 
 	r.Token = token
 	r.TokenSalt = salt
@@ -218,7 +247,7 @@ type FindRunnerOptions struct {
 	Filter          string
 	IsOnline        optional.Option[bool]
 	IsStackitRunner optional.Option[bool]
-	WithAvailable   bool // not only runners belong to, but also runners can be used
+	WithVisible     bool // include all runners that are visible to the repository, owner, or instance
 
 	//>>> @@@@ STACKIT Code @@@
 	AgentLabels []string
@@ -230,25 +259,27 @@ func (opts FindRunnerOptions) ToConds() builder.Cond {
 
 	if opts.RepoID > 0 {
 		c := builder.NewCond().And(builder.Eq{"repo_id": opts.RepoID})
-		if opts.WithAvailable {
+		if opts.WithVisible {
 			c = c.Or(builder.Eq{"owner_id": builder.Select("owner_id").From("repository").Where(builder.Eq{"id": opts.RepoID})})
 			c = c.Or(builder.Eq{"repo_id": 0, "owner_id": 0})
 		}
 		cond = cond.And(c)
-	} else if opts.OwnerID > 0 { // OwnerID is ignored if RepoID is set
+	} else if opts.OwnerID != 0 { // OwnerID is ignored if RepoID is set
 		c := builder.NewCond().And(builder.Eq{"owner_id": opts.OwnerID})
-		if opts.WithAvailable {
+		if opts.WithVisible {
 			c = c.Or(builder.Eq{"repo_id": 0, "owner_id": 0})
 		}
 		cond = cond.And(c)
+	} else if !opts.WithVisible {
+		cond = cond.And(builder.Eq{"repo_id": 0, "owner_id": 0})
 	}
 
 	if opts.Filter != "" {
-		cond = cond.And(builder.Like{"name", opts.Filter})
+		cond = cond.And(builder.Like{"name", opts.Filter}).Or(builder.Like{"uuid", opts.Filter})
 	}
 
-	if opts.IsOnline.Has() {
-		if opts.IsOnline.Value() {
+	if has, value := opts.IsOnline.Get(); has {
+		if value {
 			cond = cond.And(builder.Gt{"last_online": time.Now().Add(-RunnerOfflineTime).Unix()})
 		} else {
 			cond = cond.And(builder.Lte{"last_online": time.Now().Add(-RunnerOfflineTime).Unix()})
@@ -312,8 +343,40 @@ func GetRunnerByID(ctx context.Context, id int64) (*ActionRunner, error) {
 	return &runner, nil
 }
 
+// GetVisibleRunnerByID is like GetRunnerByID, but it only finds the runner if it is visible to the given owner or
+// repository. If it is not, util.ErrNotExist will be returned even if the runner exists.
+func GetVisibleRunnerByID(ctx context.Context, id, ownerID, repoID int64) (*ActionRunner, error) {
+	query := db.GetEngine(ctx).Where("id=?", id)
+
+	if repoID > 0 {
+		cond := builder.NewCond().And(builder.Eq{"repo_id": repoID})
+		cond = cond.Or(builder.Eq{"owner_id": builder.Select("owner_id").From("repository").Where(builder.Eq{"id": repoID})})
+		cond = cond.Or(builder.Eq{"repo_id": 0, "owner_id": 0})
+		query = query.And(cond)
+	} else if ownerID > 0 { // ownerID is ignored if repoID is set
+		cond := builder.NewCond().And(builder.Eq{"owner_id": ownerID}).Or(builder.Eq{"repo_id": 0, "owner_id": 0})
+		query = query.And(cond)
+	}
+
+	var runner ActionRunner
+	has, err := query.Get(&runner)
+	if err != nil {
+		return nil, err
+	} else if !has {
+		return nil, fmt.Errorf("runner with ID %d: %w", id, util.ErrNotExist)
+	}
+	return &runner, nil
+}
+
 // UpdateRunner updates runner's information.
 func UpdateRunner(ctx context.Context, r *ActionRunner, cols ...string) error {
+	if r.OwnerID != 0 && r.RepoID != 0 {
+		// The ownership of existing runners should not be changed silently. That leads to subtle bugs and inscrutable
+		// behaviour.
+		return fmt.Errorf("OwnerID (%d) and RepoID (%d) of runner %d cannot be set simultaneously",
+			r.OwnerID, r.RepoID, r.ID)
+	}
+
 	e := db.GetEngine(ctx)
 	r.Name, _ = util.SplitStringAtByteN(r.Name, 255)
 	var err error
@@ -400,4 +463,61 @@ func FixRunnersWithoutBelongingRepo(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// DeleteEphemeralRunner removes the ephemeral runner with the given ID. If the runner with the given ID is not an
+// ephemeral runner, nothing happens.
+func DeleteEphemeralRunner(ctx context.Context, id int64) error {
+	_, err := db.GetEngine(ctx).Where(builder.Eq{"id": id, "ephemeral": true}).Delete(&ActionRunner{})
+	return err
+}
+
+func DeleteOfflineRunners(ctx context.Context, olderThan timeutil.TimeStamp, globalOnly bool) error {
+	log.Info("Doing: DeleteOfflineRunners")
+
+	if olderThan.AsTime().After(timeutil.TimeStampNow().AddDuration(-RunnerOfflineTime).AsTime()) {
+		return fmt.Errorf("invalid `cron.cleanup_offline_runners.older_than`value: must be at least %q", RunnerOfflineTime)
+	}
+
+	cond := builder.Or(
+		// never online
+		builder.And(builder.Eq{"last_online": 0}, builder.Lt{"created": olderThan}),
+		// was online but offline
+		builder.And(builder.Gt{"last_online": 0}, builder.Lt{"last_online": olderThan}),
+	)
+
+	if globalOnly {
+		cond = builder.And(cond, builder.Eq{"owner_id": 0}, builder.Eq{"repo_id": 0})
+	}
+
+	if err := db.Iterate(
+		ctx,
+		cond,
+		func(ctx context.Context, r *ActionRunner) error {
+			if err := DeleteRunner(ctx, r); err != nil {
+				return fmt.Errorf("DeleteOfflineRunners: %w", err)
+			}
+			lastOnline := r.LastOnline.AsTime()
+			olderThanTime := olderThan.AsTime()
+			if !lastOnline.IsZero() && lastOnline.Before(olderThanTime) {
+				log.Info(
+					"Deleted runner [ID: %d, Name: %s], last online %s ago",
+					r.ID, r.Name, olderThanTime.Sub(lastOnline).String(),
+				)
+			} else {
+				log.Info(
+					"Deleted runner [ID: %d, Name: %s], unused since %s ago",
+					r.ID, r.Name, olderThanTime.Sub(r.Created.AsTime()).String(),
+				)
+			}
+
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+
+	log.Info("Finished: DeleteOfflineRunners")
+
+	return nil
 }
