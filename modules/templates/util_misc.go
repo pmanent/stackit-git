@@ -1,4 +1,5 @@
 // Copyright 2023 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package templates
@@ -13,13 +14,14 @@ import (
 	"time"
 
 	activities_model "forgejo.org/models/activities"
+	asymkey_model "forgejo.org/models/asymkey"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/modules/git"
-	giturl "forgejo.org/modules/git/url"
+	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/repository"
 	"forgejo.org/modules/svg"
+	mirror_service "forgejo.org/services/mirror"
 
 	"github.com/editorconfig/editorconfig-core-go/v2"
 )
@@ -38,10 +40,11 @@ func SortArrow(normSort, revSort, urlSort string, isDefault bool) template.HTML 
 	} else {
 		// if sort arg is in url test if it correlates with column header sort arguments
 		// the direction of the arrow should indicate the "current sort order", up means ASC(normal), down means DESC(rev)
-		if urlSort == normSort {
+		switch urlSort {
+		case normSort:
 			// the table is sorted with this header normal
 			return svg.RenderHTML("octicon-triangle-up", 16)
-		} else if urlSort == revSort {
+		case revSort:
 			// the table is sorted with this header reverse
 			return svg.RenderHTML("octicon-triangle-down", 16)
 		}
@@ -59,6 +62,7 @@ func IsMultilineCommitMessage(msg string) bool {
 type Actioner interface {
 	GetOpType() activities_model.ActionType
 	GetActUserName(ctx context.Context) string
+	GetRepo(ctx context.Context) *repo_model.Repository
 	GetRepoUserName(ctx context.Context) string
 	GetRepoName(ctx context.Context) string
 	GetRepoPath(ctx context.Context) string
@@ -108,7 +112,7 @@ func ActionIcon(opType activities_model.ActionType) string {
 }
 
 // ActionContent2Commits converts action content to push commits
-func ActionContent2Commits(act Actioner) *repository.PushCommits {
+func ActionContent2Commits(ctx context.Context, act Actioner) *repository.PushCommits {
 	push := repository.NewPushCommits()
 
 	if act == nil || act.GetContent() == "" {
@@ -121,6 +125,23 @@ func ActionContent2Commits(act Actioner) *repository.PushCommits {
 
 	if push.Len == 0 {
 		push.Len = len(push.Commits)
+	}
+	repo := act.GetRepo(ctx)
+	for _, commit := range push.Commits {
+		gitCommit, err := repository.PushCommitToCommit(commit)
+		if err != nil {
+			// Only happens if the commit has an invalid sha
+			commit.Verification = &asymkey_model.ObjectVerification{
+				Verified: false,
+				Reason:   "git.error.invalid_commit_id",
+			}
+			continue
+		}
+		verification := asymkey_model.ParseCommitWithSignature(ctx, gitCommit)
+		_ = asymkey_model.CalculateTrustStatus(verification, repo.GetTrustModel(), func(user *user_model.User) (bool, error) {
+			return repo_model.IsOwnerMemberCollaborator(ctx, repo, user.ID)
+		}, nil)
+		commit.Verification = verification
 	}
 
 	return push
@@ -142,17 +163,11 @@ type remoteAddress struct {
 	Password string
 }
 
-func mirrorRemoteAddress(ctx context.Context, m *repo_model.Repository, remoteName string) remoteAddress {
+func mirrorRemoteAddress(ctx context.Context, mirror *repo_model.Mirror) remoteAddress {
 	ret := remoteAddress{}
-	remoteURL, err := git.GetRemoteAddress(ctx, m.RepoPath(), remoteName)
+	u, err := mirror_service.DecryptOrRecoverRemoteAddress(ctx, mirror)
 	if err != nil {
-		log.Error("GetRemoteURL %v", err)
-		return ret
-	}
-
-	u, err := giturl.Parse(remoteURL)
-	if err != nil {
-		log.Error("giturl.Parse %v", err)
+		log.Error("DecryptOrRecoverRemoteAddress %v", err)
 		return ret
 	}
 

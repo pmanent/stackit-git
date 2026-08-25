@@ -58,7 +58,6 @@
   --color-secondary-alpha-70: #3b444ab3;
   --color-secondary-alpha-80: #3b444acc;
   --color-secondary-alpha-90: #3b444ae1;
-  --color-secondary-button: var(--color-secondary-dark-4);
   --color-secondary-hover: var(--color-secondary-dark-3);
   --color-secondary-active: var(--color-secondary-dark-2);
   /* console colors - used for actions console and console files */
@@ -179,11 +178,6 @@
   --color-orange-badge: #f2711c;
   --color-orange-badge-bg: #f2711c1a;
   --color-orange-badge-hover-bg: #f2711c4d;
-  --color-git: #f05133;
-  /* Icon colors (PR/Issue/...) */
-  --color-icon-green: var(--color-green);
-  --color-icon-red: var(--color-red);
-  --color-icon-purple: var(--color-purple);
   /* target-based colors */
   --color-body: #1c1f25;
   --color-box-header: #1a1d1f;
@@ -205,10 +199,15 @@
   --color-light: #00001728;
   --color-light-mimic-enabled: rgba(0, 0, 0, calc(40 / 255 * 222 / 255 / var(--opacity-disabled)));
   --color-light-border: #e8e8ff28;
+  --color-table-stripe-subtle: rgba(255, 255, 255, 0.02);
+  --color-table-stripe: rgba(255, 255, 255, 0.04);
+  --color-alert-critical: var(--color-red-light);
   --color-hover: #e8e8ff19;
-  --color-active: #e8e8ff24;
+  --color-active: #393b43;
   --color-menu: #151a1e;
   --color-card: #151a1e;
+  --fancy-card-bg: #14171a;
+  --fancy-card-border: #3b444a;
   --color-markup-table-row: #e8e8ff0f;
   --color-markup-code-block: #e8e8ff12;
   --color-markup-code-inline: #e8e8ff28;
@@ -228,7 +227,6 @@
   --color-tooltip-bg: #000017f0;
   --color-nav-bg: #16191c;
   --color-nav-hover-bg: var(--color-secondary-light-1);
-  --color-nav-text: var(--color-text);
   --color-secondary-nav-bg: #181c20;
   --color-label-text: var(--color-text);
   --color-label-bg: #73828e4b;
@@ -239,9 +237,17 @@
   --color-highlight-fg: #87651e;
   --color-highlight-bg: #352c1c;
   --color-overlay-backdrop: #080808c0;
+  --color-selection-bg: var(--color-primary-light-1);
+  --color-selection-fg: var(--color-white);
   /* pattern colors for image diff */
   --checkerboard-color-1: #313131;
   --checkerboard-color-2: #212121;
+  --color-indicator-offline: #a1a1aa;
+  --color-indicator-offline-20: #a1a1aa1a;
+  --color-indicator-idle: #16a34a;
+  --color-indicator-idle-20: #16a34a1a;
+  --color-indicator-active: #2185d0;
+  --color-indicator-active-20: #2185d033;
   accent-color: var(--color-accent);
   color-scheme: dark;
 }

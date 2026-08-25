@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 
@@ -16,7 +17,6 @@ import (
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
-	unit_model "forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/charset"
@@ -30,7 +30,7 @@ import (
 	"forgejo.org/services/context"
 	"forgejo.org/services/forms"
 	"forgejo.org/services/gitdiff"
-	git_service "forgejo.org/services/repository"
+	repo_service "forgejo.org/services/repository"
 	"forgejo.org/services/repository/gitgraph"
 )
 
@@ -45,10 +45,19 @@ const (
 func RefCommits(ctx *context.Context) {
 	switch {
 	case len(ctx.Repo.TreePath) == 0:
+		ctx.Data["TreeNames"] = []string{}
 		Commits(ctx)
 	case ctx.Repo.TreePath == "search":
+		ctx.Data["TreeNames"] = []string{}
 		SearchCommits(ctx)
 	default:
+		treeNames := strings.Split(ctx.Repo.TreePath, "/")
+		paths := make([]string, len(treeNames))
+		for i := range treeNames {
+			paths[i] = strings.Join(treeNames[:i+1], "/")
+		}
+		ctx.Data["TreeNames"] = treeNames
+		ctx.Data["Paths"] = paths
 		FileHistory(ctx)
 	}
 }
@@ -68,10 +77,7 @@ func Commits(ctx *context.Context) {
 		return
 	}
 
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 
 	pageSize := ctx.FormInt("limit")
 	if pageSize <= 0 {
@@ -84,8 +90,19 @@ func Commits(ctx *context.Context) {
 		ctx.ServerError("CommitsByRange", err)
 		return
 	}
-	ctx.Data["Commits"] = processGitCommits(ctx, commits)
+	ctx.Data["Commits"] = git_model.ParseCommitsWithStatus(ctx, commits, ctx.Repo.Repository)
 
+	commitIDs := make([]string, 0, len(commits))
+	for _, c := range commits {
+		commitIDs = append(commitIDs, c.ID.String())
+	}
+	commitTagsMap, err := repo_model.FindTagsByCommitIDs(ctx, ctx.Repo.Repository.ID, commitIDs...)
+	if err != nil {
+		log.Error("FindTagsByCommitIDs: %v", err)
+		ctx.Flash.Error(ctx.Tr("repo.commit.load_tags_failed"))
+	} else {
+		ctx.Data["CommitTagsMap"] = commitTagsMap
+	}
 	ctx.Data["Username"] = ctx.Repo.Owner.Name
 	ctx.Data["Reponame"] = ctx.Repo.Repository.Name
 	ctx.Data["CommitCount"] = commitsCount
@@ -202,7 +219,7 @@ func SearchCommits(ctx *context.Context) {
 		return
 	}
 	ctx.Data["CommitCount"] = len(commits)
-	ctx.Data["Commits"] = processGitCommits(ctx, commits)
+	ctx.Data["Commits"] = git_model.ParseCommitsWithStatus(ctx, commits, ctx.Repo.Repository)
 
 	ctx.Data["Keyword"] = query
 	if all {
@@ -230,10 +247,7 @@ func FileHistory(ctx *context.Context) {
 		return
 	}
 
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 
 	commits, err := ctx.Repo.GitRepo.CommitsByFileAndRange(
 		git.CommitsByFileAndRangeOptions{
@@ -262,12 +276,15 @@ func FileHistory(ctx *context.Context) {
 	for _, renames := range renamedFiles {
 		if renames[1] == fileName {
 			ctx.Data["OldFilename"] = renames[0]
-			ctx.Data["OldFilenameHistory"] = fmt.Sprintf("%s/commits/commit/%s/%s", ctx.Repo.RepoLink, oldestCommit.ID.String(), renames[0])
+			ctx.Data["OldFilenameHistory"] = fmt.Sprintf("%s/commits/commit/%s/%s", ctx.Repo.RepoLink, oldestCommit.ID.String(), url.PathEscape(renames[0]))
 			break
 		}
 	}
 
-	ctx.Data["Commits"] = processGitCommits(ctx, commits)
+	branchLink := ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL()
+	ctx.Data["BranchLink"] = branchLink
+
+	ctx.Data["Commits"] = git_model.ParseCommitsWithStatus(ctx, commits, ctx.Repo.Repository)
 
 	ctx.Data["Username"] = ctx.Repo.Owner.Name
 	ctx.Data["Reponame"] = ctx.Repo.Repository.Name
@@ -282,7 +299,7 @@ func FileHistory(ctx *context.Context) {
 }
 
 func LoadBranchesAndTags(ctx *context.Context) {
-	response, err := git_service.LoadBranchesAndTags(ctx, ctx.Repo, ctx.Params("sha"))
+	response, err := repo_service.LoadBranchesAndTags(ctx, ctx.Repo, ctx.Params("sha"))
 	if err == nil {
 		ctx.JSON(http.StatusOK, response)
 		return
@@ -329,7 +346,7 @@ func Diff(ctx *context.Context) {
 		maxLines, maxFiles = -1, -1
 	}
 
-	diff, err := gitdiff.GetDiff(ctx, gitRepo, &gitdiff.DiffOptions{
+	diff, err := gitdiff.GetDiffFull(ctx, gitRepo, &gitdiff.DiffOptions{
 		AfterCommitID:      commitID,
 		SkipTo:             ctx.FormString("skip-to"),
 		MaxLines:           maxLines,
@@ -375,9 +392,6 @@ func Diff(ctx *context.Context) {
 	if err != nil {
 		log.Error("GetLatestCommitStatus: %v", err)
 	}
-	if !ctx.Repo.CanRead(unit_model.TypeActions) {
-		git_model.CommitStatusesHideActionsURL(ctx, statuses)
-	}
 
 	ctx.Data["CommitStatus"] = git_model.CalcCommitStatus(statuses)
 	ctx.Data["CommitStatuses"] = statuses
@@ -395,11 +409,11 @@ func Diff(ctx *context.Context) {
 		return
 	}
 
-	note := &git.Note{}
-	err = git.GetNote(ctx, ctx.Repo.GitRepo, commitID, note)
+	note, err := git.GetNote(ctx, ctx.Repo.GitRepo, commitID)
 	if err == nil {
 		ctx.Data["NoteCommit"] = note.Commit
 		ctx.Data["NoteAuthor"] = user_model.ValidateCommitWithEmail(ctx, note.Commit)
+		ctx.Data["NoteRaw"] = string(charset.ToUTF8WithFallback(note.Message, charset.ConvertOpts{}))
 		ctx.Data["NoteRendered"], err = markup.RenderCommitMessage(&markup.RenderContext{
 			Links: markup.Links{
 				Base:       ctx.Repo.RepoLink,
@@ -456,21 +470,7 @@ func RawDiff(ctx *context.Context) {
 	}
 }
 
-func processGitCommits(ctx *context.Context, gitCommits []*git.Commit) []*git_model.SignCommitWithStatuses {
-	commits := git_model.ConvertFromGitCommit(ctx, gitCommits, ctx.Repo.Repository)
-	if !ctx.Repo.CanRead(unit_model.TypeActions) {
-		for _, commit := range commits {
-			if commit.Status == nil {
-				continue
-			}
-			commit.Status.HideActionsURL(ctx)
-			git_model.CommitStatusesHideActionsURL(ctx, commit.Statuses)
-		}
-	}
-	return commits
-}
-
-func SetCommitNotes(ctx *context.Context) {
+func setCommitNotes(ctx *context.Context, redirectURL string) {
 	form := web.GetForm(ctx).(*forms.CommitNotesForm)
 
 	commitID := ctx.Params(":sha")
@@ -481,10 +481,14 @@ func SetCommitNotes(ctx *context.Context) {
 		return
 	}
 
-	ctx.Redirect(fmt.Sprintf("%s/commit/%s", ctx.Repo.Repository.HTMLURL(), commitID))
+	ctx.Redirect(redirectURL)
 }
 
-func RemoveCommitNotes(ctx *context.Context) {
+func SetCommitNotes(ctx *context.Context) {
+	setCommitNotes(ctx, ctx.Repo.Repository.CommitLink(ctx.Params(":sha")))
+}
+
+func removeCommitNotes(ctx *context.Context, redirectURL string) {
 	commitID := ctx.Params(":sha")
 
 	err := git.RemoveNote(ctx, ctx.Repo.GitRepo, commitID)
@@ -493,5 +497,9 @@ func RemoveCommitNotes(ctx *context.Context) {
 		return
 	}
 
-	ctx.Redirect(fmt.Sprintf("%s/commit/%s", ctx.Repo.Repository.HTMLURL(), commitID))
+	ctx.Redirect(redirectURL)
+}
+
+func RemoveCommitNotes(ctx *context.Context) {
+	removeCommitNotes(ctx, ctx.Repo.Repository.CommitLink(ctx.Params(":sha")))
 }

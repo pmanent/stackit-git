@@ -39,13 +39,32 @@ func IsNormalPageCompleted(s string) bool {
 func MockVariableValue[T any](p *T, v T) (reset func()) {
 	old := *p
 	*p = v
-	return func() { *p = old }
+	return func() {
+		*p = old
+	}
+}
+
+// Set the value *p to v, and return a closure that resets it when invoked. On
+// set and reset the `afterChange` closure will be invoked.
+func MockVariableValueWithReset[T any](p *T, v T, afterChange func()) (reset func()) {
+	old := *p
+	*p = v
+	afterChange()
+	return func() {
+		*p = old
+		afterChange()
+	}
 }
 
 // use for global variables only
 func MockProtect[T any](p *T) (reset func()) {
 	old := *p
 	return func() { *p = old }
+}
+
+// When this is called, sleep until the unix time was increased by one.
+func SleepTillNextSecond() {
+	time.Sleep(time.Second - time.Since(time.Now().Truncate(time.Second)))
 }
 
 // When this is called, sleep until the truncated unix time to a minute was

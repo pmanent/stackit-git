@@ -88,7 +88,7 @@ func (doc *HTMLDoc) AssertElementExists(t testing.TB, selector string) {
 func AssertElementExists(t testing.TB, parentSelector *goquery.Selection, selector string) {
 	t.Helper()
 	sel := parentSelector.Find(selector)
-	assert.Greater(t, sel.Length(), 0, "should exist at least one element for selector '%s'", selector)
+	assert.Positive(t, sel.Length(), "should exist at least one element for selector '%s'", selector)
 }
 
 // AssertElementNotExists asserts that no element exists for the given selector.
@@ -137,7 +137,7 @@ func (doc *HTMLDoc) AssertElementContains(t testing.TB, selector, text string) {
 func AssertElementContains(t testing.TB, parentSelector *goquery.Selection, selector, text string) {
 	t.Helper()
 	sel := parentSelector.Find(selector)
-	require.Greater(t, sel.Length(), 0, "should exist at least one element for selector '%s' to check for text", selector)
+	require.Positive(t, sel.Length(), "should exist at least one element for selector '%s' to check for text", selector)
 	textFromSelector := sel.Text()
 	assert.Contains(t, textFromSelector, text, "element '%s' should contain text '%s'", selector, text)
 }
@@ -167,6 +167,6 @@ func (doc *HTMLDoc) AssertElementEmpty(t testing.TB, selector string) {
 func AssertElementEmpty(t testing.TB, parentSelector *goquery.Selection, selector string) {
 	t.Helper()
 	sel := parentSelector.Find(selector)
-	require.Greater(t, sel.Length(), 0, "should exist at least one element for selector '%s' to check for emptiness", selector)
+	require.Positive(t, sel.Length(), "should exist at least one element for selector '%s' to check for emptiness", selector)
 	assert.Empty(t, sel.First().Text(), "element '%s' should be empty", selector)
 }

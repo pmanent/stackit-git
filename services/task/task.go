@@ -5,6 +5,8 @@ package task
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 
 	admin_model "forgejo.org/models/admin"
@@ -13,10 +15,10 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/json"
+	"forgejo.org/modules/keying"
 	"forgejo.org/modules/log"
 	base "forgejo.org/modules/migration"
 	"forgejo.org/modules/queue"
-	"forgejo.org/modules/secret"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
@@ -41,7 +43,7 @@ func Run(ctx context.Context, t *admin_model.Task) error {
 func Init() error {
 	taskQueue = queue.CreateSimpleQueue(graceful.GetManager().ShutdownContext(), "task", handler)
 	if taskQueue == nil {
-		return fmt.Errorf("unable to create task queue")
+		return errors.New("unable to create task queue")
 	}
 	go graceful.GetManager().RunWithCancel(taskQueue)
 	return nil
@@ -69,36 +71,38 @@ func MigrateRepository(ctx context.Context, doer, u *user_model.User, opts base.
 // CreateMigrateTask creates a migrate task
 func CreateMigrateTask(ctx context.Context, doer, u *user_model.User, opts base.MigrateOptions) (*admin_model.Task, error) {
 	// encrypt credentials for persistence
-	var err error
-	opts.CloneAddrEncrypted, err = secret.EncryptSecret(setting.SecretKey, opts.CloneAddr)
-	if err != nil {
-		return nil, err
-	}
-	opts.CloneAddr = util.SanitizeCredentialURLs(opts.CloneAddr)
-	opts.AuthPasswordEncrypted, err = secret.EncryptSecret(setting.SecretKey, opts.AuthPassword)
-	if err != nil {
-		return nil, err
-	}
-	opts.AuthPassword = ""
-	opts.AuthTokenEncrypted, err = secret.EncryptSecret(setting.SecretKey, opts.AuthToken)
-	if err != nil {
-		return nil, err
-	}
-	opts.AuthToken = ""
-	bs, err := json.Marshal(&opts)
-	if err != nil {
-		return nil, err
-	}
 
 	task := &admin_model.Task{
-		DoerID:         doer.ID,
-		OwnerID:        u.ID,
-		Type:           structs.TaskTypeMigrateRepo,
-		Status:         structs.TaskStatusQueued,
-		PayloadContent: string(bs),
+		DoerID:  doer.ID,
+		OwnerID: u.ID,
+		Type:    structs.TaskTypeMigrateRepo,
+		Status:  structs.TaskStatusQueued,
 	}
 
-	if err := admin_model.CreateTask(ctx, task); err != nil {
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
+		if err := admin_model.CreateTask(ctx, task); err != nil {
+			return err
+		}
+
+		key := keying.MigrateTask
+
+		opts.CloneAddrEncrypted = base64.RawStdEncoding.EncodeToString(key.Encrypt([]byte(opts.CloneAddr), keying.ColumnAndJSONSelectorAndID("payload_content", "clone_addr_encrypted", task.ID)))
+		opts.CloneAddr = util.SanitizeCredentialURLs(opts.CloneAddr)
+
+		opts.AuthPasswordEncrypted = base64.RawStdEncoding.EncodeToString(key.Encrypt([]byte(opts.AuthPassword), keying.ColumnAndJSONSelectorAndID("payload_content", "auth_password_encrypted", task.ID)))
+		opts.AuthPassword = ""
+
+		opts.AuthTokenEncrypted = base64.RawStdEncoding.EncodeToString(key.Encrypt([]byte(opts.AuthToken), keying.ColumnAndJSONSelectorAndID("payload_content", "auth_token_encrypted", task.ID)))
+		opts.AuthToken = ""
+
+		bs, err := json.Marshal(&opts)
+		if err != nil {
+			return err
+		}
+		task.PayloadContent = string(bs)
+
+		return task.UpdateCols(ctx, "payload_content")
+	}); err != nil {
 		return nil, err
 	}
 
@@ -129,25 +133,31 @@ func CreateMigrateTask(ctx context.Context, doer, u *user_model.User, opts base.
 	return task, nil
 }
 
-// RetryMigrateTask retry a migrate task
+// RetryMigrateTask will retry the migration.
+// All data, from a previous migration, is deleted before it's retried.
 func RetryMigrateTask(ctx context.Context, repoID int64) error {
 	migratingTask, err := admin_model.GetMigratingTask(ctx, repoID)
 	if err != nil {
-		log.Error("GetMigratingTask: %v", err)
-		return err
+		return fmt.Errorf("GetMigratingTask: %w", err)
 	}
 	if migratingTask.Status == structs.TaskStatusQueued || migratingTask.Status == structs.TaskStatusRunning {
 		return nil
 	}
 
-	// TODO Need to removing the storage/database garbage brought by the failed task
+	// The migration is being retried, it could've failed for a variety of cases.
+	// In most cases however, some data already got uploaded to the disk or
+	// database. The migration code makes the assumption this is not the case and
+	// if we do not clean it up, the retry attempt will fail with absolute
+	// certainty.
+	if err := repo_service.DeleteRepositoryDirectly(ctx, repoID, repo_service.DeleteRepositoryOpts{IgnoreOrgTeams: true, KeepMigrationBeans: true}); err != nil {
+		return fmt.Errorf("DeleteRepositoryDirectly: %v", err)
+	}
 
 	// Reset task status and messages
 	migratingTask.Status = structs.TaskStatusQueued
 	migratingTask.Message = ""
 	if err = migratingTask.UpdateCols(ctx, "status", "message"); err != nil {
-		log.Error("task.UpdateCols failed: %v", err)
-		return err
+		return fmt.Errorf("task.UpdateCols: %w", err)
 	}
 
 	return taskQueue.Push(migratingTask)

@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-const disposableEmailListURL string = "https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/%s/disposable_email_blocklist.conf"
+const disposableEmailListURL string = "https://cdn.jsdelivr.net/gh/disposable-email-domains/disposable-email-domains@%s/disposable_email_blocklist.conf"
 
 var (
 	gitRef *string = flag.String("r", "master", "Git reference of the domain list version")
@@ -145,6 +145,12 @@ func get_remote() ([]string, error) {
 	var arrDomains []string
 	for scanner.Scan() {
 		line := scanner.Text()
+		// >>> @@@ STACKIT CODE @@@
+		// Skip empty lines and Zscaler/Proxy injected HTML comments
+		if line == "" || strings.HasPrefix(line, "<!--") {
+			continue
+		}
+		// <<< @@@ STACKIT CODE @@@
 		arrDomains = append(arrDomains, line)
 	}
 

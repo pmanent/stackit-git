@@ -24,7 +24,7 @@ import (
 	"forgejo.org/services/context"
 	packages_service "forgejo.org/services/packages"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func apiError(ctx *context.Context, status int, obj any) {
@@ -145,7 +145,11 @@ func DownloadPackageFile(ctx *context.Context) {
 func UploadPackage(ctx *context.Context) {
 	upload, needToClose, err := ctx.UploadStream()
 	if err != nil {
-		apiError(ctx, http.StatusInternalServerError, err)
+		if context.IsFormError(err) {
+			apiError(ctx, http.StatusBadRequest, err)
+		} else {
+			apiError(ctx, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	if needToClose {

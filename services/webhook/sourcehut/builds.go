@@ -21,12 +21,12 @@ import (
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	webhook_module "forgejo.org/modules/webhook"
-	gitea_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	"forgejo.org/services/forms"
 	"forgejo.org/services/webhook/shared"
 
 	"code.forgejo.org/go-chi/binding"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type BuildsHandler struct{}
@@ -57,7 +57,7 @@ var _ binding.Validator = &buildsForm{}
 
 // Validate implements binding.Validator.
 func (f *buildsForm) Validate(req *http.Request, errs binding.Errors) binding.Errors {
-	ctx := gitea_context.GetWebContext(req)
+	ctx := app_context.GetWebContext(req)
 	if !fs.ValidPath(f.ManifestPath) {
 		errs = append(errs, binding.Error{
 			FieldNames:     []string{"ManifestPath"},
@@ -187,6 +187,10 @@ func (pc sourcehutConvertor) Release(_ *api.ReleasePayload) (graphqlPayload[buil
 }
 
 func (pc sourcehutConvertor) Package(_ *api.PackagePayload) (graphqlPayload[buildsVariables], error) {
+	return graphqlPayload[buildsVariables]{}, shared.ErrPayloadTypeNotSupported
+}
+
+func (pc sourcehutConvertor) Action(_ *api.ActionPayload) (graphqlPayload[buildsVariables], error) {
 	return graphqlPayload[buildsVariables]{}, shared.ErrPayloadTypeNotSupported
 }
 

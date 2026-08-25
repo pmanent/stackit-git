@@ -16,6 +16,7 @@ import (
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/git"
+	giturl "forgejo.org/modules/git/url"
 	"forgejo.org/modules/gitrepo"
 	"forgejo.org/modules/lfs"
 	"forgejo.org/modules/log"
@@ -24,6 +25,7 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 )
 
 var stripExitStatus = regexp.MustCompile(`exit status \d+ - `)
@@ -33,19 +35,22 @@ var AddPushMirrorRemote = addPushMirrorRemote
 
 func addPushMirrorRemote(ctx context.Context, m *repo_model.PushMirror, addr string) error {
 	addRemoteAndConfig := func(addr, path string) error {
-		cmd := git.NewCommand(ctx, "remote", "add", "--mirror=push").AddDynamicArguments(m.RemoteName, addr)
-		if strings.Contains(addr, "://") && strings.Contains(addr, "@") {
-			cmd.SetDescription(fmt.Sprintf("remote add %s --mirror=push %s [repo_path: %s]", m.RemoteName, util.SanitizeCredentialURLs(addr), path))
+		var cmd *git.Command
+		if m.BranchFilter == "" {
+			cmd = git.NewCommand(ctx, "remote", "add", "--mirror").AddDynamicArguments(m.RemoteName, addr)
 		} else {
-			cmd.SetDescription(fmt.Sprintf("remote add %s --mirror=push %s [repo_path: %s]", m.RemoteName, addr, path))
+			cmd = git.NewCommand(ctx, "remote", "add").AddDynamicArguments(m.RemoteName, addr)
+		}
+		if strings.Contains(addr, "://") && strings.Contains(addr, "@") {
+			cmd.SetDescription(fmt.Sprintf("remote add %s %s [repo_path: %s]", m.RemoteName, util.SanitizeCredentialURLs(addr), path))
+		} else {
+			cmd.SetDescription(fmt.Sprintf("remote add %s %s [repo_path: %s]", m.RemoteName, addr, path))
 		}
 		if _, _, err := cmd.RunStdString(&git.RunOpts{Dir: path}); err != nil {
 			return err
 		}
-		if _, _, err := git.NewCommand(ctx, "config", "--add").AddDynamicArguments("remote."+m.RemoteName+".push", "+refs/heads/*:refs/heads/*").RunStdString(&git.RunOpts{Dir: path}); err != nil {
-			return err
-		}
-		if _, _, err := git.NewCommand(ctx, "config", "--add").AddDynamicArguments("remote."+m.RemoteName+".push", "+refs/tags/*:refs/tags/*").RunStdString(&git.RunOpts{Dir: path}); err != nil {
+		err := addRemotePushRefSpecs(ctx, path, m)
+		if err != nil {
 			return err
 		}
 		return nil
@@ -64,6 +69,49 @@ func addPushMirrorRemote(ctx context.Context, m *repo_model.PushMirror, addr str
 		}
 	}
 
+	return nil
+}
+
+func addRemotePushRefSpecs(ctx context.Context, path string, m *repo_model.PushMirror) error {
+	if m.BranchFilter == "" {
+		// If there is no branch filter, set the push refspecs to mirror all branches and tags.
+		if _, _, err := git.NewCommand(ctx, "config", "--add").AddDynamicArguments("remote."+m.RemoteName+".push", "+refs/heads/*:refs/heads/*").RunStdString(&git.RunOpts{Dir: path}); err != nil {
+			return err
+		}
+	} else {
+		branches := strings.SplitSeq(m.BranchFilter, ",")
+		for branch := range branches {
+			branch = strings.TrimSpace(branch)
+			if branch == "" {
+				continue
+			}
+			refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
+			if _, _, err := git.NewCommand(ctx, "config", "--add").AddDynamicArguments("remote."+m.RemoteName+".push", refspec).RunStdString(&git.RunOpts{Dir: path}); err != nil {
+				return err
+			}
+		}
+	}
+	if _, _, err := git.NewCommand(ctx, "config", "--add").AddDynamicArguments("remote."+m.RemoteName+".push", "+refs/tags/*:refs/tags/*").RunStdString(&git.RunOpts{Dir: path}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func UpdatePushMirrorBranchFilter(ctx context.Context, m *repo_model.PushMirror) error {
+	path := m.Repo.RepoPath()
+
+	// First, remove all existing push refspecs for this remote
+	cmd := git.NewCommand(ctx, "config", "--unset-all").AddDynamicArguments("remote." + m.RemoteName + ".push")
+	if _, _, err := cmd.RunStdString(&git.RunOpts{Dir: path}); err != nil {
+		// Ignore error if the key doesn't exist
+		if !strings.Contains(err.Error(), "does not exist") {
+			return err
+		}
+	}
+	err := addRemotePushRefSpecs(ctx, path, m)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -132,6 +180,13 @@ func SyncPushMirror(ctx context.Context, mirrorID int64) bool {
 	return err == nil
 }
 
+func recheckPushPermitted(ctx context.Context, m *repo_model.PushMirror, remoteURL *giturl.GitURL) error {
+	if err := m.Repo.LoadOwner(ctx); err != nil {
+		return err
+	}
+	return migrations_allowlist.IsPushMirrorURLAllowed(remoteURL.String(), m.Repo.Owner)
+}
+
 func runPushSync(ctx context.Context, m *repo_model.PushMirror) error {
 	timeout := time.Duration(setting.Git.Timeout.Mirror) * time.Second
 
@@ -146,7 +201,17 @@ func runPushSync(ctx context.Context, m *repo_model.PushMirror) error {
 			return errors.New("Unexpected error")
 		}
 
-		if setting.LFS.StartServer {
+		useSSHAuthentication := len(m.PublicKey) != 0
+
+		// Recheck that the remote address is still permitted before pushing. The address passed IsPushMirrorURLAllowed
+		// at creation time, but the allow/block lists may have changed since, or DNS for the remote host may now
+		// resolve to an internal address (DNS rebinding).
+		if err := recheckPushPermitted(ctx, m, remoteURL); err != nil {
+			log.Error("SyncPushMirror [repo: %-v]: push mirror failed to meet migration URL requirements: %v", m.Repo, err)
+			return util.SanitizeErrorCredentialURLs(err)
+		}
+
+		if setting.LFS.StartServer && !useSSHAuthentication {
 			log.Trace("SyncMirrors [repo: %-v]: syncing LFS objects...", m.Repo)
 
 			var gitRepo *git.Repository
@@ -162,7 +227,7 @@ func runPushSync(ctx context.Context, m *repo_model.PushMirror) error {
 			defer gitRepo.Close()
 
 			endpoint := lfs.DetermineEndpoint(remoteURL.String(), "")
-			lfsClient := lfs.NewClient(endpoint, nil)
+			lfsClient := lfs.NewClient(endpoint, migrations_allowlist.NewMigrationHTTPTransport())
 			if err := pushAllLFSObjects(ctx, gitRepo, lfsClient); err != nil {
 				return util.SanitizeErrorCredentialURLs(err)
 			}
@@ -174,7 +239,7 @@ func runPushSync(ctx context.Context, m *repo_model.PushMirror) error {
 		// Therefore, we need to create a temporary file that stores the private key, so that OpenSSH can use it.
 		// We delete the temporary file afterwards.
 		privateKeyPath := ""
-		if m.PublicKey != "" {
+		if useSSHAuthentication {
 			f, err := os.CreateTemp(os.TempDir(), m.RemoteName)
 			if err != nil {
 				log.Error("os.CreateTemp: %v", err)
@@ -207,12 +272,14 @@ func runPushSync(ctx context.Context, m *repo_model.PushMirror) error {
 			Mirror:         true,
 			Timeout:        timeout,
 			PrivateKeyPath: privateKeyPath,
+			// The remote URL passed IsPushMirrorURLAllowed, but any redirection URL may not. Prohibit redirects in
+			// order to protect against SSRF risks.
+			ProhibitHTTPRedirect: true,
 		}); err != nil {
 			log.Error("Error pushing %s mirror[%d] remote %s: %v", path, m.ID, m.RemoteName, err)
 
 			return util.SanitizeErrorCredentialURLs(err)
 		}
-
 		return nil
 	}
 

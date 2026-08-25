@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestPackageHelm(t *testing.T) {
@@ -93,6 +93,11 @@ dependencies:
 		pb, err := packages.GetBlobByID(db.DefaultContext, pfs[0].BlobID)
 		require.NoError(t, err)
 		assert.Equal(t, int64(len(content)), pb.Size)
+
+		req = NewRequestWithBody(t, "POST", uploadURL, bytes.NewReader(content)).
+			AddBasicAuth(user.Name).
+			SetHeader("content-type", "multipart/form-data")
+		MakeRequest(t, req, http.StatusBadRequest)
 
 		req = NewRequestWithBody(t, "POST", uploadURL, bytes.NewReader(content)).
 			AddBasicAuth(user.Name)

@@ -29,11 +29,12 @@ func MatchQuery(matchTerm, field, analyzer string, fuzziness int) *query.MatchQu
 }
 
 // MatchPhraseQuery generates a match phrase query for the given phrase, field and analyzer
-func MatchPhraseQuery(matchPhrase, field, analyzer string, autoFuzzy bool) *query.MatchPhraseQuery {
+func MatchPhraseQuery(matchPhrase, field, analyzer string, autoFuzzy bool, boost float64) *query.MatchPhraseQuery {
 	q := bleve.NewMatchPhraseQuery(matchPhrase)
 	q.FieldVal = field
 	q.Analyzer = analyzer
 	q.SetAutoFuzziness(autoFuzzy)
+	q.SetBoost(boost)
 	return q
 }
 
@@ -47,15 +48,15 @@ func BoolFieldQuery(value bool, field string) *query.BoolFieldQuery {
 func NumericRangeInclusiveQuery(min, max optional.Option[int64], field string) *query.NumericRangeQuery {
 	var minF, maxF *float64
 	var minI, maxI *bool
-	if min.Has() {
+	if has, value := min.Get(); has {
 		minF = new(float64)
-		*minF = float64(min.Value())
+		*minF = float64(value)
 		minI = new(bool)
 		*minI = true
 	}
-	if max.Has() {
+	if has, value := max.Get(); has {
 		maxF = new(float64)
-		*maxF = float64(max.Value())
+		*maxF = float64(value)
 		maxI = new(bool)
 		*maxI = true
 	}

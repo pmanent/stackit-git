@@ -29,7 +29,7 @@ func GetQuota(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	shared.GetQuota(ctx, ctx.Org.Organization.ID)
+	shared.GetQuota(ctx, ctx.Org().Organization.ID)
 }
 
 // CheckQuota returns whether the organization in context is over the subject quota
@@ -45,9 +45,16 @@ func CheckQuota(ctx *context.APIContext) {
 	//   description: name of the organization
 	//   type: string
 	//   required: true
+	// - name: subject
+	//   in: query
+	//   description: subject of the quota
+	//   type: string
+	//   required: true
 	// responses:
 	//   "200":
-	//     "$ref": "#/responses/boolean"
+	//     description: Returns true if the action is accepted.
+	//     schema:
+	//       type: boolean
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 	//   "404":
@@ -55,7 +62,7 @@ func CheckQuota(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
-	shared.CheckQuota(ctx, ctx.Org.Organization.ID)
+	shared.CheckQuota(ctx, ctx.Org().Organization.ID)
 }
 
 // ListQuotaAttachments lists attachments affecting the organization's quota
@@ -87,7 +94,7 @@ func ListQuotaAttachments(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	shared.ListQuotaAttachments(ctx, ctx.Org.Organization.ID)
+	shared.ListQuotaAttachments(ctx, ctx.Org().Organization.ID)
 }
 
 // ListQuotaPackages lists packages affecting the organization's quota
@@ -119,7 +126,7 @@ func ListQuotaPackages(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	shared.ListQuotaPackages(ctx, ctx.Org.Organization.ID)
+	shared.ListQuotaPackages(ctx, ctx.Org().Organization.ID)
 }
 
 // ListQuotaArtifacts lists artifacts affecting the organization's quota
@@ -151,5 +158,5 @@ func ListQuotaArtifacts(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	shared.ListQuotaArtifacts(ctx, ctx.Org.Organization.ID)
+	shared.ListQuotaArtifacts(ctx, ctx.Org().Organization.ID)
 }

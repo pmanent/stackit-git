@@ -5,6 +5,8 @@ import giteaDoubleChevronRight from '../../public/assets/img/svg/gitea-double-ch
 import giteaEmptyCheckbox from '../../public/assets/img/svg/gitea-empty-checkbox.svg';
 import giteaExclamation from '../../public/assets/img/svg/gitea-exclamation.svg';
 import octiconArchive from '../../public/assets/img/svg/octicon-archive.svg';
+import octiconArrowDown from '../../public/assets/img/svg/octicon-arrow-down.svg';
+import octiconArrowUp from '../../public/assets/img/svg/octicon-arrow-up.svg';
 import octiconArrowSwitch from '../../public/assets/img/svg/octicon-arrow-switch.svg';
 import octiconBlocked from '../../public/assets/img/svg/octicon-blocked.svg';
 import octiconBold from '../../public/assets/img/svg/octicon-bold.svg';
@@ -42,6 +44,7 @@ import octiconIssueClosed from '../../public/assets/img/svg/octicon-issue-closed
 import octiconIssueOpened from '../../public/assets/img/svg/octicon-issue-opened.svg';
 import octiconItalic from '../../public/assets/img/svg/octicon-italic.svg';
 import octiconKebabHorizontal from '../../public/assets/img/svg/octicon-kebab-horizontal.svg';
+import octiconLightBulb from '../../public/assets/img/svg/octicon-light-bulb.svg';
 import octiconLink from '../../public/assets/img/svg/octicon-link.svg';
 import octiconListOrdered from '../../public/assets/img/svg/octicon-list-ordered.svg';
 import octiconListUnordered from '../../public/assets/img/svg/octicon-list-unordered.svg';
@@ -80,7 +83,9 @@ const svgs = {
   'gitea-empty-checkbox': giteaEmptyCheckbox,
   'gitea-exclamation': giteaExclamation,
   'octicon-archive': octiconArchive,
+  'octicon-arrow-down': octiconArrowDown,
   'octicon-arrow-switch': octiconArrowSwitch,
+  'octicon-arrow-up': octiconArrowUp,
   'octicon-blocked': octiconBlocked,
   'octicon-bold': octiconBold,
   'octicon-check': octiconCheck,
@@ -117,6 +122,7 @@ const svgs = {
   'octicon-issue-opened': octiconIssueOpened,
   'octicon-italic': octiconItalic,
   'octicon-kebab-horizontal': octiconKebabHorizontal,
+  'octicon-light-bulb': octiconLightBulb,
   'octicon-link': octiconLink,
   'octicon-list-ordered': octiconListOrdered,
   'octicon-list-unordered': octiconListUnordered,

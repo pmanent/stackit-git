@@ -12,6 +12,7 @@ import (
 	"forgejo.org/models/db"
 	"forgejo.org/modules/actions"
 	"forgejo.org/modules/log"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 )
@@ -41,7 +42,7 @@ func stopTasks(ctx context.Context, opts actions_model.FindTaskOptions) error {
 	jobs := make([]*actions_model.ActionRunJob, 0, len(tasks))
 	for _, task := range tasks {
 		if err := db.WithTx(ctx, func(ctx context.Context) error {
-			if err := actions_model.StopTask(ctx, task.ID, actions_model.StatusFailure); err != nil {
+			if err := StopTask(ctx, task.ID, actions_model.StatusFailure); err != nil {
 				return err
 			}
 			if err := task.LoadJob(ctx); err != nil {
@@ -75,8 +76,9 @@ func stopTasks(ctx context.Context, opts actions_model.FindTaskOptions) error {
 // CancelAbandonedJobs cancels the jobs which have waiting status, but haven't been picked by a runner for a long time
 func CancelAbandonedJobs(ctx context.Context) error {
 	jobs, err := db.Find[actions_model.ActionRunJob](ctx, actions_model.FindRunJobOptions{
-		Statuses:      []actions_model.Status{actions_model.StatusWaiting, actions_model.StatusBlocked},
-		UpdatedBefore: timeutil.TimeStamp(time.Now().Add(-setting.Actions.AbandonedJobTimeout).Unix()),
+		Statuses:         []actions_model.Status{actions_model.StatusWaiting, actions_model.StatusBlocked},
+		UpdatedBefore:    timeutil.TimeStamp(time.Now().Add(-setting.Actions.AbandonedJobTimeout).Unix()),
+		RunNeedsApproval: optional.Some(false),
 	})
 	if err != nil {
 		log.Warn("find abandoned tasks: %v", err)
@@ -88,7 +90,7 @@ func CancelAbandonedJobs(ctx context.Context) error {
 		job.Status = actions_model.StatusCancelled
 		job.Stopped = now
 		if err := db.WithTx(ctx, func(ctx context.Context) error {
-			_, err := actions_model.UpdateRunJob(ctx, job, nil, "status", "stopped")
+			_, err := UpdateRunJob(ctx, job, nil, "status", "stopped")
 			return err
 		}); err != nil {
 			log.Warn("cancel abandoned job %v: %v", job.ID, err)

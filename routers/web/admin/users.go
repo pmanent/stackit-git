@@ -22,7 +22,6 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
-	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/web/explore"
@@ -49,7 +48,7 @@ func Users(ctx *context.Context) {
 	ctx.Data["PageIsAdminUsers"] = true
 
 	extraParamStrings := map[string]string{}
-	statusFilterKeys := []string{"is_active", "is_admin", "is_restricted", "is_2fa_enabled", "is_prohibit_login"}
+	statusFilterKeys := []string{"is_active", "is_admin", "is_restricted", "is_2fa_enabled", "is_prohibit_login", "account_type"}
 	statusFilterMap := map[string]string{}
 	for _, filterKey := range statusFilterKeys {
 		paramKey := "status_filter[" + filterKey + "]"
@@ -58,6 +57,19 @@ func Users(ctx *context.Context) {
 		if paramVal != "" {
 			extraParamStrings[paramKey] = paramVal
 		}
+	}
+
+	accountType := statusFilterMap["account_type"]
+	accountTypeFilter := optional.None[user_model.UserType]()
+	if accountType != "" {
+		accountTypeInt, err := strconv.ParseInt(accountType, 10, 0)
+		if err != nil {
+			ctx.ServerError("account_type int", err)
+			return
+		}
+
+		accountTypeFilter = optional.Some(user_model.UserType(accountTypeInt))
+		extraParamStrings["account_type"] = accountType
 	}
 
 	sortType := ctx.FormString("sort")
@@ -77,11 +89,12 @@ func Users(ctx *context.Context) {
 			PageSize: setting.UI.Admin.UserPagingNum,
 		},
 		SearchByEmail:      true,
-		IsActive:           util.OptionalBoolParse(statusFilterMap["is_active"]),
-		IsAdmin:            util.OptionalBoolParse(statusFilterMap["is_admin"]),
-		IsRestricted:       util.OptionalBoolParse(statusFilterMap["is_restricted"]),
-		IsTwoFactorEnabled: util.OptionalBoolParse(statusFilterMap["is_2fa_enabled"]),
-		IsProhibitLogin:    util.OptionalBoolParse(statusFilterMap["is_prohibit_login"]),
+		IsActive:           optional.ParseBool(statusFilterMap["is_active"]),
+		IsAdmin:            optional.ParseBool(statusFilterMap["is_admin"]),
+		IsRestricted:       optional.ParseBool(statusFilterMap["is_restricted"]),
+		IsTwoFactorEnabled: optional.ParseBool(statusFilterMap["is_2fa_enabled"]),
+		IsProhibitLogin:    optional.ParseBool(statusFilterMap["is_prohibit_login"]),
+		AccountType:        accountTypeFilter,
 		IncludeReserved:    true, // administrator needs to list all accounts include reserved, bot, remote ones
 		Load2FAStatus:      true,
 		ExtraParamStrings:  extraParamStrings,
@@ -187,7 +200,7 @@ func NewUserPost(ctx *context.Context) {
 		case user_model.IsErrEmailAlreadyUsed(err):
 			ctx.Data["Err_Email"] = true
 			ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplUserNew, &form)
-		case validation.IsErrEmailInvalid(err), validation.IsErrEmailCharIsNotSupported(err):
+		case validation.IsErrEmailInvalid(err):
 			ctx.Data["Err_Email"] = true
 			ctx.RenderWithErr(ctx.Tr("form.email_invalid"), tplUserNew, &form)
 		case db.IsErrNameReserved(err):
@@ -196,16 +209,13 @@ func NewUserPost(ctx *context.Context) {
 		case db.IsErrNamePatternNotAllowed(err):
 			ctx.Data["Err_UserName"] = true
 			ctx.RenderWithErr(ctx.Tr("user.form.name_pattern_not_allowed", err.(db.ErrNamePatternNotAllowed).Pattern), tplUserNew, &form)
-		case db.IsErrNameCharsNotAllowed(err):
-			ctx.Data["Err_UserName"] = true
-			ctx.RenderWithErr(ctx.Tr("user.form.name_chars_not_allowed", err.(db.ErrNameCharsNotAllowed).Name), tplUserNew, &form)
 		default:
 			ctx.ServerError("CreateUser", err)
 		}
 		return
 	}
 
-	if !validation.IsEmailDomainAllowed(u.Email) {
+	if _, ok := validation.IsEmailDomainAllowed(u.Email); !ok {
 		ctx.Flash.Warning(ctx.Tr("form.email_domain_is_not_allowed", u.Email))
 	}
 
@@ -249,17 +259,12 @@ func prepareUserInfo(ctx *context.Context) *user_model.User {
 	}
 	ctx.Data["Sources"] = sources
 
-	hasTOTP, err := auth.HasTOTPByUID(ctx, u.ID)
+	hasTwoFactor, err := auth.HasTwoFactorByUID(ctx, u.ID)
 	if err != nil {
-		ctx.ServerError("auth.HasTwoFactorByUID", err)
+		ctx.ServerError("HasTwoFactorByUID", err)
 		return nil
 	}
-	hasWebAuthn, err := auth.HasWebAuthnRegistrationsByUID(ctx, u.ID)
-	if err != nil {
-		ctx.ServerError("auth.HasWebAuthnRegistrationsByUID", err)
-		return nil
-	}
-	ctx.Data["TwoFactorEnabled"] = hasTOTP || hasWebAuthn
+	ctx.Data["TwoFactorEnabled"] = hasTwoFactor
 
 	return u
 }
@@ -322,6 +327,9 @@ func editUserCommon(ctx *context.Context) {
 	ctx.Data["DisableMigrations"] = setting.Repository.DisableMigrations
 	ctx.Data["AllowedUserVisibilityModes"] = setting.Service.AllowedUserVisibilityModesSlice.ToVisibleTypeSlice()
 	ctx.Data["DisableGravatar"] = setting.Config().Picture.DisableGravatar.Value(ctx)
+	ctx.Data["MaxAvatarFileSize"] = setting.Avatar.MaxFileSize
+	ctx.Data["MaxAvatarWidth"] = setting.Avatar.MaxWidth
+	ctx.Data["MaxAvatarHeight"] = setting.Avatar.MaxHeight
 }
 
 // EditUser show editing user page
@@ -416,7 +424,7 @@ func EditUserPost(ctx *context.Context) {
 	if form.Email != "" {
 		if err := user_service.AdminAddOrSetPrimaryEmailAddress(ctx, u, form.Email); err != nil {
 			switch {
-			case validation.IsErrEmailCharIsNotSupported(err), validation.IsErrEmailInvalid(err):
+			case validation.IsErrEmailInvalid(err):
 				ctx.Data["Err_Email"] = true
 				ctx.RenderWithErr(ctx.Tr("form.email_invalid"), tplUserEdit, &form)
 			case user_model.IsErrEmailAlreadyUsed(err):
@@ -427,7 +435,7 @@ func EditUserPost(ctx *context.Context) {
 			}
 			return
 		}
-		if !validation.IsEmailDomainAllowed(form.Email) {
+		if _, ok := validation.IsEmailDomainAllowed(form.Email); !ok {
 			ctx.Flash.Warning(ctx.Tr("form.email_domain_is_not_allowed", form.Email))
 		}
 	}
@@ -446,6 +454,7 @@ func EditUserPost(ctx *context.Context) {
 		IsRestricted:            optional.Some(form.Restricted),
 		Visibility:              optional.Some(form.Visibility),
 		Language:                optional.Some(form.Language),
+		KeepEmailPrivate:        optional.Some(form.HideEmail),
 	}
 
 	if err := user_service.UpdateUser(ctx, u, opts); err != nil {

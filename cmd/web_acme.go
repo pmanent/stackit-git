@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/process"
+	"forgejo.org/modules/proxy"
 	"forgejo.org/modules/setting"
 
 	"github.com/caddyserver/certmagic"
@@ -54,8 +56,8 @@ func runACME(listenAddr string, m http.Handler) error {
 		altTLSALPNPort = p
 	}
 
-	magic := certmagic.NewDefault()
-	magic.Storage = &certmagic.FileStorage{Path: setting.AcmeLiveDirectory}
+	certmagic.Default.Storage = &certmagic.FileStorage{Path: setting.AcmeLiveDirectory}
+
 	// Try to use private CA root if provided, otherwise defaults to system's trust
 	var certPool *x509.CertPool
 	if setting.AcmeCARoot != "" {
@@ -65,7 +67,8 @@ func runACME(listenAddr string, m http.Handler) error {
 			log.Warn("Failed to parse CA Root certificate, using default CA trust: %v", err)
 		}
 	}
-	myACME := certmagic.NewACMEIssuer(magic, certmagic.ACMEIssuer{
+
+	certmagic.DefaultACME = certmagic.ACMEIssuer{
 		CA:                      setting.AcmeURL,
 		TrustedRoots:            certPool,
 		Email:                   setting.AcmeEmail,
@@ -75,7 +78,17 @@ func runACME(listenAddr string, m http.Handler) error {
 		ListenHost:              setting.HTTPAddr,
 		AltTLSALPNPort:          altTLSALPNPort,
 		AltHTTPPort:             altHTTPPort,
-	})
+		HTTPProxy:               proxy.Proxy(),
+	}
+
+	// Preserve behavior to use Let's encrypt test CA when Let's encrypt is CA.
+	if certmagic.DefaultACME.CA == certmagic.LetsEncryptProductionCA {
+		certmagic.DefaultACME.TestCA = certmagic.LetsEncryptStagingCA
+	}
+
+	magic := certmagic.NewDefault()
+
+	myACME := certmagic.NewACMEIssuer(magic, certmagic.DefaultACME)
 
 	magic.Issuers = []certmagic.Issuer{myACME}
 
@@ -110,9 +123,11 @@ func runACME(listenAddr string, m http.Handler) error {
 			_, _, finished := process.GetManager().AddTypedContext(graceful.GetManager().HammerContext(), "Web: ACME HTTP challenge server", process.SystemProcessType, true)
 			defer finished()
 
-			log.Info("Running Let's Encrypt handler on %s", setting.HTTPAddr+":"+setting.PortToRedirect)
+			acmeListenAddr := net.JoinHostPort(setting.HTTPAddr, setting.PortToRedirect)
+
+			log.Info("Running Let's Encrypt handler on %s", acmeListenAddr)
 			// all traffic coming into HTTP will be redirect to HTTPS automatically (LE HTTP-01 validation happens here)
-			err := runHTTP("tcp", setting.HTTPAddr+":"+setting.PortToRedirect, "Let's Encrypt HTTP Challenge", myACME.HTTPChallengeHandler(http.HandlerFunc(runLetsEncryptFallbackHandler)), setting.RedirectorUseProxyProtocol)
+			err := runHTTP("tcp", acmeListenAddr, "Let's Encrypt HTTP Challenge", myACME.HTTPChallengeHandler(http.HandlerFunc(runLetsEncryptFallbackHandler)), setting.RedirectorUseProxyProtocol)
 			if err != nil {
 				log.Fatal("Failed to start the Let's Encrypt handler on port %s: %v", setting.PortToRedirect, err)
 			}

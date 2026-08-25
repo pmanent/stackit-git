@@ -1,5 +1,6 @@
-// Copyright 2017 The Gitea Authors. All rights reserved.
 // Copyright 2014 The Gogs Authors. All rights reserved.
+// Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2023 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package repo
@@ -29,7 +30,7 @@ import (
 	asymkey_model "forgejo.org/models/asymkey"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
-	issue_model "forgejo.org/models/issues"
+	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
 	unit_model "forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
@@ -52,9 +53,10 @@ import (
 	"forgejo.org/routers/web/feed"
 	"forgejo.org/services/context"
 	issue_service "forgejo.org/services/issue"
+	repo_service "forgejo.org/services/repository"
 	files_service "forgejo.org/services/repository/files"
 
-	"github.com/nektos/act/pkg/model"
+	"code.forgejo.org/forgejo/runner/v12/act/model"
 
 	_ "golang.org/x/image/bmp"  // for processing bmp images
 	_ "golang.org/x/image/webp" // for processing webp images
@@ -118,7 +120,7 @@ func FindReadmeFileInEntries(ctx *context.Context, entries []*git.TreeEntry, try
 			log.Debug("Potential readme file: %s", entry.Name())
 			if readmeFiles[i] == nil || base.NaturalSortLess(readmeFiles[i].Name(), entry.Blob().Name()) {
 				if entry.IsLink() {
-					target, _, err := entry.FollowLinks()
+					target, err := entry.FollowLinks()
 					if err != nil && !git.IsErrBadLink(err) {
 						return "", nil, err
 					} else if target != nil && (target.IsExecutable() || target.IsRegular()) {
@@ -226,7 +228,7 @@ func getFileReader(ctx gocontext.Context, repoID int64, blob *git.Blob) ([]byte,
 	n, _ := util.ReadAtMost(dataRc, buf)
 	buf = buf[:n]
 
-	st := typesniffer.DetectContentType(buf)
+	st := typesniffer.DetectContentType(buf, blob.Name())
 	isTextFile := st.IsText()
 
 	// FIXME: what happens when README file is an image?
@@ -260,7 +262,7 @@ func getFileReader(ctx gocontext.Context, repoID int64, blob *git.Blob) ([]byte,
 	}
 	buf = buf[:n]
 
-	st = typesniffer.DetectContentType(buf)
+	st = typesniffer.DetectContentType(buf, blob.Name())
 
 	return buf, dataRc, &fileInfo{st.IsText(), true, meta.Size, &meta.Pointer, st}, nil
 }
@@ -268,7 +270,7 @@ func getFileReader(ctx gocontext.Context, repoID int64, blob *git.Blob) ([]byte,
 func renderReadmeFile(ctx *context.Context, subfolder string, readmeFile *git.TreeEntry) {
 	target := readmeFile
 	if readmeFile != nil && readmeFile.IsLink() {
-		target, _, _ = readmeFile.FollowLinks()
+		target, _ = readmeFile.FollowLinks()
 	}
 	if target == nil {
 		// if findReadmeFile() failed and/or gave us a broken symlink (which it shouldn't)
@@ -367,9 +369,6 @@ func loadLatestCommitData(ctx *context.Context, latestCommit *git.Commit) bool {
 		if err != nil {
 			log.Error("GetLatestCommitStatus: %v", err)
 		}
-		if !ctx.Repo.CanRead(unit_model.TypeActions) {
-			git_model.CommitStatusesHideActionsURL(ctx, statuses)
-		}
 
 		ctx.Data["LatestCommitStatus"] = git_model.CalcCommitStatus(statuses)
 		ctx.Data["LatestCommitStatuses"] = statuses
@@ -399,11 +398,14 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 	ctx.Data["OpenGraphNoDescription"] = true
 
 	if entry.IsLink() {
-		_, link, err := entry.FollowLinks()
+		target, err := entry.FollowLinks()
 		// Errors should be allowed, because this shouldn't
 		// block rendering invalid symlink files.
 		if err == nil {
-			ctx.Data["SymlinkURL"] = ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL() + "/" + util.PathEscapeSegments(link)
+			targetPath, err := target.Path()
+			if err == nil {
+				ctx.Data["SymlinkURL"] = ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL() + "/" + util.PathEscapeSegments(targetPath)
+			}
 		}
 	}
 
@@ -435,16 +437,20 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 		if err != nil {
 			log.Error("actions.GetContentFromEntry: %v", err)
 		}
-		_, workFlowErr := model.ReadWorkflow(bytes.NewReader(content))
+		_, workFlowErr := model.ReadWorkflow(bytes.NewReader(content), true)
 		if workFlowErr != nil {
 			ctx.Data["FileError"] = ctx.Locale.Tr("actions.runs.invalid_workflow_helper", workFlowErr.Error())
 		}
-	} else if slices.Contains([]string{"CODEOWNERS", "docs/CODEOWNERS", ".gitea/CODEOWNERS"}, ctx.Repo.TreePath) {
-		if data, err := blob.GetBlobContent(setting.UI.MaxDisplayFileSize); err == nil {
-			_, warnings := issue_model.GetCodeOwnersFromContent(ctx, data)
+	} else if slices.Contains([]string{"CODEOWNERS", "docs/CODEOWNERS", ".gitea/CODEOWNERS", ".forgejo/CODEOWNERS"}, ctx.Repo.TreePath) {
+		if rc, size, err := blob.NewTruncatedReader(setting.UI.MaxDisplayFileSize); err == nil {
+			_, warnings := issues_model.GetCodeOwnersFromReader(ctx, rc, size > setting.UI.MaxDisplayFileSize)
 			if len(warnings) > 0 {
 				ctx.Data["FileWarning"] = strings.Join(warnings, "\n")
 			}
+		}
+	} else if ctx.Repo.TreePath == ".gitmodules" {
+		if fInfo.fileSize > git.MaxGitmodulesFileSize {
+			ctx.Data["FileWarning"] = ctx.Locale.Tr("repo.view.gitmodules_too_large")
 		}
 	}
 
@@ -602,6 +608,7 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 			ctx.Data["EscapeStatus"] = status
 			ctx.Data["FileContent"] = fileContent
 			ctx.Data["LineEscapeStatus"] = statuses
+			ctx.Data["IsCitationFile"] = base.IsCitationFile(entry)
 		}
 		if !fInfo.isLFSFile {
 			if ctx.Repo.CanEnableEditor(ctx, ctx.Doer) {
@@ -625,6 +632,20 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 		ctx.Data["IsVideoFile"] = true
 	case fInfo.st.IsAudio():
 		ctx.Data["IsAudioFile"] = true
+	case fInfo.st.Is3DModel():
+		ctx.Data["Is3DModelFile"] = true
+		switch {
+		case fInfo.st.IsGLB():
+			ctx.Data["IsGLBFile"] = true
+		case fInfo.st.IsSTL():
+			ctx.Data["IsSTLFile"] = true
+		case fInfo.st.IsGLTF():
+			ctx.Data["IsGLTFFile"] = true
+		case fInfo.st.IsOBJ():
+			ctx.Data["IsOBJFile"] = true
+		case fInfo.st.Is3MF():
+			ctx.Data["Is3MFFile"] = true
+		}
 	case fInfo.st.IsImage() && (setting.UI.SVG.Enabled || !fInfo.st.IsSvgImage()):
 		ctx.Data["IsImageFile"] = true
 		ctx.Data["CanCopyContent"] = true
@@ -661,8 +682,8 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 		if err != nil {
 			log.Error("GitAttributes(%s, %s) failed: %v", ctx.Repo.CommitID, ctx.Repo.TreePath, err)
 		} else {
-			ctx.Data["IsVendored"] = attrs["linguist-vendored"].Bool().Value()
-			ctx.Data["IsGenerated"] = attrs["linguist-generated"].Bool().Value()
+			ctx.Data["IsVendored"] = attrs["linguist-vendored"].Bool().ValueOrZeroValue()
+			ctx.Data["IsGenerated"] = attrs["linguist-generated"].Bool().ValueOrZeroValue()
 		}
 	}
 
@@ -780,16 +801,9 @@ func checkCitationFile(ctx *context.Context, entry *git.TreeEntry) {
 		return
 	}
 	for _, entry := range allEntries {
-		if entry.Name() == "CITATION.cff" || entry.Name() == "CITATION.bib" {
-			// Read Citation file contents
-			if content, err := entry.Blob().GetBlobContent(setting.UI.MaxDisplayFileSize); err != nil {
-				log.Error("checkCitationFile: GetBlobContent: %v", err)
-			} else {
-				ctx.Data["CitationExist"] = true
-				ctx.Data["CitationFile"] = entry.Name()
-				ctx.PageData["citationFileContent"] = content
-				break
-			}
+		if base.IsCitationFile(entry) {
+			ctx.Data["CitationFile"] = entry.Name()
+			break
 		}
 	}
 }
@@ -1044,14 +1058,14 @@ func renderHomeCode(ctx *context.Context) {
 		return
 	}
 
-	if entry.IsSubModule() {
-		subModuleURL, err := ctx.Repo.Commit.GetSubModule(entry.Name())
+	if entry.IsSubmodule() {
+		submodule, err := ctx.Repo.Commit.GetSubmodule(ctx.Repo.TreePath, entry)
 		if err != nil {
-			HandleGitError(ctx, "Repo.Commit.GetSubModule", err)
+			HandleGitError(ctx, "Repo.Commit.GetSubmodule", err)
 			return
 		}
-		subModuleFile := git.NewSubModuleFile(ctx.Repo.Commit, subModuleURL, entry.ID.String())
-		ctx.Redirect(subModuleFile.RefURL(setting.AppURL, ctx.Repo.Repository.FullName(), setting.SSH.Domain))
+		ctx.Redirect(submodule.ResolveUpstreamURL(ctx.Repo.Repository.HTMLURL()))
+		return // technically ctx.Written() check below is fine, but this passes lint-single-response
 	} else if entry.IsDir() {
 		renderDirectory(ctx)
 	} else {
@@ -1154,6 +1168,20 @@ PostRecentBranchCheck:
 		}
 	}
 
+	if ctx.Repo.Repository.IsFork && ctx.Repo.IsViewBranch && len(ctx.Repo.TreePath) == 0 && ctx.Repo.CanWriteToBranch(ctx, ctx.Doer, ctx.Repo.BranchName) {
+		syncForkInfo, err := repo_service.GetSyncForkInfo(ctx, ctx.Repo.Repository, ctx.Repo.BranchName)
+		if err != nil {
+			ctx.ServerError("CanSync", err)
+			return
+		}
+
+		if syncForkInfo.Allowed {
+			ctx.Data["CanSyncFork"] = true
+			ctx.Data["ForkCommitsBehind"] = syncForkInfo.CommitsBehind
+			ctx.Data["BaseBranchLink"] = fmt.Sprintf("%s/src/branch/%s", ctx.Repo.Repository.BaseRepo.HTMLURL(), util.PathEscapeSegments(ctx.Repo.BranchName))
+		}
+	}
+
 	ctx.Data["Paths"] = paths
 
 	branchLink := ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL()
@@ -1195,7 +1223,7 @@ func checkOutdatedBranch(ctx *context.Context) {
 	}
 
 	if dbBranch.CommitID != commit.ID.String() {
-		ctx.Flash.Warning(ctx.Tr("repo.error.broken_git_hook", "https://docs.gitea.com/help/faq#push-hook--webhook--actions-arent-running"), true)
+		ctx.Flash.Warning(ctx.Tr("warning.repository.out_of_sync"), true)
 	}
 }
 
@@ -1225,6 +1253,7 @@ func RenderUserCards(ctx *context.Context, total int, getter func(opts db.ListOp
 func Watchers(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.watchers")
 	ctx.Data["CardsTitle"] = ctx.Tr("repo.watchers")
+	ctx.Data["CardsNoneMsg"] = ctx.Tr("watch.list.none")
 	ctx.Data["PageIsWatchers"] = true
 
 	RenderUserCards(ctx, ctx.Repo.Repository.NumWatches, func(opts db.ListOptions) ([]*user_model.User, error) {
@@ -1236,6 +1265,7 @@ func Watchers(ctx *context.Context) {
 func Stars(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.stargazers")
 	ctx.Data["CardsTitle"] = ctx.Tr("repo.stargazers")
+	ctx.Data["CardsNoneMsg"] = ctx.Tr("stars.list.none")
 	ctx.Data["PageIsStargazers"] = true
 	RenderUserCards(ctx, ctx.Repo.Repository.NumStars, func(opts db.ListOptions) ([]*user_model.User, error) {
 		return repo_model.GetStargazers(ctx, ctx.Repo.Repository, opts)

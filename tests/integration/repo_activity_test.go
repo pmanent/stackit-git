@@ -1,4 +1,5 @@
 // Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package integration
@@ -15,11 +16,10 @@ import (
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	unit_model "forgejo.org/models/unit"
-	"forgejo.org/models/unittest"
-	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/test"
 	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +27,7 @@ import (
 )
 
 func TestRepoActivity(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, giteaURL *url.URL) {
+	onApplicationRun(t, func(t *testing.T, giteaURL *url.URL) {
 		session := loginUser(t, "user1")
 
 		// Create PRs (1 merged & 2 proposed)
@@ -35,7 +35,7 @@ func TestRepoActivity(t *testing.T) {
 		testEditFile(t, session, "user1", "repo1", "master", "README.md", "Hello, World (Edited)\n")
 		resp := testPullCreate(t, session, "user1", "repo1", false, "master", "master", "This is a pull title")
 		elem := strings.Split(test.RedirectURL(resp), "/")
-		assert.EqualValues(t, "pulls", elem[3])
+		assert.Equal(t, "pulls", elem[3])
 		testPullMerge(t, session, elem[1], elem[2], elem[4], repo_model.MergeStyleMerge, false)
 
 		testEditFileToNewBranch(t, session, "user1", "repo1", "master", "feat/better_readme", "README.md", "Hello, World (Edited Again)\n")
@@ -75,6 +75,9 @@ func TestRepoActivity(t *testing.T) {
 		assert.Equal(t, []string{"Pre-release", "Release", "Tag"}, labels)
 		assert.Equal(t, []string{"", "v0.1 Pre-release", "v1 Release"}, titles)
 
+		// Active pull requests
+		assert.Contains(t, htmlDoc.Find(".grid .column:first-child").Text(), "3 active pull requests")
+
 		// Should be 1 merged pull request
 		list = htmlDoc.doc.Find("#merged-pull-requests").Next().Find("p.desc")
 		assert.Len(t, list.Nodes, 1)
@@ -84,6 +87,9 @@ func TestRepoActivity(t *testing.T) {
 		list = htmlDoc.doc.Find("#proposed-pull-requests").Next().Find("p.desc")
 		assert.Len(t, list.Nodes, 2)
 		assert.Equal(t, "Proposed", list.Find(".label").First().Text())
+
+		// Active issues
+		assert.Contains(t, htmlDoc.Find(".grid .column:last-child").Text(), "3 active issues")
 
 		// Should be 0 closed issues
 		list = htmlDoc.doc.Find("#closed-issues").Next().Find("p.desc")
@@ -98,7 +104,7 @@ func TestRepoActivity(t *testing.T) {
 
 func TestRepoActivityAllUnitsDisabled(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+	user := forgery.CreateUser(t, nil)
 	session := loginUser(t, user.Name)
 
 	unit_model.LoadUnitConfig()
@@ -128,7 +134,7 @@ func TestRepoActivityAllUnitsDisabled(t *testing.T) {
 
 func TestRepoActivityOnlyCodeUnitWithEmptyRepo(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+	user := forgery.CreateUser(t, nil)
 	session := loginUser(t, user.Name)
 
 	unit_model.LoadUnitConfig()
@@ -161,14 +167,17 @@ func TestRepoActivityOnlyCodeUnitWithEmptyRepo(t *testing.T) {
 
 func TestRepoActivityOnlyCodeUnitWithNonEmptyRepo(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+	user := forgery.CreateUser(t, nil)
 	session := loginUser(t, user.Name)
 
 	unit_model.LoadUnitConfig()
 
 	// Create a repo, with only code unit enabled.
-	repo, _, f := tests.CreateDeclarativeRepo(t, user, "", []unit_model.Type{unit_model.TypeCode}, nil, nil)
-	defer f()
+	repo := forgery.CreateRepository(t, user, &forgery.CreateRepositoryOptions{
+		Files: forgery.FilesInit{},
+	})
+	forgery.DisableRepoUnits(t, repo, unit_model.AllRepoUnitTypes...)
+	forgery.EnableRepoUnits(t, repo, unit_model.TypeCode)
 
 	req := NewRequest(t, "GET", fmt.Sprintf("%s/activity", repo.Link()))
 	session.MakeRequest(t, req, http.StatusOK)
@@ -184,7 +193,7 @@ func TestRepoActivityOnlyCodeUnitWithNonEmptyRepo(t *testing.T) {
 
 func TestRepoActivityOnlyIssuesUnit(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})
+	user := forgery.CreateUser(t, nil)
 	session := loginUser(t, user.Name)
 
 	unit_model.LoadUnitConfig()

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,14 +27,16 @@ import (
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
 	"forgejo.org/modules/translation"
-	gitea_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	"forgejo.org/services/mailer"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/html"
 )
 
 func TestViewUser(t *testing.T) {
@@ -41,6 +44,14 @@ func TestViewUser(t *testing.T) {
 
 	req := NewRequest(t, "GET", "/user2")
 	MakeRequest(t, req, http.StatusOK)
+
+	t.Run("REQUIRE_SIGNIN_VIEW", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		defer test.MockVariableValue(&setting.Service.RequireSignInView, true)()
+		req := NewRequest(t, "GET", "/user2")
+		resp := MakeRequest(t, req, http.StatusSeeOther)
+		assert.Equal(t, "/user/login", resp.Header().Get("Location"))
+	})
 }
 
 func TestRenameUsername(t *testing.T) {
@@ -48,7 +59,6 @@ func TestRenameUsername(t *testing.T) {
 
 	session := loginUser(t, "user2")
 	req := NewRequestWithValues(t, "POST", "/user/settings", map[string]string{
-		"_csrf":    GetCSRF(t, session, "/user/settings"),
 		"name":     "newUsername",
 		"email":    "user2@example.com",
 		"language": "en-US",
@@ -92,7 +102,6 @@ func TestRenameInvalidUsername(t *testing.T) {
 		t.Logf("Testing username %s", invalidUsername)
 
 		req := NewRequestWithValues(t, "POST", "/user/settings", map[string]string{
-			"_csrf": GetCSRF(t, session, "/user/settings"),
 			"name":  invalidUsername,
 			"email": "user2@example.com",
 		})
@@ -119,7 +128,6 @@ func TestRenameReservedUsername(t *testing.T) {
 		"avatar",
 		"avatars",
 		"captcha",
-		"devtest",
 		"explore",
 		"favicon.ico",
 		"ghost",
@@ -144,7 +152,6 @@ func TestRenameReservedUsername(t *testing.T) {
 	for _, reservedUsername := range reservedUsernames {
 		t.Logf("Testing username %s", reservedUsername)
 		req := NewRequestWithValues(t, "POST", "/user/settings", map[string]string{
-			"_csrf":    GetCSRF(t, session, "/user/settings"),
 			"name":     reservedUsername,
 			"email":    "user2@example.com",
 			"language": "en-US",
@@ -260,9 +267,8 @@ func TestAccessTokenRegenerate(t *testing.T) {
 
 	assert.Equal(t, "TestAccessToken", oldTokenName)
 
-	req := NewRequestWithValues(t, "POST", "/user/settings/applications/regenerate", map[string]string{
-		"_csrf": GetCSRF(t, session, "/user/settings/applications"),
-		"id":    strconv.Itoa(oldTokenID),
+	req := NewRequestWithValues(t, "POST", "/user/settings/applications/tokens/regenerate", map[string]string{
+		"id": strconv.Itoa(oldTokenID),
 	})
 	session.MakeRequest(t, req, http.StatusOK)
 
@@ -273,9 +279,8 @@ func TestAccessTokenRegenerate(t *testing.T) {
 	assert.Equal(t, oldTokenID, newTokenID)
 	assert.Equal(t, "TestAccessToken", newTokenName)
 
-	req = NewRequestWithValues(t, "POST", "/user/settings/applications/delete", map[string]string{
-		"_csrf": GetCSRF(t, session, "/user/settings/applications"),
-		"id":    strconv.Itoa(newTokenID),
+	req = NewRequestWithValues(t, "POST", "/user/settings/applications/tokens/delete", map[string]string{
+		"id": strconv.Itoa(newTokenID),
 	})
 	session.MakeRequest(t, req, http.StatusOK)
 
@@ -285,6 +290,38 @@ func TestAccessTokenRegenerate(t *testing.T) {
 	assert.Equal(t, latestTokenID, prevLatestTokenID)
 	assert.Equal(t, latestTokenName, prevLatestTokenName)
 	assert.NotEqual(t, "TestAccessToken", latestTokenName)
+}
+
+func TestAccessTokenResourceRepos(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	locale := translation.NewLocale("en-US")
+	repoAccess := locale.TrString("settings.specific_repo_access") + ":"
+
+	session := loginUser(t, "user2")
+
+	// Before creating a repo-specific access token, we shouldn't have the "Repository access:" list in the personal
+	// access token page:
+	req := NewRequest(t, "GET", "/user/settings/applications")
+	resp := session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc := NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByText(".user-setting-content p", repoAccess), false)
+
+	// Then we create a repo-specific access token.  We give it access to two repos, user2/repo2, but also user30/empty,
+	// a private repo owned by someone else...  We'll pretend user2 used to be a collaborator on this repo and
+	// previously had access to view it, but doesn't anymore.
+	createFineGrainedRepoAccessToken(t, "user2",
+		[]auth_model.AccessTokenScope{auth_model.AccessTokenScopeReadUser},
+		[]int64{2, 52},
+	)
+
+	// Now we have "Repository access:"...
+	req = NewRequest(t, "GET", "/user/settings/applications")
+	resp = session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc = NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByText(".user-setting-content p", repoAccess), true)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByText(".user-setting-content a", "user2/repo2"), true)   // link to repo
+	htmlDoc.AssertSelection(t, htmlDoc.FindByText(".user-setting-content a", "user30/empty"), false) // missing - user2 has no visibility
 }
 
 func findLatestTokenID(t *testing.T, session *TestSession) (string, int) {
@@ -318,12 +355,12 @@ func TestGetUserRss(t *testing.T) {
 		user34 := "the_34-user.with.all.allowedChars"
 		req := NewRequestf(t, "GET", "/%s.rss", user34)
 		resp := MakeRequest(t, req, http.StatusOK)
-		if assert.EqualValues(t, "application/rss+xml;charset=utf-8", resp.Header().Get("Content-Type")) {
+		if assert.Equal(t, "application/rss+xml;charset=utf-8", resp.Header().Get("Content-Type")) {
 			rssDoc := NewHTMLParser(t, resp.Body).Find("channel")
 			title, _ := rssDoc.ChildrenFiltered("title").Html()
-			assert.EqualValues(t, "Feed of &#34;the_1-user.with.all.allowedChars&#34;", title)
+			assert.Equal(t, "Feed of &#34;the_1-user.with.all.allowedChars&#34;", title)
 			description, _ := rssDoc.ChildrenFiltered("description").Html()
-			assert.EqualValues(t, "&lt;p dir=&#34;auto&#34;&gt;some &lt;a href=&#34;https://commonmark.org/&#34; rel=&#34;nofollow&#34;&gt;commonmark&lt;/a&gt;!&lt;/p&gt;\n", description)
+			assert.Equal(t, "&lt;p dir=&#34;auto&#34;&gt;some &lt;a href=&#34;https://commonmark.org/&#34; rel=&#34;nofollow&#34;&gt;commonmark&lt;/a&gt;!&lt;/p&gt;\n", description)
 		}
 	})
 	t.Run("Non-existent user", func(t *testing.T) {
@@ -347,22 +384,21 @@ func TestListStopWatches(t *testing.T) {
 	stopwatch := unittest.AssertExistsAndLoadBean(t, &issues_model.Stopwatch{UserID: owner.ID})
 	issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: stopwatch.IssueID})
 	if assert.Len(t, apiWatches, 1) {
-		assert.EqualValues(t, stopwatch.CreatedUnix.AsTime().Unix(), apiWatches[0].Created.Unix())
-		assert.EqualValues(t, issue.Index, apiWatches[0].IssueIndex)
-		assert.EqualValues(t, issue.Title, apiWatches[0].IssueTitle)
-		assert.EqualValues(t, repo.Name, apiWatches[0].RepoName)
-		assert.EqualValues(t, repo.OwnerName, apiWatches[0].RepoOwnerName)
+		assert.Equal(t, stopwatch.CreatedUnix.AsTime().Unix(), apiWatches[0].Created.Unix())
+		assert.Equal(t, issue.Index, apiWatches[0].IssueIndex)
+		assert.Equal(t, issue.Title, apiWatches[0].IssueTitle)
+		assert.Equal(t, repo.Name, apiWatches[0].RepoName)
+		assert.Equal(t, repo.OwnerName, apiWatches[0].RepoOwnerName)
 		assert.Positive(t, apiWatches[0].Seconds)
 	}
 }
 
 func TestUserLocationMapLink(t *testing.T) {
-	setting.Service.UserLocationMapURL = "https://example/foo/"
 	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Service.UserLocationMapURL, "https://example/foo/")()
 
 	session := loginUser(t, "user2")
 	req := NewRequestWithValues(t, "POST", "/user/settings", map[string]string{
-		"_csrf":    GetCSRF(t, session, "/user/settings"),
 		"name":     "user2",
 		"email":    "user@example.com",
 		"language": "en-US",
@@ -384,17 +420,16 @@ func TestUserHints(t *testing.T) {
 	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
 
 	// Create a known-good repo, with only one unit enabled
-	repo, _, f := tests.CreateDeclarativeRepo(t, user, "", []unit_model.Type{
-		unit_model.TypeCode,
-	}, []unit_model.Type{
+	repo := forgery.CreateRepository(t, user, nil)
+	forgery.EnableRepoUnits(t, repo, unit_model.TypeCode)
+	forgery.DisableRepoUnits(t, repo,
 		unit_model.TypePullRequests,
 		unit_model.TypeProjects,
 		unit_model.TypePackages,
 		unit_model.TypeActions,
 		unit_model.TypeIssues,
 		unit_model.TypeWiki,
-	}, nil)
-	defer f()
+	)
 
 	ensureRepoUnitHints := func(t *testing.T, hints bool) {
 		t.Helper()
@@ -450,7 +485,7 @@ func TestUserHints(t *testing.T) {
 			assert.Equal(t, enabled, hintChecked)
 
 			link, _ := htmlDoc.Find("form[action='/user/settings/appearance/language'] a").Attr("href")
-			assert.EqualValues(t, "https://forgejo.org/docs/next/contributor/localization/", link)
+			assert.Equal(t, "https://forgejo.org/docs/next/contributor/localization/", link)
 		}
 
 		t.Run("view", func(t *testing.T) {
@@ -463,7 +498,6 @@ func TestUserHints(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 
 			req := NewRequestWithValues(t, "POST", "/user/settings/appearance/hints", map[string]string{
-				"_csrf":                  GetCSRF(t, session, "/user/settings/appearance"),
 				"enable_repo_unit_hints": "true",
 			})
 			session.MakeRequest(t, req, http.StatusSeeOther)
@@ -476,11 +510,19 @@ func TestUserHints(t *testing.T) {
 		assertAddMore := func(t *testing.T, present bool) {
 			t.Helper()
 
+			// check if the tab is present
 			req := NewRequest(t, "GET", repo.Link())
 			resp := session.MakeRequest(t, req, http.StatusOK)
 			htmlDoc := NewHTMLParser(t, resp.Body)
 
 			htmlDoc.AssertElement(t, fmt.Sprintf("a[href='%s/settings/units']", repo.Link()), present)
+
+			// check if the user settings hint is present
+			req = NewRequest(t, "GET", repo.Link()+"/settings/units")
+			resp = session.MakeRequest(t, req, http.StatusOK)
+			htmlDoc = NewHTMLParser(t, resp.Body)
+
+			htmlDoc.AssertElement(t, ".user-main-content a[href='/user/settings/appearance#hints']", present)
 		}
 
 		t.Run("hints enabled", func(t *testing.T) {
@@ -650,7 +692,6 @@ func TestUserPronouns(t *testing.T) {
 			// Check that updating the field works
 			newPronouns := "she/her"
 			req = NewRequestWithValues(t, "POST", "/user/settings", map[string]string{
-				"_csrf":    GetCSRF(t, firstUserSession, "/user/settings"),
 				"pronouns": newPronouns,
 			})
 			firstUserSession.MakeRequest(t, req, http.StatusSeeOther)
@@ -677,7 +718,6 @@ func TestUserPronouns(t *testing.T) {
 			newPronouns := "it/its"
 			editURI := fmt.Sprintf("/admin/users/%d/edit", user2.ID)
 			req = NewRequestWithValues(t, "POST", editURI, map[string]string{
-				"_csrf":      GetCSRF(t, adminSession, editURI),
 				"login_type": "0-0",
 				"login_name": user2.LoginName,
 				"email":      user2.Email,
@@ -706,7 +746,66 @@ func TestUserPronouns(t *testing.T) {
 		htmlDoc := NewHTMLParser(t, resp.Body)
 
 		userName := strings.TrimSpace(htmlDoc.Find(".profile-avatar-name .username").Text())
-		assert.EqualValues(t, "user2", userName)
+		assert.Equal(t, "user2", userName)
+	})
+}
+
+func TestUserEditWebsite(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user := forgery.CreateUser(t, nil)
+	urlStr := "/api/v1/user/settings"
+	session := loginUser(t, user.Name)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteUser)
+
+	t.Run("an HTTPS website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should work
+		website := "https://codeberg.org"
+		req := NewRequestWithJSON(t, "PATCH", urlStr, &api.UserSettingsOptions{
+			Website: &website,
+		}).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+
+		var apiUser api.UserSettings
+		DecodeJSON(t, resp, &apiUser)
+
+		assert.Equal(t, website, apiUser.Website)
+	})
+
+	t.Run("an H3 website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should not work
+		website := "h3://codeberg.org"
+		req := NewRequestWithJSON(t, "PATCH", urlStr, &api.UserSettingsOptions{
+			Website: &website,
+		}).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusUnprocessableEntity)
+
+		var apiErr api.APIError
+		DecodeJSON(t, resp, &apiErr)
+
+		assert.Equal(t, "[Website]: Url", apiErr.Message)
+	})
+
+	t.Run("an H3 website under custom schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		defer test.MockProtect(&setting.Service.ValidSiteURLSchemes)()
+		setting.Service.ValidSiteURLSchemes = append(setting.Service.ValidSiteURLSchemes, "h3")
+
+		// changing website should work
+		website := "h3://codeberg.org"
+		req := NewRequestWithJSON(t, "PATCH", urlStr, &api.UserSettingsOptions{
+			Website: &website,
+		}).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+
+		var apiUser api.UserSettings
+		DecodeJSON(t, resp, &apiUser)
+
+		assert.Equal(t, website, apiUser.Website)
 	})
 }
 
@@ -729,9 +828,7 @@ func TestUserTOTPMail(t *testing.T) {
 		})()
 
 		unittest.AssertSuccessfulInsert(t, &auth_model.TwoFactor{UID: user.ID})
-		req := NewRequestWithValues(t, "POST", "/user/settings/security/two_factor/disable", map[string]string{
-			"_csrf": GetCSRF(t, session, "/user/settings/security"),
-		})
+		req := NewRequest(t, "POST", "/user/settings/security/two_factor/disable")
 		session.MakeRequest(t, req, http.StatusSeeOther)
 
 		assert.True(t, called)
@@ -752,9 +849,7 @@ func TestUserTOTPMail(t *testing.T) {
 
 		unittest.AssertSuccessfulInsert(t, &auth_model.TwoFactor{UID: user.ID})
 		unittest.AssertSuccessfulInsert(t, &auth_model.WebAuthnCredential{UserID: user.ID})
-		req := NewRequestWithValues(t, "POST", "/user/settings/security/two_factor/disable", map[string]string{
-			"_csrf": GetCSRF(t, session, "/user/settings/security"),
-		})
+		req := NewRequest(t, "POST", "/user/settings/security/two_factor/disable")
 		session.MakeRequest(t, req, http.StatusSeeOther)
 
 		assert.True(t, called)
@@ -784,8 +879,7 @@ func TestUserSecurityKeyMail(t *testing.T) {
 		unittest.AssertSuccessfulInsert(t, &auth_model.WebAuthnCredential{UserID: user.ID, Name: "Little Bobby Tables's primary key"})
 		id := unittest.AssertExistsAndLoadBean(t, &auth_model.WebAuthnCredential{UserID: user.ID}).ID
 		req := NewRequestWithValues(t, "POST", "/user/settings/security/webauthn/delete", map[string]string{
-			"_csrf": GetCSRF(t, session, "/user/settings/security"),
-			"id":    strconv.FormatInt(id, 10),
+			"id": strconv.FormatInt(id, 10),
 		})
 		session.MakeRequest(t, req, http.StatusOK)
 
@@ -810,8 +904,7 @@ func TestUserSecurityKeyMail(t *testing.T) {
 		id := unittest.AssertExistsAndLoadBean(t, &auth_model.WebAuthnCredential{UserID: user.ID}).ID
 		unittest.AssertSuccessfulInsert(t, &auth_model.TwoFactor{UID: user.ID})
 		req := NewRequestWithValues(t, "POST", "/user/settings/security/webauthn/delete", map[string]string{
-			"_csrf": GetCSRF(t, session, "/user/settings/security"),
-			"id":    strconv.FormatInt(id, 10),
+			"id": strconv.FormatInt(id, 10),
 		})
 		session.MakeRequest(t, req, http.StatusOK)
 
@@ -836,8 +929,7 @@ func TestUserSecurityKeyMail(t *testing.T) {
 		id := unittest.AssertExistsAndLoadBean(t, &auth_model.WebAuthnCredential{UserID: user.ID}).ID
 		unittest.AssertSuccessfulInsert(t, &auth_model.WebAuthnCredential{UserID: user.ID, Name: "Little Bobby Tables's evil key"})
 		req := NewRequestWithValues(t, "POST", "/user/settings/security/webauthn/delete", map[string]string{
-			"_csrf": GetCSRF(t, session, "/user/settings/security"),
-			"id":    strconv.FormatInt(id, 10),
+			"id": strconv.FormatInt(id, 10),
 		})
 		session.MakeRequest(t, req, http.StatusOK)
 
@@ -853,32 +945,6 @@ func TestUserTOTPEnrolled(t *testing.T) {
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	session := loginUser(t, user.Name)
 
-	enrollTOTP := func(t *testing.T) {
-		t.Helper()
-
-		req := NewRequest(t, "GET", "/user/settings/security/two_factor/enroll")
-		resp := session.MakeRequest(t, req, http.StatusOK)
-
-		htmlDoc := NewHTMLParser(t, resp.Body)
-		totpSecretKey, has := htmlDoc.Find(".twofa img[src^='data:image/png;base64']").Attr("alt")
-		assert.True(t, has)
-
-		currentTOTP, err := totp.GenerateCode(totpSecretKey, time.Now())
-		require.NoError(t, err)
-
-		req = NewRequestWithValues(t, "POST", "/user/settings/security/two_factor/enroll", map[string]string{
-			"_csrf":    htmlDoc.GetCSRF(),
-			"passcode": currentTOTP,
-		})
-		session.MakeRequest(t, req, http.StatusSeeOther)
-
-		flashCookie := session.GetCookie(gitea_context.CookieNameFlash)
-		assert.NotNil(t, flashCookie)
-		assert.Contains(t, flashCookie.Value, "success%3DYour%2Baccount%2Bhas%2Bbeen%2Bsuccessfully%2Benrolled.")
-
-		unittest.AssertSuccessfulDelete(t, &auth_model.TwoFactor{UID: user.ID})
-	}
-
 	t.Run("No WebAuthn enabled", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 
@@ -891,7 +957,8 @@ func TestUserTOTPEnrolled(t *testing.T) {
 			called = true
 		})()
 
-		enrollTOTP(t)
+		session.EnrollTOTP(t)
+		unittest.AssertSuccessfulDelete(t, &auth_model.TwoFactor{UID: user.ID})
 
 		assert.True(t, called)
 	})
@@ -909,9 +976,116 @@ func TestUserTOTPEnrolled(t *testing.T) {
 		})()
 
 		unittest.AssertSuccessfulInsert(t, &auth_model.WebAuthnCredential{UserID: user.ID, Name: "Cueball's primary key"})
-		enrollTOTP(t)
+		session.EnrollTOTP(t)
+		unittest.AssertSuccessfulDelete(t, &auth_model.TwoFactor{UID: user.ID})
 
 		assert.True(t, called)
+	})
+}
+
+func TestUserTOTPReenroll(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	session := loginUser(t, user.Name)
+
+	resp := session.MakeRequest(t, NewRequest(t, "GET", "/user/settings/security/two_factor/reenroll"), http.StatusSeeOther)
+	assert.Equal(t, "/user/settings/security", resp.Header().Get("Location"))
+
+	session.EnrollTOTP(t)
+
+	resp = session.MakeRequest(t, NewRequest(t, "GET", "/user/settings/security/two_factor/reenroll"), http.StatusOK)
+	htmlDoc := NewHTMLParser(t, resp.Body)
+
+	totpSecretKey, has := htmlDoc.Find(".twofa img[src^='data:image/png;base64']").Attr("alt")
+	assert.True(t, has)
+
+	currentTOTP, err := totp.GenerateCode(totpSecretKey, time.Now())
+	require.NoError(t, err)
+
+	req := NewRequestWithValues(t, "POST", "/user/settings/security/two_factor/reenroll", map[string]string{
+		"passcode": currentTOTP,
+	})
+	session.MakeRequest(t, req, http.StatusSeeOther)
+
+	flashCookie := session.GetCookie(app_context.CookieNameFlash)
+	assert.NotNil(t, flashCookie)
+	assert.Contains(t, flashCookie.Value, "success%3DYour%2Baccount%2Bhas%2Bbeen%2Bsuccessfully%2Benrolled.")
+}
+
+func TestUserTOTPDisable(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	runTest := func(t *testing.T, user *user_model.User, useTOTP, disableAllowed bool, status int, flashMessage string) {
+		t.Helper()
+		defer unittest.AssertSuccessfulDelete(t, &auth_model.TwoFactor{UID: user.ID})
+
+		session := loginUserMaybeTOTP(t, user, useTOTP)
+
+		resp := session.MakeRequest(t, NewRequest(t, "GET", "user/settings/security"), http.StatusOK)
+		htmlDoc := NewHTMLParser(t, resp.Body)
+		htmlDoc.AssertElement(t, "#disable-form", disableAllowed)
+
+		req := NewRequest(t, "POST", "user/settings/security/two_factor/disable")
+		if status == http.StatusSeeOther {
+			resp := session.MakeRequest(t, req, http.StatusSeeOther)
+			assert.Equal(t, "/user/settings/security", resp.Header().Get("Location"))
+		} else {
+			session.MakeRequest(t, req, status)
+		}
+		if flashMessage != "" {
+			flashCookie := session.GetCookie(app_context.CookieNameFlash)
+			assert.NotNil(t, flashCookie)
+			if disableAllowed {
+				assert.Contains(t, flashCookie.Value, fmt.Sprintf("success%%3D%s", flashMessage))
+			} else {
+				assert.Contains(t, flashCookie.Value, fmt.Sprintf("error%%3D%s", flashMessage))
+			}
+		}
+	}
+
+	adminUser := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	normalUser := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	restrictedUser := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 29})
+
+	const twofaNotEnrolled = "Your%2Baccount%2Bis%2Bnot%2Bcurrently%2Benrolled%2Bin%2Btwo-factor%2Bauthentication."
+	const twofaDisabled = "Two-factor%2Bauthentication%2Bhas%2Bbeen%2Bdisabled."
+
+	t.Run("NoneTwoFactorRequirement", func(t *testing.T) {
+		t.Run("no 2fa", func(t *testing.T) {
+			runTest(t, adminUser, false, false, http.StatusSeeOther, twofaNotEnrolled)
+			runTest(t, normalUser, false, false, http.StatusSeeOther, twofaNotEnrolled)
+			runTest(t, restrictedUser, false, false, http.StatusSeeOther, twofaNotEnrolled)
+		})
+
+		t.Run("enabled 2fa", func(t *testing.T) {
+			runTest(t, adminUser, true, true, http.StatusSeeOther, twofaDisabled)
+			runTest(t, normalUser, true, true, http.StatusSeeOther, twofaDisabled)
+			runTest(t, restrictedUser, true, true, http.StatusSeeOther, twofaDisabled)
+		})
+	})
+
+	t.Run("AllTwoFactorRequirement", func(t *testing.T) {
+		defer test.MockVariableValue(&setting.GlobalTwoFactorRequirement, setting.AllTwoFactorRequirement)()
+
+		runTest(t, adminUser, true, false, http.StatusNotFound, "")
+		runTest(t, normalUser, true, false, http.StatusNotFound, "")
+		runTest(t, restrictedUser, true, false, http.StatusNotFound, "")
+	})
+
+	t.Run("AdminTwoFactorRequirement", func(t *testing.T) {
+		defer test.MockVariableValue(&setting.GlobalTwoFactorRequirement, setting.AdminTwoFactorRequirement)()
+
+		t.Run("no 2fa", func(t *testing.T) {
+			runTest(t, normalUser, false, false, http.StatusSeeOther, twofaNotEnrolled)
+			runTest(t, restrictedUser, false, false, http.StatusSeeOther, twofaNotEnrolled)
+		})
+
+		t.Run("enabled 2fa", func(t *testing.T) {
+			runTest(t, adminUser, true, false, http.StatusNotFound, "")
+			runTest(t, normalUser, true, true, http.StatusSeeOther, twofaDisabled)
+			runTest(t, restrictedUser, true, true, http.StatusSeeOther, twofaDisabled)
+		})
 	})
 }
 
@@ -933,8 +1107,8 @@ func TestUserRepos(t *testing.T) {
 
 		sel := htmlDoc.doc.Find("a.name")
 		assert.Len(t, repos, len(sel.Nodes))
-		for i := 0; i < len(repos); i++ {
-			assert.EqualValues(t, repos[i], strings.TrimSpace(sel.Eq(i).Text()))
+		for i := range repos {
+			assert.Equal(t, repos[i], strings.TrimSpace(sel.Eq(i).Text()))
 		}
 	}
 }
@@ -961,7 +1135,6 @@ func TestUserActivate(t *testing.T) {
 
 	session := emptyTestSession(t)
 	req := NewRequestWithValues(t, "POST", "/user/sign_up", map[string]string{
-		"_csrf":     GetCSRF(t, session, "/user/sign_up"),
 		"user_name": "doesnotexist",
 		"email":     "doesnotexist@example.com",
 		"password":  "examplePassword!1",
@@ -982,7 +1155,7 @@ func TestUserActivate(t *testing.T) {
 	authToken, err := auth_model.FindAuthToken(db.DefaultContext, lookupKey, auth_model.UserActivation)
 	require.NoError(t, err)
 	assert.False(t, authToken.IsExpired())
-	assert.EqualValues(t, authToken.HashedValidator, auth_model.HashValidator(rawValidator))
+	assert.Equal(t, authToken.HashedValidator, auth_model.HashValidator(rawValidator))
 
 	t.Run("No password", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
@@ -1007,22 +1180,21 @@ func TestUserActivate(t *testing.T) {
 	})
 }
 
-func TestUserPasswordReset(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
-
-	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+func parseMailHelper(t *testing.T, expectedTo, expectedSubject string) (cleanup func(), codeRes *string, calledRes *bool) {
+	t.Helper()
 
 	called := false
 	code := ""
-	defer test.MockVariableValue(&mailer.SendAsync, func(msgs ...*mailer.Message) {
+
+	cleanup = test.MockVariableValue(&mailer.SendAsync, func(msgs ...*mailer.Message) {
 		if called {
 			return
 		}
 		called = true
 
 		assert.Len(t, msgs, 1)
-		assert.Equal(t, user2.EmailTo(), msgs[0].To)
-		assert.EqualValues(t, translation.NewLocale("en-US").Tr("mail.reset_password"), msgs[0].Subject)
+		assert.Equal(t, expectedTo, msgs[0].To)
+		assert.Equal(t, expectedSubject, msgs[0].Subject)
 
 		messageDoc := NewHTMLParser(t, bytes.NewBuffer([]byte(msgs[0].Body)))
 		link, ok := messageDoc.Find("a").Attr("href")
@@ -1030,17 +1202,27 @@ func TestUserPasswordReset(t *testing.T) {
 		u, err := url.Parse(link)
 		require.NoError(t, err)
 		code = u.Query()["code"][0]
-	})()
+	})
+
+	return cleanup, &code, &called
+}
+
+func TestUserPasswordReset(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+
+	cleanup, code, called := parseMailHelper(t, user2.EmailTo(), string(translation.NewLocale("en-US").Tr("mail.reset_password")))
+	defer cleanup()
 
 	session := emptyTestSession(t)
 	req := NewRequestWithValues(t, "POST", "/user/forgot_password", map[string]string{
-		"_csrf": GetCSRF(t, session, "/user/forgot_password"),
 		"email": user2.Email,
 	})
 	session.MakeRequest(t, req, http.StatusOK)
-	assert.True(t, called)
+	assert.True(t, *called)
 
-	queryCode, err := url.QueryUnescape(code)
+	queryCode, err := url.QueryUnescape(*code)
 	require.NoError(t, err)
 
 	lookupKey, validator, ok := strings.Cut(queryCode, ":")
@@ -1052,17 +1234,77 @@ func TestUserPasswordReset(t *testing.T) {
 	authToken, err := auth_model.FindAuthToken(db.DefaultContext, lookupKey, auth_model.PasswordReset)
 	require.NoError(t, err)
 	assert.False(t, authToken.IsExpired())
-	assert.EqualValues(t, authToken.HashedValidator, auth_model.HashValidator(rawValidator))
+	assert.Equal(t, authToken.HashedValidator, auth_model.HashValidator(rawValidator))
 
 	req = NewRequestWithValues(t, "POST", "/user/recover_account", map[string]string{
-		"_csrf":    GetCSRF(t, session, "/user/recover_account"),
-		"code":     code,
+		"code":     *code,
 		"password": "new_password",
 	})
 	session.MakeRequest(t, req, http.StatusSeeOther)
 
 	unittest.AssertNotExistsBean(t, &auth_model.AuthorizationToken{ID: authToken.ID})
-	assert.True(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}).ValidatePassword("new_password"))
+	assert.True(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}).ValidatePassword(t.Context(), "new_password"))
+}
+
+func TestUserPasswordResetOAuth2(t *testing.T) {
+	defer unittest.OverrideFixtures("tests/integration/fixtures/TestUserPasswordResetOAuth2")()
+	defer tests.PrepareTestEnv(t)()
+
+	t.Run("OAuth2 user without password", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1001})
+		assert.True(t, user.IsOAuth2())
+		assert.False(t, user.IsPasswordSet())
+		assert.False(t, user.IsLocal())
+
+		session := emptyTestSession(t)
+		req := NewRequestWithValues(t, "POST", "/user/forgot_password", map[string]string{
+			"email": user.Email,
+		})
+		resp := session.MakeRequest(t, req, http.StatusOK)
+
+		htmlDoc := NewHTMLParser(t, resp.Body)
+		assert.Contains(t,
+			htmlDoc.doc.Find(".ui.negative.message").Text(),
+			translation.NewLocale("en-US").TrString("auth.non_local_account"),
+		)
+	})
+
+	t.Run("OAuth2 user with password", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1000})
+		assert.True(t, user.IsOAuth2())
+		assert.True(t, user.IsPasswordSet())
+		assert.False(t, user.IsLocal())
+
+		cleanup, code, called := parseMailHelper(t, user.EmailTo(), string(translation.NewLocale("en-US").Tr("mail.reset_password")))
+		defer cleanup()
+
+		session := emptyTestSession(t)
+		req := NewRequestWithValues(t, "POST", "/user/forgot_password", map[string]string{
+			"email": user.Email,
+		})
+		session.MakeRequest(t, req, http.StatusOK)
+		assert.True(t, *called)
+
+		user.Passwd = ""
+		err := user_model.UpdateUserCols(db.DefaultContext, user, "passwd")
+		require.NoError(t, err)
+
+		req = NewRequestWithValues(t, "POST", "/user/recover_account", map[string]string{
+			"code":     *code,
+			"password": "new_password",
+		})
+		resp := session.MakeRequest(t, req, http.StatusOK)
+
+		htmlDoc := NewHTMLParser(t, resp.Body)
+		assert.Contains(t,
+			htmlDoc.doc.Find(".ui.negative.message").Text(),
+			translation.NewLocale("en-US").TrString("auth.non_local_account"),
+		)
+	})
 }
 
 func TestActivateEmailAddress(t *testing.T) {
@@ -1071,35 +1313,17 @@ func TestActivateEmailAddress(t *testing.T) {
 
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
-	called := false
-	code := ""
-	defer test.MockVariableValue(&mailer.SendAsync, func(msgs ...*mailer.Message) {
-		if called {
-			return
-		}
-		called = true
-
-		assert.Len(t, msgs, 1)
-		assert.Equal(t, "newemail@example.org", msgs[0].To)
-		assert.EqualValues(t, translation.NewLocale("en-US").Tr("mail.activate_email"), msgs[0].Subject)
-
-		messageDoc := NewHTMLParser(t, bytes.NewBuffer([]byte(msgs[0].Body)))
-		link, ok := messageDoc.Find("a").Attr("href")
-		assert.True(t, ok)
-		u, err := url.Parse(link)
-		require.NoError(t, err)
-		code = u.Query()["code"][0]
-	})()
+	cleanup, code, called := parseMailHelper(t, "newemail@example.org", string(translation.NewLocale("en-US").Tr("mail.activate_email")))
+	defer cleanup()
 
 	session := loginUser(t, user2.Name)
 	req := NewRequestWithValues(t, "POST", "/user/settings/account/email", map[string]string{
-		"_csrf": GetCSRF(t, session, "/user/settings"),
 		"email": "newemail@example.org",
 	})
 	session.MakeRequest(t, req, http.StatusSeeOther)
-	assert.True(t, called)
+	assert.True(t, *called)
 
-	queryCode, err := url.QueryUnescape(code)
+	queryCode, err := url.QueryUnescape(*code)
 	require.NoError(t, err)
 
 	lookupKey, validator, ok := strings.Cut(queryCode, ":")
@@ -1111,14 +1335,129 @@ func TestActivateEmailAddress(t *testing.T) {
 	authToken, err := auth_model.FindAuthToken(db.DefaultContext, lookupKey, auth_model.EmailActivation("newemail@example.org"))
 	require.NoError(t, err)
 	assert.False(t, authToken.IsExpired())
-	assert.EqualValues(t, authToken.HashedValidator, auth_model.HashValidator(rawValidator))
+	assert.Equal(t, authToken.HashedValidator, auth_model.HashValidator(rawValidator))
 
 	req = NewRequestWithValues(t, "POST", "/user/activate_email", map[string]string{
-		"code":  code,
+		"code":  *code,
 		"email": "newemail@example.org",
 	})
 	session.MakeRequest(t, req, http.StatusSeeOther)
 
 	unittest.AssertNotExistsBean(t, &auth_model.AuthorizationToken{ID: authToken.ID})
 	unittest.AssertExistsAndLoadBean(t, &user_model.EmailAddress{UID: user2.ID, IsActivated: true, Email: "newemail@example.org"})
+}
+
+func TestExportUserSSHKeys(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	t.Run("No exported keys", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		resp := MakeRequest(t, NewRequest(t, "GET", "/user1.keys"), http.StatusOK)
+
+		assert.Equal(t, "# Note: This user hasn't uploaded any SSH keys.\n", resp.Body.String())
+	})
+
+	t.Run("Exported key", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		resp := MakeRequest(t, NewRequest(t, "GET", "/user2.keys"), http.StatusOK)
+
+		assert.Equal(t, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDWVj0fQ5N8wNc0LVNA41wDLYJ89ZIbejrPfg/avyj3u/ZohAKsQclxG4Ju0VirduBFF9EOiuxoiFBRr3xRpqzpsZtnMPkWVWb+akZwBFAx8p+jKdy4QXR/SZqbVobrGwip2UjSrri1CtBxpJikojRIZfCnDaMOyd9Jp6KkujvniFzUWdLmCPxUE9zhTaPu0JsEP7MW0m6yx7ZUhHyfss+NtqmFTaDO+QlMR7L2QkDliN2Jl3Xa3PhuWnKJfWhdAq1Cw4oraKUOmIgXLkuiuxVQ6mD3AiFupkmfqdHq6h+uHHmyQqv3gU+/sD8GbGAhf6ftqhTsXjnv1Aj4R8NoDf9BS6KRkzkeun5UisSzgtfQzjOMEiJtmrep2ZQrMGahrXa+q4VKr0aKJfm+KlLfwm/JztfsBcqQWNcTURiCFqz+fgZw0Ey/de0eyMzldYTdXXNRYCKjs9bvBK+6SSXRM7AhftfQ0ZuoW5+gtinPrnmoOaSCEJbAiEiTO/BzOHgowiM=\n", resp.Body.String())
+	})
+
+	t.Run("No exported keys and SSH principal", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		resp := MakeRequest(t, NewRequest(t, "GET", "/user5.keys"), http.StatusOK)
+
+		assert.Equal(t, "# Note: This user hasn't uploaded any SSH keys.\n", resp.Body.String())
+	})
+
+	t.Run("Exported key and SSH principal", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		resp := MakeRequest(t, NewRequest(t, "GET", "/user9.keys"), http.StatusOK)
+
+		assert.Equal(t, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDN7KuFUnlztx/UM6PUTyiBAq5SeIqr+qSVFC6JzLQAh\n", resp.Body.String())
+	})
+}
+
+func TestAuthorizedIntegrationList(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	locale := translation.NewLocale("en-US")
+	topDescription := locale.TrString("settings.authorized_integration.desc")
+	noAI := locale.TrString("settings.authorized_integration.none")
+
+	session := loginUser(t, "user2")
+
+	// Load page with no authorized integrations:
+	req := NewRequest(t, "GET", "/user/settings/authorized-integrations")
+	resp := session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc := NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item", topDescription), true)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item-body p", noAI), true)
+
+	ait := newAITester(t)
+	defer ait.close()
+
+	// Load page which should now have a generic authorized integration:
+	req = NewRequest(t, "GET", "/user/settings/authorized-integrations")
+	resp = session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc = NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item", topDescription), true)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item-body p", noAI), false) // "no ... configured" no longer present
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item span.flex-item-title", "AI TestAuthorizedIntegrationList"), true)
+}
+
+func TestAuthorizedIntegrationView(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	locale := translation.NewLocale("en-US")
+	topDescription := locale.TrString("settings.authorized_integration.desc")
+	noAI := locale.TrString("settings.authorized_integration.none")
+
+	session := loginUser(t, "user2")
+
+	// Create an Authorized Integration
+	ait := newAITester(t)
+	defer ait.close()
+
+	// Load page which should now have a generic authorized integration:
+	req := NewRequest(t, "GET", "/user/settings/authorized-integrations")
+	resp := session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc := NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item", topDescription), true)
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item-body p", noAI), false) // "no ... configured" no longer present
+	htmlDoc.AssertSelection(t, htmlDoc.FindByTextTrim("div.flex-item span.flex-item-title", "AI TestAuthorizedIntegrationView"), true)
+
+	// Find button to view/edit and verify it's URL
+	viewButtonSelector := htmlDoc.Find("div.flex-item-trailing a.primary.button")
+	require.Equal(t, 1, viewButtonSelector.Length())
+	viewButton := viewButtonSelector.Get(0)
+	hrefIndex := slices.IndexFunc(viewButton.Attr, func(attr html.Attribute) bool {
+		return attr.Key == "href"
+	})
+	require.NotEqual(t, -1, hrefIndex)
+	href := viewButton.Attr[hrefIndex].Val
+	assert.Equal(t, fmt.Sprintf("/user/settings/authorized-integrations/generic/%d", ait.authorizedIntegration.ID), href)
+
+	// Load the view/edit page
+	req = NewRequest(t, "GET", href)
+	resp = session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc = NewHTMLParser(t, resp.Body)
+
+	// Assert contents of all the fields
+	htmlDoc.AssertAttrEqual(t, "#name", "value", "AI TestAuthorizedIntegrationView")
+	assert.Equal(t, "An Authorized Integration created for the test case TestAuthorizedIntegrationView.\nIt's pretty neat.", htmlDoc.doc.Find("textarea[name='description']").Text())
+	htmlDoc.AssertAttrEqual(t, "#audience", "value", ait.authorizedIntegration.Audience)
+	htmlDoc.AssertAttrEqual(t, "#issuer", "value", ait.authorizedIntegration.Issuer)
+	assert.Equal(t, "{\n  \"rules\": [\n    {\n      \"claim\": \"custom-claim\",\n      \"compare\": \"eq\",\n      \"value\": \"custom-claim-value\"\n    }\n  ]\n}", htmlDoc.doc.Find("textarea[id='claim_rules']").Text()) //nolint:testifylint // this isn't a JSON comparison; the formatting here should be exact as it represents the auto-indentation generated by the server
+	htmlDoc.AssertElementChecked(t, "#resource-all")
+	htmlDoc.AssertElementSelected(t, "#scope-activitypub option[value='write:activitypub']")
+	assert.Equal(t, 0, htmlDoc.Find("#scope-admin").Length()) // not an admin user
+	htmlDoc.AssertElementSelected(t, "#scope-issue option[value='write:issue']")
+	htmlDoc.AssertElementSelected(t, "#scope-misc option[value='write:misc']")
+	htmlDoc.AssertElementSelected(t, "#scope-notification option[value='write:notification']")
+	htmlDoc.AssertElementSelected(t, "#scope-organization option[value='write:organization']")
+	htmlDoc.AssertElementSelected(t, "#scope-package option[value='write:package']")
+	htmlDoc.AssertElementSelected(t, "#scope-repository option[value='write:repository']")
+	htmlDoc.AssertElementSelected(t, "#scope-user option[value='write:user']")
 }

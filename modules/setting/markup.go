@@ -62,7 +62,7 @@ type MarkupSanitizerRule struct {
 func loadMarkupFrom(rootCfg ConfigProvider) {
 	mustMapSetting(rootCfg, "markdown", &Markdown)
 
-	MermaidMaxSourceCharacters = rootCfg.Section("markup").Key("MERMAID_MAX_SOURCE_CHARACTERS").MustInt(5000)
+	MermaidMaxSourceCharacters = rootCfg.Section("markup").Key("MERMAID_MAX_SOURCE_CHARACTERS").MustInt(50000)
 	FilePreviewMaxLines = rootCfg.Section("markup").Key("FILEPREVIEW_MAX_LINES").MustInt(50)
 	ExternalMarkupRenderers = make([]*MarkupRenderer, 0, 10)
 	ExternalSanitizerRules = make([]MarkupSanitizerRule, 0, 10)
@@ -85,8 +85,8 @@ func loadMarkupFrom(rootCfg ConfigProvider) {
 func newMarkupSanitizer(name string, sec ConfigSection) {
 	rule, ok := createMarkupSanitizerRule(name, sec)
 	if ok {
-		if strings.HasPrefix(name, "sanitizer.") {
-			names := strings.SplitN(strings.TrimPrefix(name, "sanitizer."), ".", 2)
+		if after, ok0 := strings.CutPrefix(name, "sanitizer."); ok0 {
+			names := strings.SplitN(after, ".", 2)
 			name = names[0]
 		}
 		for _, renderer := range ExternalMarkupRenderers {

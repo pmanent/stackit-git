@@ -1,15 +1,19 @@
-// Copyright 2018 The Gitea Authors.
-// Copyright 2016 The Gogs Authors.
-// All rights reserved.
+// Copyright 2016 The Gogs Authors. All rights reserved.
+// Copyright 2018 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package issues
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
+	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"forgejo.org/models/db"
@@ -18,7 +22,9 @@ import (
 	project_model "forgejo.org/models/project"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/container"
+	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/log"
@@ -198,12 +204,7 @@ func (t CommentType) HasMailReplySupport() bool {
 }
 
 func (t CommentType) CountedAsConversation() bool {
-	for _, ct := range ConversationCountedCommentType() {
-		if t == ct {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ConversationCountedCommentType(), t)
 }
 
 // ConversationCountedCommentType returns the comment types that are counted as a conversation
@@ -282,6 +283,7 @@ type Comment struct {
 
 	CommitID        int64
 	Line            int64 // - previous line / + proposed line
+	ExtraLinesCount int64 `xorm:"NOT NULL DEFAULT 0"` // number of additional lines after Line (0 = single line)
 	TreePath        string
 	Content         string        `xorm:"LONGTEXT"`
 	ContentVersion  int           `xorm:"NOT NULL DEFAULT 0"`
@@ -324,6 +326,11 @@ type Comment struct {
 	NewCommit   string                              `xorm:"-"`
 	CommitsNum  int64                               `xorm:"-"`
 	IsForcePush bool                                `xorm:"-"`
+
+	reverseLineBlame *git.ReverseLineBlame `xorm:"-"`
+
+	// If you add new fields that might be used to store abusive content (mainly string fields),
+	// please also add them in the CommentData struct and the corresponding constructor.
 }
 
 func init() {
@@ -608,11 +615,15 @@ func (c *Comment) UpdateAttachments(ctx context.Context, uuids []string) error {
 	}
 	defer committer.Close()
 
-	attachments, err := repo_model.GetAttachmentsByUUIDs(ctx, uuids)
-	if err != nil {
-		return fmt.Errorf("getAttachmentsByUUIDs [uuids: %v]: %w", uuids, err)
+	if err := c.LoadIssue(ctx); err != nil {
+		return fmt.Errorf("LoadIssue: %w", err)
 	}
-	for i := 0; i < len(attachments); i++ {
+
+	attachments, err := repo_model.FindRepoAttachmentsByUUID(ctx, c.Issue.RepoID, uuids, repo_model.FindAttachmentOptions{})
+	if err != nil {
+		return fmt.Errorf("FindRepoAttachmentsByUUID[uuids=%q,repoID=%d]: %w", uuids, c.Issue.RepoID, err)
+	}
+	for i := range attachments {
 		attachments[i].IssueID = c.IssueID
 		attachments[i].CommentID = c.ID
 		if err := repo_model.UpdateAttachment(ctx, attachments[i]); err != nil {
@@ -658,21 +669,6 @@ func (c *Comment) LoadAssigneeUserAndTeam(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// LoadResolveDoer if comment.Type is CommentTypeCode and ResolveDoerID not zero, then load resolveDoer
-func (c *Comment) LoadResolveDoer(ctx context.Context) (err error) {
-	if c.ResolveDoerID == 0 || c.Type != CommentTypeCode {
-		return nil
-	}
-	c.ResolveDoer, err = user_model.GetUserByID(ctx, c.ResolveDoerID)
-	if err != nil {
-		if user_model.IsErrUserNotExist(err) {
-			c.ResolveDoer = user_model.NewGhostUser()
-			err = nil
-		}
-	}
-	return err
 }
 
 // IsResolved check if an code comment is resolved
@@ -756,6 +752,227 @@ func (c *Comment) UnsignedLine() uint64 {
 	return uint64(c.Line)
 }
 
+// DisplayLine returns the signed line number where the comment should be displayed
+// in the diff view. For multi-line comments, this is the last line of the range.
+func (c *Comment) DisplayLine() int64 {
+	if c.Line < 0 {
+		return c.Line - c.ExtraLinesCount
+	}
+	return c.Line + c.ExtraLinesCount
+}
+
+// UnsignedDisplayLine returns the unsigned (absolute) display line number.
+// For multi-line comments, this is the last line of the range (UnsignedLine + ExtraLinesCount).
+func (c *Comment) UnsignedDisplayLine() uint64 {
+	return c.UnsignedLine() + uint64(c.ExtraLinesCount)
+}
+
+// resolveLineAtHead checks whether a specific line is still present at the given head commit.
+// For positive lines (proposed side), uses git blame --reverse.
+// For negative lines (previous side), uses diff + FindAdjustedLineNumber.
+func (c *Comment) resolveLineAtHead(gitRepo *git.Repository, lineNum uint64, currentHead string) (*git.ReverseLineBlame, error) {
+	if c.Line > 0 {
+		blame, err := gitRepo.ReverseLineBlame(c.CommitSHA, c.TreePath, lineNum, currentHead)
+		if err != nil {
+			return nil, fmt.Errorf("ReverseLineBlame for line %d: %w", lineNum, err)
+		}
+		return blame, nil
+	}
+
+	// For comments on removed lines, diff the commit the line was known to exist in against the head
+	// being viewed, then locate the line in that diff.
+	var buffer bytes.Buffer
+	if err := git.GetRepoRawDiffForFile(gitRepo, c.CommitSHA, currentHead, git.RawDiffNormal, c.TreePath, &buffer); err != nil {
+		return nil, fmt.Errorf("failed to get diff: %w", err)
+	}
+	diff := buffer.String()
+
+	adjustedLine, err := git.FindAdjustedLineNumber(c.Patch, int64(lineNum), strings.NewReader(diff))
+	if err != nil && errors.Is(err, git.ErrLineNotFound) {
+		return &git.ReverseLineBlame{
+			CommitID:   "", // not currentHead — indicates the line is outdated
+			LineNumber: lineNum,
+			FilePath:   c.TreePath,
+		}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("FindAdjustedLineNumber for line %d: %w", lineNum, err)
+	}
+	return &git.ReverseLineBlame{
+		CommitID:   currentHead,
+		LineNumber: uint64(adjustedLine.Left),
+		FilePath:   c.TreePath,
+	}, nil
+}
+
+func (c *Comment) ResolveCurrentLine(ctx context.Context, repo *repo_model.Repository, currentHead string) (*git.ReverseLineBlame, error) {
+	if c.reverseLineBlame != nil {
+		return c.reverseLineBlame, nil
+	}
+
+	// When a PR is viewed, the requirement to perform `git blame --reverse...` on every comment is a bit of a
+	// performance risk. To minimize this risk, cache the results relative to the requested head, so it only needs to be
+	// recalculated when head changes (or on cache eviction).
+	//
+	// Some performance testing was done which showed that a hot cache is much faster than the blame reverse
+	// operation -- 500-1000x runtime difference:
+	//
+	// - cache miss (Forgejo repo)      took 7,690,574 ns
+	// - cache miss (~1000 commit repo) took 1,671,223 ns
+	// - cache hit (in-memory adapter)  took     3,710 ns
+	// - cache hit (redis adapter)      took    77,311 ns
+	resolveJSON, err := cache.GetString(fmt.Sprintf("comment.Resolve;ID=%d;HEAD=%s", c.ID, currentHead), func() (string, error) {
+		gitRepo, closer, err := gitrepo.RepositoryFromContextOrOpen(ctx, repo)
+		if err != nil {
+			return "", fmt.Errorf("failed to open repo: %w", err)
+		}
+		defer closer.Close()
+
+		// On the previous side the patch is cut around the last line of the range, so resolve that line
+		// (for single-line comments and the proposed side it equals UnsignedLine).
+		resolveLine := c.UnsignedLine()
+		if c.Line < 0 {
+			resolveLine = c.UnsignedDisplayLine()
+		}
+		reverseBlame, err := c.resolveLineAtHead(gitRepo, resolveLine, currentHead)
+		if err != nil {
+			return "", err
+		}
+
+		data, err := json.Marshal(reverseBlame)
+		if err != nil {
+			return "", err
+		}
+
+		return string(data), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var reverseBlame *git.ReverseLineBlame
+	err = json.Unmarshal([]byte(resolveJSON), &reverseBlame)
+	if err != nil {
+		return nil, err
+	}
+
+	c.reverseLineBlame = reverseBlame
+	return c.reverseLineBlame, nil
+}
+
+// CheckLineRangeValid reports whether a multi-line comment range can still be placed at the given head.
+// Previous (negative) side: only the last line can be located in the cut patch, so only it is checked.
+// Proposed (positive) side: modified lines are tolerated; only a line landing at an unexpected offset
+// (lines inserted/removed inside the range) invalidates it. Uses the same caching pattern as ResolveCurrentLine.
+func (c *Comment) CheckLineRangeValid(ctx context.Context, repo *repo_model.Repository, currentHead string) (bool, error) {
+	if c.ExtraLinesCount <= 0 {
+		return true, nil
+	}
+
+	resultJSON, err := cache.GetString(fmt.Sprintf("comment.ResolveRange;ID=%d;HEAD=%s", c.ID, currentHead), func() (string, error) {
+		gitRepo, closer, err := gitrepo.RepositoryFromContextOrOpen(ctx, repo)
+		if err != nil {
+			return "", fmt.Errorf("failed to open repo: %w", err)
+		}
+		defer closer.Close()
+
+		// Previous side: only the last line of the range can be located in the cut patch, so validate it.
+		if c.Line < 0 {
+			blame, err := c.resolveLineAtHead(gitRepo, c.UnsignedDisplayLine(), currentHead)
+			if err != nil {
+				return "", err
+			}
+			if blame.CommitID != currentHead {
+				return "invalid", nil
+			}
+			return "valid", nil
+		}
+
+		// Proposed side: resolve the first line; the others are expected to follow it consecutively.
+		anchorBlame, err := c.resolveLineAtHead(gitRepo, c.UnsignedLine(), currentHead)
+		if err != nil {
+			return "", err
+		}
+		if anchorBlame.CommitID != currentHead {
+			return "invalid", nil
+		}
+		anchorResolvedLine := anchorBlame.LineNumber
+
+		// Catch a line changed by a later commit by comparing each range line's current content
+		// to the comment's Patch (its content at creation; lines the PR itself changed already match it).
+		// The Patch uses the comment's line coordinates, so trust it only
+		// when the anchor's recorded content equals its current content — otherwise fall back below.
+		if expected := git.PatchRightSideContent(c.Patch); len(expected) > 0 {
+			if headLines, ok := c.headFileLines(gitRepo, currentHead, anchorBlame.FilePath); ok {
+				lineAt := func(n uint64) (string, bool) {
+					if n >= 1 && n <= uint64(len(headLines)) {
+						return headLines[n-1], true
+					}
+					return "", false
+				}
+				anchorExpected, hasAnchor := expected[int64(c.UnsignedLine())]
+				anchorCurrent, hasCurrent := lineAt(anchorResolvedLine)
+				if hasAnchor && hasCurrent && anchorExpected == anchorCurrent {
+					trusted := true
+					for i := int64(1); i <= c.ExtraLinesCount; i++ {
+						exp, okExp := expected[int64(c.UnsignedLine())+i]
+						cur, okCur := lineAt(anchorResolvedLine + uint64(i))
+						if !okExp || !okCur {
+							trusted = false // mapping incomplete -> fall back to the offset-only check
+							break
+						}
+						if exp != cur {
+							return "invalid", nil // a range line was changed after the comment was made
+						}
+					}
+					if trusted {
+						return "valid", nil
+					}
+				}
+			}
+		}
+
+		// Fallback (offset-only): a line that no longer resolves is treated as "modified but present"
+		// and tolerated; only a resolved line landing at an unexpected offset (lines inserted/removed
+		// inside the range) is a break.
+		startLine := c.UnsignedLine()
+		for i := int64(1); i <= c.ExtraLinesCount; i++ {
+			blame, err := c.resolveLineAtHead(gitRepo, startLine+uint64(i), currentHead)
+			if err != nil {
+				return "", err
+			}
+			if blame.CommitID == currentHead && blame.LineNumber != anchorResolvedLine+uint64(i) {
+				return "invalid", nil
+			}
+		}
+
+		return "valid", nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return resultJSON == "valid", nil
+}
+
+// headFileLines reads the content of treePath at the given commit and returns its lines
+// (dropping the trailing empty element produced by a final newline). ok is false when the
+// file can't be read at head.
+func (c *Comment) headFileLines(gitRepo *git.Repository, head, treePath string) (lines []string, ok bool) {
+	commit, err := gitRepo.GetCommit(head)
+	if err != nil {
+		return nil, false
+	}
+	content, err := commit.GetFileContent(treePath, -1)
+	if err != nil {
+		return nil, false
+	}
+	lines = strings.Split(content, "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	return lines, true
+}
+
 // CodeCommentLink returns the url to a comment in code
 func (c *Comment) CodeCommentLink(ctx context.Context) string {
 	err := c.LoadIssue(ctx)
@@ -792,16 +1009,15 @@ func (c *Comment) LoadPushCommits(ctx context.Context) (err error) {
 		}
 		c.OldCommit = data.CommitIDs[0]
 		c.NewCommit = data.CommitIDs[1]
-	} else {
-		gitRepo, closer, err := gitrepo.RepositoryFromContextOrOpen(ctx, c.Issue.Repo)
-		if err != nil {
-			return err
-		}
-		defer closer.Close()
-
-		c.Commits = git_model.ConvertFromGitCommit(ctx, gitRepo.GetCommitsFromIDs(data.CommitIDs), c.Issue.Repo)
-		c.CommitsNum = int64(len(c.Commits))
 	}
+
+	gitRepo, closer, err := gitrepo.RepositoryFromContextOrOpen(ctx, c.Issue.Repo)
+	if err != nil {
+		return err
+	}
+	defer closer.Close()
+	c.Commits = git_model.ParseCommitsWithStatus(ctx, gitRepo.GetCommitsFromIDs(data.CommitIDs, c.IsForcePush), c.Issue.Repo)
+	c.CommitsNum = int64(len(c.Commits))
 
 	return err
 }
@@ -837,6 +1053,7 @@ func CreateComment(ctx context.Context, opts *CreateCommentOptions) (_ *Comment,
 		CommitID:         opts.CommitID,
 		CommitSHA:        opts.CommitSHA,
 		Line:             opts.LineNum,
+		ExtraLinesCount:  opts.ExtraLinesCount,
 		Content:          opts.Content,
 		OldTitle:         opts.OldTitle,
 		NewTitle:         opts.NewTitle,
@@ -887,7 +1104,7 @@ func updateCommentInfos(ctx context.Context, opts *CreateCommentOptions, comment
 	// Check comment type.
 	switch opts.Type {
 	case CommentTypeCode:
-		if err = updateAttachments(ctx, opts, comment); err != nil {
+		if err := comment.UpdateAttachments(ctx, opts.Attachments); err != nil {
 			return err
 		}
 		if comment.ReviewID != 0 {
@@ -907,7 +1124,7 @@ func updateCommentInfos(ctx context.Context, opts *CreateCommentOptions, comment
 		}
 		fallthrough
 	case CommentTypeReview:
-		if err = updateAttachments(ctx, opts, comment); err != nil {
+		if err := comment.UpdateAttachments(ctx, opts.Attachments); err != nil {
 			return err
 		}
 	case CommentTypeReopen, CommentTypeClose:
@@ -917,23 +1134,6 @@ func updateCommentInfos(ctx context.Context, opts *CreateCommentOptions, comment
 	}
 	// update the issue's updated_unix column
 	return UpdateIssueCols(ctx, opts.Issue, "updated_unix")
-}
-
-func updateAttachments(ctx context.Context, opts *CreateCommentOptions, comment *Comment) error {
-	attachments, err := repo_model.GetAttachmentsByUUIDs(ctx, opts.Attachments)
-	if err != nil {
-		return fmt.Errorf("getAttachmentsByUUIDs [uuids: %v]: %w", opts.Attachments, err)
-	}
-	for i := range attachments {
-		attachments[i].IssueID = opts.Issue.ID
-		attachments[i].CommentID = comment.ID
-		// No assign value could be 0, so ignore AllCols().
-		if _, err = db.GetEngine(ctx).ID(attachments[i].ID).Update(attachments[i]); err != nil {
-			return fmt.Errorf("update attachment [%d]: %w", attachments[i].ID, err)
-		}
-	}
-	comment.Attachments = attachments
-	return nil
 }
 
 func createDeadlineComment(ctx context.Context, doer *user_model.User, issue *Issue, newDeadlineUnix timeutil.TimeStamp) (*Comment, error) {
@@ -1030,6 +1230,7 @@ type CreateCommentOptions struct {
 	CommitSHA        string
 	Patch            string
 	LineNum          int64
+	ExtraLinesCount  int64
 	TreePath         string
 	ReviewID         int64
 	Content          string
@@ -1100,11 +1301,11 @@ func (opts FindCommentsOptions) ToConds() builder.Cond {
 	if len(opts.TreePath) > 0 {
 		cond = cond.And(builder.Eq{"comment.tree_path": opts.TreePath})
 	}
-	if opts.Invalidated.Has() {
-		cond = cond.And(builder.Eq{"comment.invalidated": opts.Invalidated.Value()})
+	if has, value := opts.Invalidated.Get(); has {
+		cond = cond.And(builder.Eq{"comment.invalidated": value})
 	}
-	if opts.IsPull.Has() {
-		cond = cond.And(builder.Eq{"issue.is_pull": opts.IsPull.Value()})
+	if has, value := opts.IsPull.Get(); has {
+		cond = cond.And(builder.Eq{"issue.is_pull": value})
 	}
 	return cond
 }
@@ -1152,6 +1353,11 @@ func UpdateComment(ctx context.Context, c *Comment, contentVersion int, doer *us
 	}
 	defer committer.Close()
 
+	// If the comment was reported as abusive, a shadow copy should be created before first update.
+	if err := IfNeededCreateShadowCopyForComment(ctx, c, true); err != nil {
+		return err
+	}
+
 	if err := c.LoadIssue(ctx); err != nil {
 		return err
 	}
@@ -1187,6 +1393,12 @@ func UpdateComment(ctx context.Context, c *Comment, contentVersion int, doer *us
 // DeleteComment deletes the comment
 func DeleteComment(ctx context.Context, comment *Comment) error {
 	e := db.GetEngine(ctx)
+
+	// If the comment was reported as abusive, a shadow copy should be created before deletion.
+	if err := IfNeededCreateShadowCopyForComment(ctx, comment, false); err != nil {
+		return err
+	}
+
 	if _, err := e.ID(comment.ID).NoAutoCondition().Delete(comment); err != nil {
 		return err
 	}
@@ -1202,11 +1414,9 @@ func DeleteComment(ctx context.Context, comment *Comment) error {
 			return err
 		}
 	}
+
 	if _, err := e.Table("action").
-		Where("comment_id = ?", comment.ID).
-		Update(map[string]any{
-			"is_deleted": true,
-		}); err != nil {
+		Where("comment_id = ?", comment.ID).Delete(); err != nil {
 		return err
 	}
 

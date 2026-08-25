@@ -13,7 +13,7 @@
 			<div class="flex-item-main">
 				<div class="flex-item-header">
 					<div class="flex-item-title">
-						<a class="tw-no-underline issue-title" href="{{if .Link}}{{.Link}}{{else}}{{$.Link}}/{{.Index}}{{end}}">{{RenderEmoji $.Context .Title | RenderCodeBlock}}</a>
+						<a class="tw-no-underline issue-title" href="{{if .Link}}{{.Link}}{{else}}{{$.Link}}/{{.Index}}{{end}}">{{RenderRefIssueTitle $.Context .Title}}</a>
 						{{if .IsPull}}
 							{{if (index $.CommitStatuses .PullRequest.ID)}}
 								{{template "repo/commit_statuses" dict "Status" (index $.CommitLastStatus .PullRequest.ID) "Statuses" (index $.CommitStatuses .PullRequest.ID)}}
@@ -21,7 +21,7 @@
 						{{end}}
 						<span class="labels-list tw-ml-1">
 							{{range .Labels}}
-								<a href="?q={{$.Keyword}}&type={{$.ViewType}}&state={{$.State}}&labels={{.ID}}{{if ne $.listType "milestone"}}&milestone={{$.MilestoneID}}{{end}}&assignee={{$.AssigneeID}}&poster={{$.PosterID}}{{if $.ShowArchivedLabels}}&archived=true{{end}}" rel="nofollow">{{RenderLabel $.Context ctx.Locale .}}</a>
+								<a href="?q={{$.Keyword}}&type={{$.ViewType}}&state={{$.State}}&labels={{.ID}}{{if ne $.listType "milestone"}}&milestone={{$.MilestoneID}}{{end}}&assignee={{$.AssigneeID}}&poster={{$.PosterID}}{{if $.ShowArchivedLabels}}&archived=true{{end}}" rel="nofollow">{{RenderLabel ctx .}}</a>
 							{{end}}
 						</span>
 					</div>
@@ -52,25 +52,27 @@
 					</div>
 					{{end}}
 				</div>
-				<div class="flex-item-body">
-					<a class="index" href="{{if .Link}}{{.Link}}{{else}}{{$.Link}}/{{.Index}}{{end}}">
-						{{if eq $.listType "dashboard"}}
-							{{.Repo.FullName}}#{{.Index}}
+				<div class="flex-item-body issue-meta">
+					<span>
+						<a class="index" href="{{if .Link}}{{.Link}}{{else}}{{$.Link}}/{{.Index}}{{end}}">
+							{{- if eq $.listType "dashboard" -}}
+								{{.Repo.FullName}}#{{.Index}}
+							{{- else -}}
+								#{{.Index}}
+							{{- end -}}
+						</a>
+						{{$timeStr := DateUtils.TimeSince .GetLastEventTimestamp}}
+						{{if .OriginalAuthor}}
+							{{ctx.Locale.Tr .GetLastEventLabelFake $timeStr .OriginalAuthor}}
+						{{else if gt .Poster.ID 0}}
+							{{ctx.Locale.Tr .GetLastEventLabel $timeStr .Poster.HomeLink .Poster.GetDisplayName}}
 						{{else}}
-							#{{.Index}}
+							{{ctx.Locale.Tr .GetLastEventLabelFake $timeStr .Poster.GetDisplayName}}
 						{{end}}
-					</a>
-					{{$timeStr := DateUtils.TimeSince .GetLastEventTimestamp}}
-					{{if .OriginalAuthor}}
-						{{ctx.Locale.Tr .GetLastEventLabelFake $timeStr .OriginalAuthor}}
-					{{else if gt .Poster.ID 0}}
-						{{ctx.Locale.Tr .GetLastEventLabel $timeStr .Poster.HomeLink .Poster.GetDisplayName}}
-					{{else}}
-						{{ctx.Locale.Tr .GetLastEventLabelFake $timeStr .Poster.GetDisplayName}}
-					{{end}}
+					</span>
 					{{if .IsPull}}
-						<div class="branches flex-text-inline">
-							{{svg "gitea-double-chevron-right" 12}}
+						{{svg "gitea-double-chevron-right" 12}}
+						<div class="flex-text-inline issue-meta-branch">
 							<div class="branch">
 								<a href="{{.PullRequest.BaseRepo.Link}}/src/branch/{{PathEscapeSegments .PullRequest.BaseBranch}}">
 									{{/* inline to remove the spaces between spans */}}
@@ -106,11 +108,9 @@
 						</span>
 					{{end}}
 					{{if ne .DeadlineUnix 0}}
-						<span class="due-date flex-text-inline" data-tooltip-content="{{ctx.Locale.Tr "repo.issues.due_date"}}">
-							<span{{if .IsOverdue}} class="text red"{{end}}>
-								{{svg "octicon-calendar" 14}}
-								{{DateUtils.AbsoluteShort .DeadlineUnix}}
-							</span>
+						<span class="due-date flex-text-inline{{if .IsOverdue}} text red{{end}}" data-tooltip-content="{{ctx.Locale.Tr "repo.issues.due_date"}}">
+							{{svg "octicon-calendar" 14}}
+							{{DateUtils.AbsoluteShort .DeadlineUnix}}
 						</span>
 					{{end}}
 					{{if .IsPull}}
@@ -141,6 +141,12 @@
 								{{ctx.Locale.TrN (len .PullRequest.ConflictedFiles) "repo.pulls.num_conflicting_files_1" "repo.pulls.num_conflicting_files_n" (len .PullRequest.ConflictedFiles)}}
 							</span>
 						{{end}}
+					{{end}}
+					{{if or (eq $.SortType "recentupdate") (eq $.SortType "leastupdate")}}
+					<span class="flex-text-inline">
+						{{svg "octicon-history" 14}}
+						{{ctx.Locale.Tr "issues.updated" (DateUtils.TimeSince .UpdatedUnix)}}
+					</span>
 					{{end}}
 				</div>
 			</div>

@@ -12,21 +12,25 @@ import (
 // Federation settings
 var (
 	Federation = struct {
-		Enabled             bool
-		ShareUserStatistics bool
-		MaxSize             int64
-		Algorithms          []string
-		DigestAlgorithm     string
-		GetHeaders          []string
-		PostHeaders         []string
+		Enabled                   bool
+		ShareUserStatistics       bool
+		MaxSize                   int64
+		SignatureAlgorithms       []string
+		DigestAlgorithm           string
+		GetHeaders                []string
+		PostHeaders               []string
+		SignatureEnforced         bool
+		InsecureAllowInvalidHosts bool
 	}{
-		Enabled:             false,
-		ShareUserStatistics: true,
-		MaxSize:             4,
-		Algorithms:          []string{"rsa-sha256", "rsa-sha512", "ed25519"},
-		DigestAlgorithm:     "SHA-256",
-		GetHeaders:          []string{"(request-target)", "Date", "Host"},
-		PostHeaders:         []string{"(request-target)", "Date", "Host", "Digest"},
+		Enabled:                   false,
+		ShareUserStatistics:       true,
+		MaxSize:                   4,
+		SignatureAlgorithms:       []string{"rsa-sha256", "rsa-sha512", "ed25519"},
+		DigestAlgorithm:           "SHA-256",
+		GetHeaders:                []string{"(request-target)", "Date", "Host"},
+		PostHeaders:               []string{"(request-target)", "Date", "Host", "Digest"},
+		SignatureEnforced:         true,
+		InsecureAllowInvalidHosts: false,
 	}
 )
 
@@ -44,8 +48,8 @@ func loadFederationFrom(rootCfg ConfigProvider) {
 	// Get MaxSize in bytes instead of MiB
 	Federation.MaxSize = 1 << 20 * Federation.MaxSize
 
-	HttpsigAlgs = make([]httpsig.Algorithm, len(Federation.Algorithms))
-	for i, alg := range Federation.Algorithms {
+	HttpsigAlgs = make([]httpsig.Algorithm, len(Federation.SignatureAlgorithms))
+	for i, alg := range Federation.SignatureAlgorithms {
 		HttpsigAlgs[i] = httpsig.Algorithm(alg)
 	}
 }

@@ -17,11 +17,11 @@ import (
 	webhook_service "forgejo.org/services/webhook"
 )
 
-// ListHooks list system's webhooks
+// ListHooks list system webhooks
 func ListHooks(ctx *context.APIContext) {
 	// swagger:operation GET /admin/hooks admin adminListHooks
 	// ---
-	// summary: List system's webhooks
+	// summary: List global (system) webhooks
 	// produces:
 	// - application/json
 	// parameters:
@@ -35,9 +35,9 @@ func ListHooks(ctx *context.APIContext) {
 	//   type: integer
 	// responses:
 	//   "200":
-	//     "$ref": "#/responses/HookList"
+	//     "$ref": "#/responses/HookListWithoutPagination"
 
-	sysHooks, err := webhook.GetSystemWebhooks(ctx, false)
+	sysHooks, total, err := webhook.GetSystemWebhooks(ctx, utils.GetListOptions(ctx), false)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "GetSystemWebhooks", err)
 		return
@@ -51,6 +51,7 @@ func ListHooks(ctx *context.APIContext) {
 		}
 		hooks[i] = h
 	}
+	ctx.SetTotalCountHeader(total)
 	ctx.JSON(http.StatusOK, hooks)
 }
 

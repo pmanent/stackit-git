@@ -10,8 +10,8 @@ import (
 	activities_model "forgejo.org/models/activities"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
+	"forgejo.org/models/gitea_migrations"
 	issues_model "forgejo.org/models/issues"
-	"forgejo.org/models/migrations"
 	org_model "forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/log"
@@ -78,7 +78,14 @@ func genericOrphanCheck(name, subject, refobject, joincond string) consistencyCh
 
 func checkDBConsistency(ctx context.Context, logger log.Logger, autofix bool) error {
 	// make sure DB version is up-to-date
-	if err := db.InitEngineWithMigration(ctx, migrations.EnsureUpToDate); err != nil {
+	ensureUpToDateWrapper := func(e db.Engine) error {
+		engine, err := db.GetMasterEngine(e)
+		if err != nil {
+			return err
+		}
+		return gitea_migrations.EnsureUpToDate(engine)
+	}
+	if err := db.InitEngineWithMigration(ctx, ensureUpToDateWrapper); err != nil {
 		logger.Critical("Model version on the database does not match the current Gitea version. Model consistency will not be checked until the database is upgraded")
 		return err
 	}
@@ -114,6 +121,8 @@ func checkDBConsistency(ctx context.Context, logger log.Logger, autofix bool) er
 		// find tracked times without existing issues/pulls
 		genericOrphanCheck("Orphaned TrackedTimes without existing issue",
 			"tracked_time", "issue", "tracked_time.issue_id=issue.id"),
+		genericOrphanCheck("Orphaned TrackedTimes without existing user",
+			"tracked_time", "user", "tracked_time.user_id=`user`.id"),
 		// find attachments without existing issues or releases
 		{
 			Name:    "Orphaned Attachments without existing issues or releases",

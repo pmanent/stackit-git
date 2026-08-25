@@ -5,11 +5,7 @@
 package user
 
 import (
-	"errors"
-	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
@@ -24,7 +20,7 @@ import (
 func ListAccessTokens(ctx *context.APIContext) {
 	// swagger:operation GET /users/{username}/tokens user userGetTokens
 	// ---
-	// summary: List the authenticated user's access tokens
+	// summary: List the specified user's access tokens
 	// produces:
 	// - application/json
 	// parameters:
@@ -49,33 +45,14 @@ func ListAccessTokens(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	opts := auth_model.ListAccessTokensOptions{UserID: ctx.ContextUser.ID, ListOptions: utils.GetListOptions(ctx)}
-
-	tokens, count, err := db.FindAndCount[auth_model.AccessToken](ctx, opts)
-	if err != nil {
-		ctx.InternalServerError(err)
-		return
-	}
-
-	apiTokens := make([]*api.AccessToken, len(tokens))
-	for i := range tokens {
-		apiTokens[i] = &api.AccessToken{
-			ID:             tokens[i].ID,
-			Name:           tokens[i].Name,
-			TokenLastEight: tokens[i].TokenLastEight,
-			Scopes:         tokens[i].Scope.StringSlice(),
-		}
-	}
-
-	ctx.SetTotalCountHeader(count)
-	ctx.JSON(http.StatusOK, &apiTokens)
+	utils.ListAccessTokens(ctx)
 }
 
-// CreateAccessToken create access tokens
+// CreateAccessToken creates an access token
 func CreateAccessToken(ctx *context.APIContext) {
 	// swagger:operation POST /users/{username}/tokens user userCreateToken
 	// ---
-	// summary: Create an access token
+	// summary: Generate an access token for the specified user
 	// consumes:
 	// - application/json
 	// produces:
@@ -100,52 +77,14 @@ func CreateAccessToken(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	form := web.GetForm(ctx).(*api.CreateAccessTokenOption)
-
-	t := &auth_model.AccessToken{
-		UID:  ctx.ContextUser.ID,
-		Name: form.Name,
-	}
-
-	exist, err := auth_model.AccessTokenByNameExists(ctx, t)
-	if err != nil {
-		ctx.InternalServerError(err)
-		return
-	}
-	if exist {
-		ctx.Error(http.StatusBadRequest, "AccessTokenByNameExists", errors.New("access token name has been used already"))
-		return
-	}
-
-	scope, err := auth_model.AccessTokenScope(strings.Join(form.Scopes, ",")).Normalize()
-	if err != nil {
-		ctx.Error(http.StatusBadRequest, "AccessTokenScope.Normalize", fmt.Errorf("invalid access token scope provided: %w", err))
-		return
-	}
-	if scope == "" {
-		ctx.Error(http.StatusBadRequest, "AccessTokenScope", "access token must have a scope")
-		return
-	}
-	t.Scope = scope
-
-	if err := auth_model.NewAccessToken(ctx, t); err != nil {
-		ctx.Error(http.StatusInternalServerError, "NewAccessToken", err)
-		return
-	}
-	ctx.JSON(http.StatusCreated, &api.AccessToken{
-		Name:           t.Name,
-		Token:          t.Token,
-		ID:             t.ID,
-		TokenLastEight: t.TokenLastEight,
-		Scopes:         t.Scope.StringSlice(),
-	})
+	utils.CreateAccessToken(ctx)
 }
 
-// DeleteAccessToken delete access tokens
+// DeleteAccessToken deletes an access token
 func DeleteAccessToken(ctx *context.APIContext) {
 	// swagger:operation DELETE /users/{username}/tokens/{token} user userDeleteAccessToken
 	// ---
-	// summary: delete an access token
+	// summary: Delete an access token from the specified user's account
 	// produces:
 	// - application/json
 	// parameters:
@@ -169,52 +108,14 @@ func DeleteAccessToken(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/error"
 
-	token := ctx.Params(":id")
-	tokenID, _ := strconv.ParseInt(token, 0, 64)
-
-	if tokenID == 0 {
-		tokens, err := db.Find[auth_model.AccessToken](ctx, auth_model.ListAccessTokensOptions{
-			Name:   token,
-			UserID: ctx.ContextUser.ID,
-		})
-		if err != nil {
-			ctx.Error(http.StatusInternalServerError, "ListAccessTokens", err)
-			return
-		}
-
-		switch len(tokens) {
-		case 0:
-			ctx.NotFound()
-			return
-		case 1:
-			tokenID = tokens[0].ID
-		default:
-			ctx.Error(http.StatusUnprocessableEntity, "DeleteAccessTokenByID", fmt.Errorf("multiple matches for token name '%s'", token))
-			return
-		}
-	}
-	if tokenID == 0 {
-		ctx.Error(http.StatusInternalServerError, "Invalid TokenID", nil)
-		return
-	}
-
-	if err := auth_model.DeleteAccessTokenByID(ctx, tokenID, ctx.ContextUser.ID); err != nil {
-		if auth_model.IsErrAccessTokenNotExist(err) {
-			ctx.NotFound()
-		} else {
-			ctx.Error(http.StatusInternalServerError, "DeleteAccessTokenByID", err)
-		}
-		return
-	}
-
-	ctx.Status(http.StatusNoContent)
+	utils.DeleteAccessToken(ctx)
 }
 
 // CreateOauth2Application is the handler to create a new OAuth2 Application for the authenticated user
 func CreateOauth2Application(ctx *context.APIContext) {
 	// swagger:operation POST /user/applications/oauth2 user userCreateOAuth2Application
 	// ---
-	// summary: creates a new OAuth2 application
+	// summary: Creates a new OAuth2 application
 	// produces:
 	// - application/json
 	// parameters:
@@ -237,7 +138,7 @@ func CreateOauth2Application(ctx *context.APIContext) {
 
 	app, err := auth_model.CreateOAuth2Application(ctx, auth_model.CreateOAuth2ApplicationOptions{
 		Name:               data.Name,
-		UserID:             ctx.Doer.ID,
+		UserID:             ctx.Doer().ID,
 		RedirectURIs:       data.RedirectURIs,
 		ConfidentialClient: data.ConfidentialClient,
 	})
@@ -281,7 +182,7 @@ func ListOauth2Applications(ctx *context.APIContext) {
 
 	apps, total, err := db.FindAndCount[auth_model.OAuth2Application](ctx, auth_model.FindOAuth2ApplicationsOptions{
 		ListOptions: utils.GetListOptions(ctx),
-		OwnerID:     ctx.Doer.ID,
+		OwnerID:     ctx.Doer().ID,
 	})
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "ListOAuth2Applications", err)
@@ -298,11 +199,11 @@ func ListOauth2Applications(ctx *context.APIContext) {
 	ctx.JSON(http.StatusOK, &apiApps)
 }
 
-// DeleteOauth2Application delete OAuth2 Application
+// DeleteOauth2Application delete OAuth2 application
 func DeleteOauth2Application(ctx *context.APIContext) {
 	// swagger:operation DELETE /user/applications/oauth2/{id} user userDeleteOAuth2Application
 	// ---
-	// summary: delete an OAuth2 Application
+	// summary: Delete an OAuth2 application
 	// produces:
 	// - application/json
 	// parameters:
@@ -322,7 +223,7 @@ func DeleteOauth2Application(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 	appID := ctx.ParamsInt64(":id")
-	if err := auth_model.DeleteOAuth2Application(ctx, appID, ctx.Doer.ID); err != nil {
+	if err := auth_model.DeleteOAuth2Application(ctx, appID, ctx.Doer().ID); err != nil {
 		if auth_model.IsErrOAuthApplicationNotFound(err) {
 			ctx.NotFound()
 		} else {
@@ -334,11 +235,11 @@ func DeleteOauth2Application(ctx *context.APIContext) {
 	ctx.Status(http.StatusNoContent)
 }
 
-// GetOauth2Application get OAuth2 Application
+// GetOauth2Application returns an OAuth2 application
 func GetOauth2Application(ctx *context.APIContext) {
 	// swagger:operation GET /user/applications/oauth2/{id} user userGetOAuth2Application
 	// ---
-	// summary: get an OAuth2 Application
+	// summary: Get an OAuth2 application
 	// produces:
 	// - application/json
 	// parameters:
@@ -367,7 +268,7 @@ func GetOauth2Application(ctx *context.APIContext) {
 		}
 		return
 	}
-	if app.UID != ctx.Doer.ID {
+	if app.UID != ctx.Doer().ID {
 		ctx.NotFound()
 		return
 	}
@@ -377,11 +278,11 @@ func GetOauth2Application(ctx *context.APIContext) {
 	ctx.JSON(http.StatusOK, convert.ToOAuth2Application(app))
 }
 
-// UpdateOauth2Application update OAuth2 Application
+// UpdateOauth2Application updates an OAuth2 application
 func UpdateOauth2Application(ctx *context.APIContext) {
 	// swagger:operation PATCH /user/applications/oauth2/{id} user userUpdateOAuth2Application
 	// ---
-	// summary: update an OAuth2 Application, this includes regenerating the client secret
+	// summary: Update an OAuth2 application, this includes regenerating the client secret
 	// produces:
 	// - application/json
 	// parameters:
@@ -411,7 +312,7 @@ func UpdateOauth2Application(ctx *context.APIContext) {
 
 	app, err := auth_model.UpdateOAuth2Application(ctx, auth_model.UpdateOAuth2ApplicationOptions{
 		Name:               data.Name,
-		UserID:             ctx.Doer.ID,
+		UserID:             ctx.Doer().ID,
 		ID:                 appID,
 		RedirectURIs:       data.RedirectURIs,
 		ConfidentialClient: data.ConfidentialClient,

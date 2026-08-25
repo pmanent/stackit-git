@@ -14,6 +14,7 @@ type IndexerData struct {
 	ID       int64 `json:"id"`
 	RepoID   int64 `json:"repo_id"`
 	IsPublic bool  `json:"is_public"` // If the repo is public
+	Index    int64 `json:"index"`
 
 	// Fields used for keyword searching
 	Title    string   `json:"title"`
@@ -29,7 +30,7 @@ type IndexerData struct {
 	ProjectID          int64              `json:"project_id"`
 	ProjectColumnID    int64              `json:"project_board_id"` // the key should be kept as project_board_id to keep compatible
 	PosterID           int64              `json:"poster_id"`
-	AssigneeID         int64              `json:"assignee_id"`
+	AssigneeIDs        []int64            `json:"assignee_ids"`
 	MentionIDs         []int64            `json:"mention_ids"`
 	ReviewedIDs        []int64            `json:"reviewed_ids"`
 	ReviewRequestedIDs []int64            `json:"review_requested_ids"`
@@ -72,10 +73,11 @@ type SearchResult struct {
 // It can handle almost all cases, if there is an exception, we can add a new field, like NoLabelOnly.
 // Unfortunately, we still use db for the indexer and have to convert between db.NoConditionID and nil for legacy reasons.
 type SearchOptions struct {
-	Keyword string // keyword to search
+	Tokens []Token
 
-	RepoIDs   []int64 // repository IDs which the issues belong to
-	AllPublic bool    // if include all public repositories
+	RepoIDs        []int64                // repository IDs which the issues belong to
+	AllPublic      bool                   // if include all public repositories
+	PriorityRepoID optional.Option[int64] // issues from this repository will be prioritized when SortByScore
 
 	IsPull   optional.Option[bool] // if the issues is a pull request
 	IsClosed optional.Option[bool] // if the issues is closed
@@ -147,3 +149,28 @@ const (
 	//                    but what if the issue belongs to multiple projects?
 	//                    Since it's unsupported to search issues with keyword in project page, we don't need to support it.
 )
+
+func (s SortBy) ToIssueSort() string {
+	switch s {
+	case SortByScore:
+		return "relevance"
+	case SortByCreatedDesc:
+		return "latest"
+	case SortByCreatedAsc:
+		return "oldest"
+	case SortByUpdatedDesc:
+		return "recentupdate"
+	case SortByUpdatedAsc:
+		return "leastupdate"
+	case SortByCommentsDesc:
+		return "mostcomment"
+	case SortByCommentsAsc:
+		return "leastcomment"
+	case SortByDeadlineAsc:
+		return "nearduedate"
+	case SortByDeadlineDesc:
+		return "farduedate"
+	}
+
+	return "latest"
+}

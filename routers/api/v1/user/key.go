@@ -5,7 +5,7 @@ package user
 
 import (
 	std_ctx "context"
-	"fmt"
+	"errors"
 	"net/http"
 
 	asymkey_model "forgejo.org/models/asymkey"
@@ -24,9 +24,10 @@ import (
 
 // appendPrivateInformation appends the owner and key type information to api.PublicKey
 func appendPrivateInformation(ctx std_ctx.Context, apiKey *api.PublicKey, key *asymkey_model.PublicKey, defaultUser *user_model.User) (*api.PublicKey, error) {
-	if key.Type == asymkey_model.KeyTypeDeploy {
+	switch key.Type {
+	case asymkey_model.KeyTypeDeploy:
 		apiKey.KeyType = "deploy"
-	} else if key.Type == asymkey_model.KeyTypeUser {
+	case asymkey_model.KeyTypeUser:
 		apiKey.KeyType = "user"
 
 		if defaultUser.ID == key.OwnerID {
@@ -38,7 +39,7 @@ func appendPrivateInformation(ctx std_ctx.Context, apiKey *api.PublicKey, key *a
 			}
 			apiKey.Owner = convert.ToUser(ctx, user, user)
 		}
-	} else {
+	default:
 		apiKey.KeyType = "unknown"
 	}
 	apiKey.ReadOnly = key.Mode == perm.AccessModeRead
@@ -89,7 +90,7 @@ func listPublicKeys(ctx *context.APIContext, user *user_model.User) {
 	apiKeys := make([]*api.PublicKey, len(keys))
 	for i := range keys {
 		apiKeys[i] = convert.ToPublicKey(apiLink, keys[i])
-		if ctx.Doer.IsAdmin || ctx.Doer.ID == keys[i].OwnerID {
+		if ctx.IsUserSiteAdmin() || ctx.Doer().ID == keys[i].OwnerID {
 			apiKeys[i], _ = appendPrivateInformation(ctx, apiKeys[i], keys[i], user)
 		}
 	}
@@ -126,7 +127,7 @@ func ListMyPublicKeys(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	listPublicKeys(ctx, ctx.Doer)
+	listPublicKeys(ctx, ctx.Doer())
 }
 
 // ListPublicKeys list the given user's public keys
@@ -160,7 +161,7 @@ func ListPublicKeys(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	listPublicKeys(ctx, ctx.ContextUser)
+	listPublicKeys(ctx, ctx.User())
 }
 
 // GetPublicKey get a public key
@@ -199,16 +200,16 @@ func GetPublicKey(ctx *context.APIContext) {
 
 	apiLink := composePublicKeysAPILink()
 	apiKey := convert.ToPublicKey(apiLink, key)
-	if ctx.Doer.IsAdmin || ctx.Doer.ID == key.OwnerID {
-		apiKey, _ = appendPrivateInformation(ctx, apiKey, key, ctx.Doer)
+	if ctx.IsUserSiteAdmin() || ctx.Doer().ID == key.OwnerID {
+		apiKey, _ = appendPrivateInformation(ctx, apiKey, key, ctx.Doer())
 	}
 	ctx.JSON(http.StatusOK, apiKey)
 }
 
 // CreateUserPublicKey creates new public key to given user by ID.
 func CreateUserPublicKey(ctx *context.APIContext, form api.CreateKeyOption, uid int64) {
-	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageSSHKeys) {
-		ctx.NotFound("Not Found", fmt.Errorf("ssh keys setting is not allowed to be visited"))
+	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer(), setting.UserFeatureManageSSHKeys) {
+		ctx.NotFound("Not Found", errors.New("ssh keys setting is not allowed to be visited"))
 		return
 	}
 
@@ -225,8 +226,8 @@ func CreateUserPublicKey(ctx *context.APIContext, form api.CreateKeyOption, uid 
 	}
 	apiLink := composePublicKeysAPILink()
 	apiKey := convert.ToPublicKey(apiLink, key)
-	if ctx.Doer.IsAdmin || ctx.Doer.ID == key.OwnerID {
-		apiKey, _ = appendPrivateInformation(ctx, apiKey, key, ctx.Doer)
+	if ctx.IsUserSiteAdmin() || ctx.Doer().ID == key.OwnerID {
+		apiKey, _ = appendPrivateInformation(ctx, apiKey, key, ctx.Doer())
 	}
 	ctx.JSON(http.StatusCreated, apiKey)
 }
@@ -256,7 +257,7 @@ func CreatePublicKey(ctx *context.APIContext) {
 	//     "$ref": "#/responses/validationError"
 
 	form := web.GetForm(ctx).(*api.CreateKeyOption)
-	CreateUserPublicKey(ctx, *form, ctx.Doer.ID)
+	CreateUserPublicKey(ctx, *form, ctx.Doer().ID)
 }
 
 // DeletePublicKey delete one public key
@@ -283,8 +284,8 @@ func DeletePublicKey(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageSSHKeys) {
-		ctx.NotFound("Not Found", fmt.Errorf("ssh keys setting is not allowed to be visited"))
+	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer(), setting.UserFeatureManageSSHKeys) {
+		ctx.NotFound("Not Found", errors.New("ssh keys setting is not allowed to be visited"))
 		return
 	}
 
@@ -304,7 +305,7 @@ func DeletePublicKey(ctx *context.APIContext) {
 		return
 	}
 
-	if err := asymkey_service.DeletePublicKey(ctx, ctx.Doer, id); err != nil {
+	if err := asymkey_service.DeletePublicKey(ctx, ctx.Doer(), id); err != nil {
 		if asymkey_model.IsErrKeyAccessDenied(err) {
 			ctx.Error(http.StatusForbidden, "", "You do not have access to this key")
 		} else {

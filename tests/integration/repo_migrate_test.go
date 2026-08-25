@@ -23,14 +23,10 @@ func testRepoMigrate(t testing.TB, session *TestSession, cloneAddr, repoName str
 	resp := session.MakeRequest(t, req, http.StatusOK)
 	htmlDoc := NewHTMLParser(t, resp.Body)
 
-	link, exists := htmlDoc.doc.Find("form.ui.form").Attr("action")
-	assert.True(t, exists, "The template has changed")
-
 	uid, exists := htmlDoc.doc.Find("#uid").Attr("value")
 	assert.True(t, exists, "The template has changed")
 
-	req = NewRequestWithValues(t, "POST", link, map[string]string{
-		"_csrf":      htmlDoc.GetCSRF(),
+	req = NewRequestWithValues(t, "POST", "/repo/migrate", map[string]string{
 		"clone_addr": cloneAddr,
 		"uid":        uid,
 		"repo_name":  repoName,
@@ -69,7 +65,6 @@ func TestRepoMigrateCredentials(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 
 		resp := session.MakeRequest(t, NewRequestWithValues(t, "POST", "/repo/migrate?service_type=1", map[string]string{
-			"_csrf":      GetCSRF(t, session, "/repo/migrate?service_type=1"),
 			"clone_addr": cloneAddr,
 			"uid":        "2",
 			"repo_name":  "example",

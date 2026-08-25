@@ -1,11 +1,14 @@
 // Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2024-2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package integration
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"forgejo.org/models/db"
@@ -13,6 +16,7 @@ import (
 	code_indexer "forgejo.org/modules/indexer/code"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
+	"forgejo.org/modules/translation"
 	"forgejo.org/routers"
 	"forgejo.org/tests"
 
@@ -79,6 +83,9 @@ func testSearchRepo(t *testing.T, indexer bool) {
 		code_indexer.UpdateRepoIndexer(repo)
 	}
 
+	testEmptySearch(t, indexer, true)
+	testEmptySearch(t, indexer, false)
+
 	testSearch(t, "/user2/glob/search?q=", []string{}, indexer)
 	testSearch(t, "/user2/glob/search?q=loren&page=1", []string{"a.txt"}, indexer)
 	testSearch(t, "/user2/glob/search?q=loren&page=1&mode=exact", []string{"a.txt"}, indexer)
@@ -93,6 +100,30 @@ func testSearchRepo(t *testing.T, indexer bool) {
 	testSearch(t, "/user2/glob/search?q=file5&page=1&mode=exact", []string{}, indexer)
 }
 
+func testEmptySearch(t *testing.T, indexer, withFuzzy bool) {
+	defer test.MockVariableValue(&setting.Indexer.RepoIndexerEnableFuzzy, withFuzzy)()
+	req := NewRequest(t, "GET", "/user2/glob/search")
+	resp := MakeRequest(t, req, http.StatusOK)
+
+	container := NewHTMLParser(t, resp.Body).
+		Find(".repository").
+		Find(".ui.container")
+
+	key := "search.exact"
+	if withFuzzy && indexer {
+		key = "search.fuzzy"
+	}
+
+	expected := translation.NewLocale("en-US").TrString(key)
+	menu := container.Find(".menu[data-test-tag=fuzzy-dropdown]")
+	defaultOpt := menu.
+		Parent().
+		Find(".text").
+		Text()
+
+	assert.Equal(t, expected, strings.TrimSpace(defaultOpt))
+}
+
 func testSearch(t *testing.T, rawURL string, expected []string, indexer bool) {
 	req := NewRequest(t, "GET", rawURL)
 	resp := MakeRequest(t, req, http.StatusOK)
@@ -101,7 +132,7 @@ func testSearch(t *testing.T, rawURL string, expected []string, indexer bool) {
 	container := doc.Find(".repository").Find(".ui.container")
 
 	branchDropdown := container.Find(".js-branch-tag-selector")
-	assert.EqualValues(t, indexer, len(branchDropdown.Nodes) == 0)
+	assert.Equal(t, indexer, len(branchDropdown.Nodes) == 0)
 
 	dropdownOptions := container.
 		Find(".menu[data-test-tag=fuzzy-dropdown]").
@@ -112,16 +143,43 @@ func testSearch(t *testing.T, rawURL string, expected []string, indexer bool) {
 			return attr
 		})
 
+	expectedTypes := []string{"exact", "union", "regexp"}
 	if indexer {
-		assert.EqualValues(t, []string{"exact", "union"}, dropdownOptions)
-	} else {
-		assert.EqualValues(t, []string{"exact", "union", "regexp"}, dropdownOptions)
+		expectedTypes = []string{"exact", "union"}
 	}
+	assert.Equal(t, expectedTypes, dropdownOptions)
+	testDropdownOptions(t, container, expectedTypes, translation.NewLocale("en-US"))
 
 	filenames := resultFilenames(t, doc)
 	assert.ElementsMatch(t, expected, filenames)
 
 	testSearchPagination(t, rawURL, doc)
+}
+
+// testDropdownOptions verifies additional properties of dropdown options
+func testDropdownOptions(t *testing.T, container *goquery.Selection, options []string, locale translation.Locale) {
+	tr := make([]string, len(options))
+	for i, option := range options {
+		tr[i] = locale.TrString(fmt.Sprintf("search.%s", option))
+	}
+
+	// assert that the default value (in a .text adjacent to the menu) is a valid option
+	defaultOpt := container.
+		Find(".menu[data-test-tag=fuzzy-dropdown]").
+		Parent().
+		Find(".text").
+		Text()
+	assert.Contains(t, tr, strings.TrimSpace(defaultOpt))
+
+	for i, option := range options {
+		label := container.Find(fmt.Sprintf("label.item:has(input[value='%s'])", option))
+		name := strings.TrimSpace(label.Text())
+		assert.Equal(t, name, tr[i])
+
+		tooltip, exists := label.Attr("data-tooltip-content")
+		assert.True(t, exists)
+		assert.Equal(t, tooltip, locale.TrString(fmt.Sprintf("search.%s_tooltip", option)))
+	}
 }
 
 // Tests that the variables set in the url persist for all the paginated links

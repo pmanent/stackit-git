@@ -28,12 +28,13 @@ import (
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
 
-	"github.com/nektos/act/pkg/model"
+	"code.forgejo.org/forgejo/runner/v12/act/model"
 )
 
 const (
-	tplListActions base.TplName = "repo/actions/list"
-	tplViewActions base.TplName = "repo/actions/view"
+	tplListActions      base.TplName = "repo/actions/list"
+	tplListActionsInner base.TplName = "repo/actions/list_inner"
+	tplViewActions      base.TplName = "repo/actions/view"
 	//>>> @@@@ STACKIT Code @@@
 	TplViewNoActions base.TplName = "repo/actions/no_actions"
 	//<<< @@@@ STACKIT Code @@@
@@ -71,18 +72,18 @@ func List(ctx *context.Context) {
 	curWorkflow := ctx.FormString("workflow")
 	ctx.Data["CurWorkflow"] = curWorkflow
 
+	listInner := ctx.FormBool("list_inner")
+
 	var workflows []Workflow
 
 	// >>> @@@ STACKIT CODE @@@
 	var runners []*actions_model.ActionRunner
 	var stackitRunners []*actions_model.ActionRunner
 	hasStackitRunnerUsed := false
-	// Get all runner labels
 	runnerList, err := db.Find[actions_model.ActionRunner](ctx, actions_model.FindRunnerOptions{
-		RepoID:          ctx.Repo.Repository.ID,
-		IsOnline:        optional.Some(true),
-		IsStackitRunner: optional.Some(true),
-		WithAvailable:   true,
+		RepoID:      ctx.Repo.Repository.ID,
+		IsOnline:    optional.Some(true),
+		WithVisible: true,
 		ListOptions: db.ListOptions{
 			ListAll: true,
 		},
@@ -99,7 +100,34 @@ func List(ctx *context.Context) {
 		}
 		allRunnerLabels.AddMultiple(r.AgentLabels...)
 	}
-	runners = make([]*actions_model.ActionRunner, 0, len(runnerList))
+
+	// Stackit-provided runners are autoscaled and may be offline between jobs
+	// (e.g. scaled to zero by KEDA). Their labels still count as available so
+	// the "no matching online runner" warning isn't shown for a runner pool
+	// that is merely idle, not actually gone.
+	offlineRunnerList, err := db.Find[actions_model.ActionRunner](ctx, actions_model.FindRunnerOptions{
+		RepoID:      ctx.Repo.Repository.ID,
+		IsOnline:    optional.Some(false),
+		WithVisible: true,
+		ListOptions: db.ListOptions{
+			ListAll: true,
+		},
+	})
+	if err != nil {
+		ctx.ServerError("FindRunners", err)
+		return
+	}
+	for _, r := range offlineRunnerList {
+		if r.IsStackitRunner() {
+			allRunnerLabels.AddMultiple(r.AgentLabels...)
+			if err := r.LoadAttributes(ctx); err != nil {
+				ctx.ServerError("LoadAttributes", err)
+				return
+			}
+			runners = append(runners, r)
+		}
+	}
+
 	runners = append(runners, runnerList...)
 	hasStackitRunner := false
 	hasGlobalRunner := false
@@ -136,7 +164,7 @@ func List(ctx *context.Context) {
 			ctx.ServerError("GetBranchCommit", err)
 			return
 		}
-		entries, err := actions.ListWorkflows(commit)
+		_, entries, err := actions.ListWorkflows(commit)
 		if err != nil {
 			ctx.ServerError("ListWorkflows", err)
 			return
@@ -152,7 +180,7 @@ func List(ctx *context.Context) {
 				ctx.ServerError("GetContentFromEntry", err)
 				return
 			}
-			wf, err := model.ReadWorkflow(bytes.NewReader(content))
+			wf, err := model.ReadWorkflow(bytes.NewReader(content), true)
 			if err != nil {
 				workflow.ErrMsg = ctx.Locale.TrString("actions.runs.invalid_workflow_helper", err.Error())
 				workflows = append(workflows, workflow)
@@ -179,7 +207,7 @@ func List(ctx *context.Context) {
 						continue
 					}
 					if !allRunnerLabels.Contains(ro) {
-						workflow.ErrMsg = ctx.Locale.TrString("actions.runs.no_matching_online_runner_helper", ro)
+						workflow.ErrMsg = ctx.Locale.TrString("actions.runs.no_matching_online_runner.helper", ro)
 						break
 					}
 				}
@@ -305,7 +333,11 @@ func List(ctx *context.Context) {
 	ctx.Data["HasStackitRunnerUsed"] = hasStackitRunnerUsed
 	//>>> @@@@ STACKIT Code @@@
 
-	ctx.HTML(http.StatusOK, tplListActions)
+	if listInner {
+		ctx.HTML(http.StatusOK, tplListActionsInner)
+	} else {
+		ctx.HTML(http.StatusOK, tplListActions)
+	}
 }
 
 // loadIsRefDeleted loads the IsRefDeleted field for each run in the list.

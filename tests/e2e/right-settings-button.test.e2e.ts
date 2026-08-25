@@ -5,7 +5,8 @@
 // @watch end
 
 import {expect} from '@playwright/test';
-import {save_visual, test} from './utils_e2e.ts';
+import {test} from './utils_e2e.ts';
+import {screenshot} from './shared/screenshots.ts';
 
 test.describe('desktop viewport as user 2', () => {
   test.use({user: 'user2', viewport: {width: 1920, height: 300}});
@@ -49,12 +50,12 @@ test.describe('desktop viewport, unauthenticated', () => {
   test.use({viewport: {width: 1920, height: 300}});
 
   test('User overview overflow menu should not be influenced', async ({page}) => {
-    await page.goto('/user2');
+    await page.goto('/user8');
 
     await expect(page.locator('.overflow-menu-items>#settings-btn')).toHaveCount(0);
 
     await expect(page.locator('.overflow-menu-button')).toHaveCount(0);
-    await save_visual(page);
+    await screenshot(page);
   });
 });
 
@@ -72,14 +73,14 @@ test.describe('small viewport', () => {
     await expect(page.locator('.tippy-target>#settings-btn')).toBeVisible();
 
     // Verify that we have no duplicated items
-    const shownItems = await page.locator('.overflow-menu-items>a').all();
-    expect(shownItems).not.toHaveLength(0);
-    const overflowItems = await page.locator('.tippy-target>a').all();
-    expect(overflowItems).not.toHaveLength(0);
+    const shownItems = page.locator('.overflow-menu-items>a');
+    await expect(shownItems).not.toHaveCount(0);
+    const overflowItems = page.locator('.tippy-target>a');
+    await expect(overflowItems).not.toHaveCount(0);
 
-    const items = shownItems.concat(overflowItems);
+    const items = (await shownItems.all()).concat(overflowItems);
     expect(Array.from(new Set(items))).toHaveLength(items.length);
-    await save_visual(page);
+    await screenshot(page);
   });
 
   test('Settings button in overflow menu of org header', async ({page}) => {
@@ -93,12 +94,12 @@ test.describe('small viewport', () => {
     await expect(page.locator('.tippy-target>#settings-btn')).toBeVisible();
 
     // Verify that we have no duplicated items
-    const shownItems = await page.locator('.overflow-menu-items>a').all();
-    expect(shownItems).not.toHaveLength(0);
-    const overflowItems = await page.locator('.tippy-target>a').all();
-    expect(overflowItems).not.toHaveLength(0);
+    const shownItems = page.locator('.overflow-menu-items>a');
+    await expect(shownItems).not.toHaveCount(0);
+    const overflowItems = page.locator('.tippy-target>a');
+    await expect(overflowItems).not.toHaveCount(0);
 
-    const items = shownItems.concat(overflowItems);
+    const items = (await shownItems.all()).concat(overflowItems);
     expect(Array.from(new Set(items))).toHaveLength(items.length);
   });
 });
@@ -116,13 +117,13 @@ test.describe('small viewport, unauthenticated', () => {
     await expect(page.locator('.tippy-target>#settings-btn')).toHaveCount(0);
 
     // Verify that we have no duplicated items
-    const shownItems = await page.locator('.overflow-menu-items>a').all();
-    expect(shownItems).not.toHaveLength(0);
-    const overflowItems = await page.locator('.tippy-target>a').all();
-    expect(overflowItems).not.toHaveLength(0);
+    const shownItems = page.locator('.overflow-menu-items>a');
+    await expect(shownItems).not.toHaveCount(0);
+    const overflowItems = page.locator('.tippy-target>a');
+    await expect(overflowItems).not.toHaveCount(0);
 
-    const items = shownItems.concat(overflowItems);
+    const items = (await shownItems.all()).concat(overflowItems);
     expect(Array.from(new Set(items))).toHaveLength(items.length);
-    await save_visual(page);
+    await screenshot(page);
   });
 });

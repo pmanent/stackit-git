@@ -20,7 +20,7 @@ import (
 )
 
 func TestAPIIssueTemplateList(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
 
@@ -42,14 +42,13 @@ func TestAPIIssueTemplateList(t *testing.T) {
 				".gitea/issue_template/test.md",
 				".github/ISSUE_TEMPLATE/test.md",
 				".github/issue_template/test.md",
+				"docs/issue_template/test.md",
 			}
 
 			for _, template := range templateCandidates {
 				t.Run(template, func(t *testing.T) {
 					defer tests.PrintCurrentTest(t)()
-					defer func() {
-						deleteFileInBranch(user, repo, template, repo.DefaultBranch)
-					}()
+					defer deleteFileInBranch(user, repo, template, repo.DefaultBranch)
 
 					err := createOrReplaceFileInBranch(user, repo, template, repo.DefaultBranch,
 						`---
@@ -81,6 +80,7 @@ This is the template!`)
 				".forgejo/issue_template/test.md",
 				".gitea/issue_template/test.md",
 				".github/issue_template/test.md",
+				"docs/issue_template/test.md",
 			}
 			defer func() {
 				for _, template := range templatePriority {
@@ -109,7 +109,7 @@ This is the template!`)
 			// If templates have the same filename and content, but in different
 			// directories, they count as different templates, and all are
 			// considered.
-			assert.Len(t, issueTemplates, 3)
+			assert.Len(t, issueTemplates, 4)
 		})
 	})
 }

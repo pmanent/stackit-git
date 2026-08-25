@@ -63,6 +63,13 @@ func newFeishuTextPayload(text string) FeishuPayload {
 	}
 }
 
+var feishuPayloadFormatter = webhookPayloadFormatter{
+	linkFormatter: noneLinkFormatter,
+	nameFormatter: noneNameFormatter,
+	withSender:    true,
+	withRepoName:  true,
+}
+
 // Create implements PayloadConvertor Create method
 func (fc feishuConvertor) Create(p *api.CreatePayload) (FeishuPayload, error) {
 	// created tag/branch
@@ -95,27 +102,28 @@ func (fc feishuConvertor) Push(p *api.PushPayload) (FeishuPayload, error) {
 		commitDesc string
 	)
 
-	text := fmt.Sprintf("[%s:%s] %s\r\n", p.Repo.FullName, branchName, commitDesc)
+	var text strings.Builder
+	fmt.Fprintf(&text, "[%s:%s] %s\r\n", p.Repo.FullName, branchName, commitDesc)
 	// for each commit, generate attachment text
 	for i, commit := range p.Commits {
 		var authorName string
 		if commit.Author != nil {
 			authorName = " - " + commit.Author.Name
 		}
-		text += fmt.Sprintf("[%s](%s) %s", commit.ID[:7], commit.URL,
-			strings.TrimRight(commit.Message, "\r\n")) + authorName
+		text.WriteString(fmt.Sprintf("[%s](%s) %s", commit.ID[:7], commit.URL,
+			strings.TrimRight(commit.Message, "\r\n")) + authorName)
 		// add linebreak to each commit but the last
 		if i < len(p.Commits)-1 {
-			text += "\r\n"
+			text.WriteString("\r\n")
 		}
 	}
 
-	return newFeishuTextPayload(text), nil
+	return newFeishuTextPayload(text.String()), nil
 }
 
 // Issue implements PayloadConvertor Issue method
 func (fc feishuConvertor) Issue(p *api.IssuePayload) (FeishuPayload, error) {
-	title, link, by, operator, result, assignees := getIssuesInfo(p)
+	title, link, by, operator, result, assignees := getIssuesInfo(p, noneNameFormatter)
 	if assignees != "" {
 		if p.Action == api.HookIssueAssigned || p.Action == api.HookIssueUnassigned || p.Action == api.HookIssueMilestoned {
 			return newFeishuTextPayload(fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n\n%s", title, link, by, operator, result, assignees, p.Issue.Body)), nil
@@ -127,13 +135,13 @@ func (fc feishuConvertor) Issue(p *api.IssuePayload) (FeishuPayload, error) {
 
 // IssueComment implements PayloadConvertor IssueComment method
 func (fc feishuConvertor) IssueComment(p *api.IssueCommentPayload) (FeishuPayload, error) {
-	title, link, by, operator := getIssuesCommentInfo(p)
+	title, link, by, operator := getIssuesCommentInfo(p, noneNameFormatter)
 	return newFeishuTextPayload(fmt.Sprintf("%s\n%s\n%s\n%s\n\n%s", title, link, by, operator, p.Comment.Body)), nil
 }
 
 // PullRequest implements PayloadConvertor PullRequest method
 func (fc feishuConvertor) PullRequest(p *api.PullRequestPayload) (FeishuPayload, error) {
-	title, link, by, operator, result, assignees := getPullRequestInfo(p)
+	title, link, by, operator, result, assignees := getPullRequestInfo(p, noneNameFormatter)
 	if assignees != "" {
 		if p.Action == api.HookIssueAssigned || p.Action == api.HookIssueUnassigned || p.Action == api.HookIssueMilestoned {
 			return newFeishuTextPayload(fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n\n%s", title, link, by, operator, result, assignees, p.PullRequest.Body)), nil
@@ -173,20 +181,26 @@ func (fc feishuConvertor) Repository(p *api.RepositoryPayload) (FeishuPayload, e
 
 // Wiki implements PayloadConvertor Wiki method
 func (fc feishuConvertor) Wiki(p *api.WikiPayload) (FeishuPayload, error) {
-	text, _, _ := getWikiPayloadInfo(p, noneLinkFormatter, true)
+	text, _, _ := feishuPayloadFormatter.getWikiPayloadInfo(p, true)
 
 	return newFeishuTextPayload(text), nil
 }
 
 // Release implements PayloadConvertor Release method
 func (fc feishuConvertor) Release(p *api.ReleasePayload) (FeishuPayload, error) {
-	text, _ := getReleasePayloadInfo(p, noneLinkFormatter, true)
+	text, _ := feishuPayloadFormatter.getReleasePayloadInfo(p)
 
 	return newFeishuTextPayload(text), nil
 }
 
 func (fc feishuConvertor) Package(p *api.PackagePayload) (FeishuPayload, error) {
-	text, _ := getPackagePayloadInfo(p, noneLinkFormatter, true)
+	text, _ := feishuPayloadFormatter.getPackagePayloadInfo(p)
+
+	return newFeishuTextPayload(text), nil
+}
+
+func (fc feishuConvertor) Action(p *api.ActionPayload) (FeishuPayload, error) {
+	text, _ := feishuPayloadFormatter.getActionPayloadInfo(p)
 
 	return newFeishuTextPayload(text), nil
 }

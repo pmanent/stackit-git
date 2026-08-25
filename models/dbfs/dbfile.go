@@ -38,7 +38,7 @@ type file struct {
 
 var _ File = (*file)(nil)
 
-func (f *file) readAt(fileMeta *dbfsMeta, offset int64, p []byte) (n int, err error) {
+func (f *file) readAt(fileMeta *DbfsMeta, offset int64, p []byte) (n int, err error) {
 	if offset >= fileMeta.FileSize {
 		return 0, io.EOF
 	}
@@ -46,17 +46,14 @@ func (f *file) readAt(fileMeta *dbfsMeta, offset int64, p []byte) (n int, err er
 	blobPos := int(offset % f.blockSize)
 	blobOffset := offset - int64(blobPos)
 	blobRemaining := int(f.blockSize) - blobPos
-	needRead := len(p)
-	if needRead > blobRemaining {
-		needRead = blobRemaining
-	}
+	needRead := min(len(p), blobRemaining)
 	if blobOffset+int64(blobPos)+int64(needRead) > fileMeta.FileSize {
 		needRead = int(fileMeta.FileSize - blobOffset - int64(blobPos))
 	}
 	if needRead <= 0 {
 		return 0, io.EOF
 	}
-	var fileData dbfsData
+	var fileData DbfsData
 	ok, err := db.GetEngine(f.ctx).Where("meta_id = ? AND blob_offset = ?", f.metaID, blobOffset).Get(&fileData)
 	if err != nil {
 		return 0, err
@@ -66,14 +63,8 @@ func (f *file) readAt(fileMeta *dbfsMeta, offset int64, p []byte) (n int, err er
 		blobData = nil
 	}
 
-	canCopy := len(blobData) - blobPos
-	if canCopy <= 0 {
-		canCopy = 0
-	}
-	realRead := needRead
-	if realRead > canCopy {
-		realRead = canCopy
-	}
+	canCopy := max(len(blobData)-blobPos, 0)
+	realRead := min(needRead, canCopy)
 	if realRead > 0 {
 		copy(p[:realRead], fileData.BlobData[blobPos:blobPos+realRead])
 	}
@@ -113,10 +104,7 @@ func (f *file) Write(p []byte) (n int, err error) {
 		blobPos := int(f.offset % f.blockSize)
 		blobOffset := f.offset - int64(blobPos)
 		blobRemaining := int(f.blockSize) - blobPos
-		needWrite := len(p)
-		if needWrite > blobRemaining {
-			needWrite = blobRemaining
-		}
+		needWrite := min(len(p), blobRemaining)
 		buf := make([]byte, f.blockSize)
 		readBytes, err := f.readAt(fileMeta, blobOffset, buf)
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -129,7 +117,7 @@ func (f *file) Write(p []byte) (n int, err error) {
 			buf = buf[:readBytes]
 		}
 
-		fileData := dbfsData{
+		fileData := DbfsData{
 			MetaID:     fileMeta.ID,
 			BlobOffset: blobOffset,
 			BlobData:   buf,
@@ -152,7 +140,7 @@ func (f *file) Write(p []byte) (n int, err error) {
 		p = p[needWrite:]
 	}
 
-	fileMetaUpdate := dbfsMeta{
+	fileMetaUpdate := DbfsMeta{
 		ModifyTimestamp: timeToFileTimestamp(time.Now()),
 	}
 	if needUpdateSize {
@@ -216,7 +204,7 @@ func fileTimestampToTime(timestamp int64) time.Time {
 }
 
 func (f *file) loadMetaByPath() error {
-	var fileMeta dbfsMeta
+	var fileMeta DbfsMeta
 	if ok, err := db.GetEngine(f.ctx).Where("full_path = ?", f.fullPath).Get(&fileMeta); err != nil {
 		return err
 	} else if ok {
@@ -278,7 +266,7 @@ func (f *file) createEmpty() error {
 		return os.ErrExist
 	}
 	now := time.Now()
-	_, err := db.GetEngine(f.ctx).Insert(&dbfsMeta{
+	_, err := db.GetEngine(f.ctx).Insert(&DbfsMeta{
 		FullPath:        f.fullPath,
 		BlockSize:       f.blockSize,
 		CreateTimestamp: timeToFileTimestamp(now),
@@ -298,7 +286,7 @@ func (f *file) truncate() error {
 		if _, err := db.GetEngine(ctx).Exec("UPDATE dbfs_meta SET file_size = 0 WHERE id = ?", f.metaID); err != nil {
 			return err
 		}
-		if _, err := db.GetEngine(ctx).Delete(&dbfsData{MetaID: f.metaID}); err != nil {
+		if _, err := db.GetEngine(ctx).Delete(&DbfsData{MetaID: f.metaID}); err != nil {
 			return err
 		}
 		return nil
@@ -323,10 +311,10 @@ func (f *file) delete() error {
 		return os.ErrNotExist
 	}
 	return db.WithTx(f.ctx, func(ctx context.Context) error {
-		if _, err := db.GetEngine(ctx).Delete(&dbfsMeta{ID: f.metaID}); err != nil {
+		if _, err := db.GetEngine(ctx).Delete(&DbfsMeta{ID: f.metaID}); err != nil {
 			return err
 		}
-		if _, err := db.GetEngine(ctx).Delete(&dbfsData{MetaID: f.metaID}); err != nil {
+		if _, err := db.GetEngine(ctx).Delete(&DbfsData{MetaID: f.metaID}); err != nil {
 			return err
 		}
 		return nil
@@ -344,14 +332,15 @@ func (f *file) size() (int64, error) {
 	return fileMeta.FileSize, nil
 }
 
-func findFileMetaByID(ctx context.Context, metaID int64) (*dbfsMeta, error) {
-	var fileMeta dbfsMeta
+// findFileMetaByID returns DbfsMeta of the file with the given ID. Returns os.ErrNotExist if it does not exist.
+func findFileMetaByID(ctx context.Context, metaID int64) (*DbfsMeta, error) {
+	var fileMeta DbfsMeta
 	if ok, err := db.GetEngine(ctx).Where("id = ?", metaID).Get(&fileMeta); err != nil {
 		return nil, err
 	} else if ok {
 		return &fileMeta, nil
 	}
-	return nil, nil
+	return nil, os.ErrNotExist
 }
 
 func buildPath(path string) string {

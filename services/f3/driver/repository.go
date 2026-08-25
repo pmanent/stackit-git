@@ -72,14 +72,16 @@ func (o *repository) upsert(ctx context.Context) f3_id.NodeID {
 	return f3_id.NewNodeID(o.f.Name)
 }
 
-func (o *repository) SetFetchFunc(fetchFunc func(ctx context.Context, destination string, internalRefs []string)) {
+func (o *repository) SetFetchFunc(fetchFunc func(ctx context.Context, destination, internalRef string)) {
 	o.f.FetchFunc = fetchFunc
 }
+
+const RepositoryNameWiki = "vcs.wiki"
 
 func (o *repository) getURL() string {
 	owner := f3_tree.GetOwnerName(o.GetNode())
 	repoName := f3_tree.GetProjectName(o.GetNode())
-	if o.f.GetID() == f3.RepositoryNameWiki {
+	if o.f.GetID() == RepositoryNameWiki {
 		repoName += ".wiki"
 	}
 	return repo_model.RepoPath(owner, repoName)
@@ -89,13 +91,23 @@ func (o *repository) GetRepositoryURL() string {
 	return o.getURL()
 }
 
+func (o *repository) Delete(ctx context.Context) {
+	o.Trace("ignore attempt to delete repository")
+}
+
 func (o *repository) GetRepositoryPushURL() string {
 	return o.getURL()
 }
 
-func (o *repository) GetRepositoryInternalRefs() []string {
-	return []string{}
+func (o *repository) GetRepositoryInternalRef() string {
+	return ""
 }
+
+func (o *repository) GetPullRequestBranch(pr *f3.PullRequestBranch) *f3.PullRequestBranch {
+	panic("")
+}
+func (o *repository) CreatePullRequestBranch(pr *f3.PullRequestBranch) {}
+func (o *repository) DeletePullRequestBranch(pr *f3.PullRequestBranch) {}
 
 func newRepository(_ context.Context) generic.NodeDriverInterface {
 	r := &repository{

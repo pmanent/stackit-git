@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"forgejo.org/models/db"
-	issue_model "forgejo.org/models/issues"
+	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
 	unit_model "forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
@@ -152,7 +152,13 @@ func drawRepoSummaryCard(ctx *context.Context, repo *repo_model.Repository) (*ca
 	}
 
 	issueDescription.SetMargin(10)
-	_, err = issueDescription.DrawText(repo.Description, color.Gray{128}, 36, card.Top, card.Left)
+	// Replace new lines with spaces to match repo description in-app rendering
+	issueDescriptionText := strings.NewReplacer(
+		"\r\n", " ",
+		"\r", " ",
+		"\n", " ",
+	).Replace(repo.Description)
+	_, err = issueDescription.DrawText(issueDescriptionText, color.Gray{128}, 36, card.Top, card.Left)
 	if err != nil {
 		return nil, err
 	}
@@ -174,17 +180,15 @@ func drawRepoSummaryCard(ctx *context.Context, repo *repo_model.Repository) (*ca
 		return nil, err
 	}
 
-	starsText := ctx.Locale.TrN(
+	starsText := ctx.Locale.TrPluralString(
 		repo.NumStars,
-		"explore.stars_one",
-		"explore.stars_few",
-		repo.NumStars,
+		"stars.n_stars",
+		strconv.Itoa(repo.NumStars),
 	)
-	forksText := ctx.Locale.TrN(
+	forksText := ctx.Locale.TrPluralString(
 		repo.NumForks,
-		"explore.forks_one",
-		"explore.forks_few",
-		repo.NumForks,
+		"fork.n_forks",
+		strconv.Itoa(repo.NumForks),
 	)
 	releasesText := ctx.Locale.TrN(
 		releaseCount,
@@ -202,16 +206,16 @@ func drawRepoSummaryCard(ctx *context.Context, repo *repo_model.Repository) (*ca
 	}
 
 	issuesText := ctx.Locale.TrN(
-		repo.NumOpenIssues,
+		repo.NumOpenIssues(ctx),
 		"repo.activity.title.issues_1",
 		"repo.activity.title.issues_n",
-		repo.NumOpenIssues,
+		repo.NumOpenIssues(ctx),
 	)
 	pullRequestsText := ctx.Locale.TrN(
-		repo.NumOpenPulls,
+		repo.NumOpenPulls(ctx),
 		"repo.activity.title.prs_1",
 		"repo.activity.title.prs_n",
-		repo.NumOpenPulls,
+		repo.NumOpenPulls(ctx),
 	)
 
 	bottomCountText := fmt.Sprintf("%s • %s", issuesText, pullRequestsText)
@@ -230,7 +234,7 @@ func drawRepoSummaryCard(ctx *context.Context, repo *repo_model.Repository) (*ca
 	return mainCard, nil
 }
 
-func drawIssueSummaryCard(ctx *context.Context, issue *issue_model.Issue) (*card.Card, error) {
+func drawIssueSummaryCard(ctx *context.Context, issue *issues_model.Issue) (*card.Card, error) {
 	width, height := card.DefaultSize()
 	mainCard, err := card.NewCard(width, height)
 	if err != nil {
@@ -330,7 +334,7 @@ func drawIssueSummaryCard(ctx *context.Context, issue *issue_model.Issue) (*card
 		fmt.Sprintf(
 			"%s - %s",
 			issue.Poster.Name,
-			issue.Created.AsTime().Format(time.DateOnly),
+			issue.CreatedUnix.AsTime().Format(time.DateOnly),
 		),
 		color.Gray{128}, 36, card.Middle, card.Left)
 	if err != nil {
@@ -381,12 +385,8 @@ func drawReleaseSummaryCard(ctx *context.Context, release *repo_model.Release) (
 		return nil, err
 	}
 
-	downloadCountText := ctx.Locale.TrN(
-		strconv.FormatInt(downloadCount, 10),
-		"repo.release.download_count_one",
-		"repo.release.download_count_few",
-		strconv.FormatInt(downloadCount, 10),
-	)
+	downloadCountText := ctx.Locale.TrPluralString(downloadCount,
+		"release.n_downloads", strconv.FormatInt(downloadCount, 10))
 
 	_, err = downloadCountCard.DrawText(string(downloadCountText), color.Gray{128}, 36, card.Bottom, card.Left)
 	if err != nil {
@@ -463,9 +463,9 @@ func DrawRepoSummaryCard(ctx *context.Context) {
 }
 
 func DrawIssueSummaryCard(ctx *context.Context) {
-	issue, err := issue_model.GetIssueWithAttrsByIndex(ctx, ctx.Repo.Repository.ID, ctx.ParamsInt64(":index"))
+	issue, err := issues_model.GetIssueWithAttrsByIndex(ctx, ctx.Repo.Repository.ID, ctx.ParamsInt64(":index"))
 	if err != nil {
-		if issue_model.IsErrIssueNotExist(err) {
+		if issues_model.IsErrIssueNotExist(err) {
 			ctx.Error(http.StatusNotFound)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "GetIssueByIndex", err.Error())

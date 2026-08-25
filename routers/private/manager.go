@@ -53,6 +53,7 @@ func FlushQueues(ctx *context.PrivateContext) {
 		ctx.JSON(http.StatusRequestTimeout, private.Response{
 			UserMsg: fmt.Sprintf("%v", err),
 		})
+		return
 	}
 	ctx.PlainText(http.StatusOK, "success")
 }
@@ -145,6 +146,7 @@ func AddLogger(ctx *context.PrivateContext) {
 
 	writerMode.Prefix, _ = opts.Config["prefix"].(string)
 	writerMode.Expression, _ = opts.Config["expression"].(string)
+	writerMode.Exclusion, _ = opts.Config["exclusion"].(string)
 
 	switch writerType {
 	case "console":

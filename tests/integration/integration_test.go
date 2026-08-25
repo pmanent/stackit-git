@@ -17,7 +17,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -26,30 +25,36 @@ import (
 	"testing"
 	"time"
 
-	"forgejo.org/cmd"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/json"
+	"forgejo.org/modules/jwtx"
+	"forgejo.org/modules/keying"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 	"forgejo.org/modules/testlogger"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers"
+	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/auth/source/remote"
-	gitea_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	"forgejo.org/services/mailer"
 	user_service "forgejo.org/services/user"
 	"forgejo.org/tests"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/golang-jwt/jwt/v5"
+	gouuid "github.com/google/uuid"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	goth_github "github.com/markbates/goth/providers/github"
 	goth_gitlab "github.com/markbates/goth/providers/gitlab"
+	"github.com/pquerna/otp/totp"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,40 +101,11 @@ func NewNilResponseHashSumRecorder() *NilResponseHashSumRecorder {
 
 // runMainApp runs the subcommand and returns its standard output. Any returned error will usually be of type *ExitError. If c.Stderr was nil, Output populates ExitError.Stderr.
 func runMainApp(subcommand string, args ...string) (string, error) {
-	return runMainAppWithStdin(nil, subcommand, args...)
-}
-
-// runMainAppWithStdin runs the subcommand and returns its standard output. Any returned error will usually be of type *ExitError. If c.Stderr was nil, Output populates ExitError.Stderr.
-func runMainAppWithStdin(stdin io.Reader, subcommand string, args ...string) (string, error) {
-	// running the main app directly will very likely mess with the testing setup (logger & co.)
-	// hence we run it as a subprocess and capture its output
-	args = append([]string{subcommand}, args...)
-	cmd := exec.Command(os.Args[0], args...)
-	cmd.Env = append(os.Environ(),
-		"GITEA_TEST_CLI=true",
-		"GITEA_CONF="+setting.CustomConf,
-		"GITEA_WORK_DIR="+setting.AppWorkPath)
-	cmd.Stdin = stdin
-	out, err := cmd.Output()
-	return string(out), err
+	return tests.RunMainAppWithStdin(nil, subcommand, args...)
 }
 
 func TestMain(m *testing.M) {
-	// GITEA_TEST_CLI is set by runMainAppWithStdin
-	// inspired by https://abhinavg.net/2022/05/15/hijack-testmain/
-	if testCLI := os.Getenv("GITEA_TEST_CLI"); testCLI == "true" {
-		app := cmd.NewMainApp("test-version", "integration-test")
-		args := append([]string{
-			"executable-name", // unused, but expected at position 1
-			"--config", os.Getenv("GITEA_CONF"),
-		},
-			os.Args[1:]..., // skip the executable name
-		)
-		if err := cmd.RunMainApp(app, args...); err != nil {
-			panic(err) // should never happen since RunMainApp exits on error
-		}
-		return
-	}
+	tests.DelegateToMainApp()
 
 	defer log.GetManager().Close()
 
@@ -137,7 +113,7 @@ func TestMain(m *testing.M) {
 	graceful.InitManager(managerCtx)
 	defer cancel()
 
-	tests.InitTest(true)
+	tests.InitTest()
 	testWebRoutes = routers.NormalRoutes()
 
 	// integration test settings...
@@ -163,7 +139,7 @@ func TestMain(m *testing.M) {
 
 	err := unittest.InitFixtures(
 		unittest.FixturesOptions{
-			Dir: filepath.Join(filepath.Dir(setting.AppPath), "models/fixtures/"),
+			Dir: filepath.Join(setting.AppWorkPath, "models/fixtures/"),
 		},
 	)
 	if err != nil {
@@ -273,6 +249,29 @@ func (s *TestSession) MakeRequestNilResponseHashSumRecorder(t testing.TB, rw *Re
 	return resp
 }
 
+func (s *TestSession) EnrollTOTP(t testing.TB) {
+	t.Helper()
+
+	req := NewRequest(t, "GET", "/user/settings/security/two_factor/enroll")
+	resp := s.MakeRequest(t, req, http.StatusOK)
+
+	htmlDoc := NewHTMLParser(t, resp.Body)
+	totpSecretKey, has := htmlDoc.Find(".twofa img[src^='data:image/png;base64']").Attr("alt")
+	assert.True(t, has)
+
+	currentTOTP, err := totp.GenerateCode(totpSecretKey, time.Now())
+	require.NoError(t, err)
+
+	req = NewRequestWithValues(t, "POST", "/user/settings/security/two_factor/enroll", map[string]string{
+		"passcode": currentTOTP,
+	})
+	s.MakeRequest(t, req, http.StatusSeeOther)
+
+	flashCookie := s.GetCookie(app_context.CookieNameFlash)
+	assert.NotNil(t, flashCookie)
+	assert.Contains(t, flashCookie.Value, "success%3DYour%2Baccount%2Bhas%2Bbeen%2Bsuccessfully%2Benrolled.")
+}
+
 const userPassword = "password"
 
 func emptyTestSession(t testing.TB) *TestSession {
@@ -297,7 +296,6 @@ func mockCompleteUserAuth(mock func(res http.ResponseWriter, req *http.Request) 
 
 func addAuthSource(t *testing.T, payload map[string]string) *auth.Source {
 	session := loginUser(t, "user1")
-	payload["_csrf"] = GetCSRF(t, session, "/admin/auths/new")
 	req := NewRequestWithValues(t, "POST", "/admin/auths/new", payload)
 	session.MakeRequest(t, req, http.StatusSeeOther)
 	return unittest.AssertExistsAndLoadBean(t, &auth.Source{Name: payload["name"]})
@@ -390,17 +388,12 @@ func loginUserWithPassword(t testing.TB, userName, password string) *TestSession
 
 func loginUserWithPasswordRemember(t testing.TB, userName, password string, rememberMe bool) *TestSession {
 	t.Helper()
-	req := NewRequest(t, "GET", "/user/login")
-	resp := MakeRequest(t, req, http.StatusOK)
-
-	doc := NewHTMLParser(t, resp.Body)
-	req = NewRequestWithValues(t, "POST", "/user/login", map[string]string{
-		"_csrf":     doc.GetCSRF(),
+	req := NewRequestWithValues(t, "POST", "/user/login", map[string]string{
 		"user_name": userName,
 		"password":  password,
 		"remember":  strconv.FormatBool(rememberMe),
 	})
-	resp = MakeRequest(t, req, http.StatusSeeOther)
+	resp := MakeRequest(t, req, http.StatusSeeOther)
 
 	ch := http.Header{}
 	ch.Add("Cookie", strings.Join(resp.Header()["Set-Cookie"], ";"))
@@ -415,51 +408,80 @@ func loginUserWithPasswordRemember(t testing.TB, userName, password string, reme
 	return session
 }
 
+func loginUserWithTOTP(t testing.TB, user *user_model.User) *TestSession {
+	t.Helper()
+	session := loginUser(t, user.Name)
+
+	twoFactor, err := auth.GetTwoFactorByUID(db.DefaultContext, user.ID)
+	require.NoError(t, err)
+
+	key := keying.TOTP
+	code, err := key.Decrypt(twoFactor.Secret, keying.ColumnAndID("secret", twoFactor.ID))
+	require.NoError(t, err)
+
+	passcode, err := totp.GenerateCode(string(code), time.Now())
+	require.NoError(t, err)
+
+	req := NewRequestWithValues(t, "POST", "/user/two_factor", map[string]string{
+		"passcode": passcode,
+	})
+	session.MakeRequest(t, req, http.StatusSeeOther)
+
+	return session
+}
+
+func loginUserMaybeTOTP(t testing.TB, user *user_model.User, useTOTP bool) *TestSession {
+	if useTOTP {
+		sess := loginUser(t, user.Name)
+		sess.EnrollTOTP(t)
+		sess.MakeRequest(t, NewRequest(t, "POST", "/user/logout"), http.StatusOK)
+
+		return loginUserWithTOTP(t, user)
+	}
+	return loginUser(t, user.Name)
+}
+
 // token has to be unique this counter take care of
-var tokenCounter int64
+var tokenCounter atomic.Int64
 
 // getTokenForLoggedInUser returns a token for a logged in user.
 // The scope is an optional list of snake_case strings like the frontend form fields,
 // but without the "scope_" prefix.
 func getTokenForLoggedInUser(t testing.TB, session *TestSession, scopes ...auth.AccessTokenScope) string {
 	t.Helper()
-	accessTokenName := fmt.Sprintf("api-testing-token-%d", atomic.AddInt64(&tokenCounter, 1))
+	accessTokenName := fmt.Sprintf("api-testing-token-%d", tokenCounter.Add(1))
 	createApplicationSettingsToken(t, session, accessTokenName, scopes...)
 	token := assertAccessToken(t, session)
 	return token
 }
 
 // createApplicationSettingsToken creates a token with given name and scopes for the currently logged in user.
-// It will assert CSRF token and redirect to the application settings page.
+// It will redirect to the application settings page.
 func createApplicationSettingsToken(t testing.TB, session *TestSession, name string, scopes ...auth.AccessTokenScope) {
-	req := NewRequest(t, "GET", "/user/settings/applications")
-	resp := session.MakeRequest(t, req, http.StatusOK)
-	var csrf string
-	for _, cookie := range resp.Result().Cookies() {
-		if cookie.Name != "_csrf" {
-			continue
-		}
-		csrf = cookie.Value
-		break
-	}
-	if csrf == "" {
-		doc := NewHTMLParser(t, resp.Body)
-		csrf = doc.GetCSRF()
-	}
-	assert.NotEmpty(t, csrf)
+	require.NotEmpty(t, scopes, "attempted to create access token with no scopes, which is not valid")
+
 	urlValues := url.Values{}
-	urlValues.Add("_csrf", csrf)
 	urlValues.Add("name", name)
+	publicOnly := false
 	for _, scope := range scopes {
-		urlValues.Add("scope", string(scope))
+		if scope == auth.AccessTokenScopePublicOnly {
+			publicOnly = true
+		} else {
+			urlValues.Add("scope", string(scope))
+		}
 	}
-	req = NewRequestWithURLValues(t, "POST", "/user/settings/applications", urlValues)
-	resp = session.MakeRequest(t, req, http.StatusSeeOther)
+	if publicOnly {
+		urlValues.Add("resource", "public-only")
+	} else {
+		urlValues.Add("resource", "all")
+	}
+	req := NewRequestWithURLValues(t, "POST", "/user/settings/applications/tokens/new", urlValues)
+	resp := session.MakeRequest(t, req, http.StatusSeeOther)
 
 	// Log the flash values on failure
 	if !assert.Equal(t, []string{"/user/settings/applications"}, resp.Result().Header["Location"]) {
 		for _, cookie := range resp.Result().Cookies() {
-			if cookie.Name != gitea_context.CookieNameFlash {
+			if cookie.Name != app_context.CookieNameFlash {
 				continue
 			}
 			flash, _ := url.ParseQuery(cookie.Value)
@@ -468,6 +490,41 @@ func createApplicationSettingsToken(t testing.TB, session *TestSession, name str
 			}
 		}
 	}
+}
+
+// TODO: currently this is implemented with direct DB access, which is somewhat against the grain for the integration
+// tests.  But fine-grained repo access tokens don't currently have an API or Web UI to create or manage them.  This
+// should be reimplemented when one of those alternatives lands.
+func createFineGrainedRepoAccessToken(t testing.TB, username string, scopes []auth.AccessTokenScope, repoIDs []int64) string {
+	user, err := user_model.GetUserByName(t.Context(), username)
+	require.NoError(t, err)
+
+	scopesStr := make([]string, len(scopes))
+	for i := range scopes {
+		scopesStr[i] = string(scopes[i])
+	}
+	scope, err := auth.AccessTokenScope(strings.Join(scopesStr, ",")).Normalize()
+	require.NoError(t, err)
+
+	token := &auth.AccessToken{
+		UID:              user.ID,
+		Name:             "integration test token",
+		Scope:            scope,
+		ResourceAllRepos: false,
+	}
+	err = auth.NewAccessToken(t.Context(), token)
+	require.NoError(t, err)
+
+	for _, id := range repoIDs {
+		resource := &auth.AccessTokenResourceRepo{
+			TokenID: token.ID,
+			RepoID:  id,
+		}
+		_, err = db.GetEngine(t.Context()).Insert(resource)
+		require.NoError(t, err)
+	}
+
+	return token.Token
 }
 
 // assertAccessToken retrieves a token from "/user/settings/applications" and returns it.
@@ -563,7 +620,7 @@ func MakeRequest(t testing.TB, rw *RequestWrapper, expectedStatus int) *httptest
 	}
 	testWebRoutes.ServeHTTP(recorder, req)
 	if expectedStatus != NoExpectedStatus {
-		if !assert.EqualValues(t, expectedStatus, recorder.Code, "Request: %s %s", req.Method, req.URL.String()) {
+		if !assert.Equal(t, expectedStatus, recorder.Code, "Request: %s %s", req.Method, req.URL.String()) {
 			logUnexpectedResponse(t, recorder)
 		}
 	}
@@ -576,7 +633,7 @@ func MakeRequestNilResponseRecorder(t testing.TB, rw *RequestWrapper, expectedSt
 	recorder := NewNilResponseRecorder()
 	testWebRoutes.ServeHTTP(recorder, req)
 	if expectedStatus != NoExpectedStatus {
-		if !assert.EqualValues(t, expectedStatus, recorder.Code,
+		if !assert.Equal(t, expectedStatus, recorder.Code,
 			"Request: %s %s", req.Method, req.URL.String()) {
 			logUnexpectedResponse(t, &recorder.ResponseRecorder)
 		}
@@ -590,7 +647,7 @@ func MakeRequestNilResponseHashSumRecorder(t testing.TB, rw *RequestWrapper, exp
 	recorder := NewNilResponseHashSumRecorder()
 	testWebRoutes.ServeHTTP(recorder, req)
 	if expectedStatus != NoExpectedStatus {
-		if !assert.EqualValues(t, expectedStatus, recorder.Code,
+		if !assert.Equal(t, expectedStatus, recorder.Code,
 			"Request: %s %s", req.Method, req.URL.String()) {
 			logUnexpectedResponse(t, &recorder.ResponseRecorder)
 		}
@@ -605,7 +662,7 @@ func logUnexpectedResponse(t testing.TB, recorder *httptest.ResponseRecorder) {
 	if len(respBytes) == 0 {
 		// log the content of the flash cookie
 		for _, cookie := range recorder.Result().Cookies() {
-			if cookie.Name != gitea_context.CookieNameFlash {
+			if cookie.Name != app_context.CookieNameFlash {
 				continue
 			}
 			flash, _ := url.ParseQuery(cookie.Value)
@@ -622,7 +679,7 @@ func logUnexpectedResponse(t testing.TB, recorder *httptest.ResponseRecorder) {
 		}
 
 		return
-	} else if len(respBytes) < 500 {
+	} else if len(respBytes) < 2048 {
 		// if body is short, just log the whole thing
 		t.Log("Response: ", string(respBytes))
 		return
@@ -651,7 +708,7 @@ func DecodeJSON(t testing.TB, resp *httptest.ResponseRecorder, v any) {
 func VerifyJSONSchema(t testing.TB, resp *httptest.ResponseRecorder, schemaFile string) {
 	t.Helper()
 
-	schemaFilePath := filepath.Join(filepath.Dir(setting.AppPath), "tests", "integration", "schemas", schemaFile)
+	schemaFilePath := filepath.Join(setting.AppWorkPath, "tests", "integration", "schemas", schemaFile)
 	_, schemaFileErr := os.Stat(schemaFilePath)
 	require.NoError(t, schemaFileErr)
 
@@ -666,36 +723,128 @@ func VerifyJSONSchema(t testing.TB, resp *httptest.ResponseRecorder, schemaFile 
 	require.NoError(t, schemaValidation)
 }
 
-// GetCSRF returns CSRF token from body
-// If it fails, it means the CSRF token is not found in the response body returned by the url with the given session.
-// In this case, you should find a better url to get it.
-func GetCSRF(t testing.TB, session *TestSession, urlStr string) string {
+func GetHTMLTitle(t testing.TB, session *TestSession, urlStr string) string {
 	t.Helper()
-	req := NewRequest(t, "GET", urlStr)
-	resp := session.MakeRequest(t, req, http.StatusOK)
-	doc := NewHTMLParser(t, resp.Body)
-	csrf := doc.GetCSRF()
-	require.NotEmpty(t, csrf)
-	return csrf
+
+	doc := getHTMLDoc(t, session, urlStr, http.StatusOK)
+	return doc.Find("head title").Text()
 }
 
-func GetHTMLTitle(t testing.TB, session *TestSession, urlStr string) string {
+// getHTMLDoc gets HTMLDoc from url with expected status. Use status
+// NoExpectedStatus to ignore status.
+func getHTMLDoc(t testing.TB, session *TestSession, urlStr string, expectedStatus int) *HTMLDoc {
 	t.Helper()
 
 	req := NewRequest(t, "GET", urlStr)
 	var resp *httptest.ResponseRecorder
 	if session == nil {
-		resp = MakeRequest(t, req, http.StatusOK)
+		resp = MakeRequest(t, req, expectedStatus)
 	} else {
-		resp = session.MakeRequest(t, req, http.StatusOK)
+		resp = session.MakeRequest(t, req, expectedStatus)
 	}
-
-	doc := NewHTMLParser(t, resp.Body)
-	return doc.Find("head title").Text()
+	return NewHTMLParser(t, resp.Body)
 }
 
 func SortMailerMessages(msgs []*mailer.Message) {
 	slices.SortFunc(msgs, func(a, b *mailer.Message) int {
 		return strings.Compare(b.To, a.To)
 	})
+}
+
+type AuthorizedIntegrationTester struct {
+	t                       *testing.T
+	authorizedIntegration   *auth.AuthorizedIntegration
+	jwtSigningKey           jwtx.SigningKey
+	testServer              *httptest.Server
+	resetHTTPClient         func()
+	resetAllowLocalNetworks func()
+}
+
+func newAITester(t *testing.T, setupAI ...func(*auth.AuthorizedIntegration)) *AuthorizedIntegrationTester {
+	ait := &AuthorizedIntegrationTester{
+		t: t,
+	}
+
+	var jwtSigningKey jwtx.SigningKey
+	keyPath := filepath.Join(t.TempDir(), "jwt-rsa-2048.priv")
+	jwtSigningKey, err := jwtx.InitAsymmetricSigningKey(keyPath, "RS256")
+	require.NoError(t, err)
+	ait.jwtSigningKey = jwtSigningKey
+
+	ait.testServer = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/actions/.well-known/openid-configuration" {
+			retval := map[string]any{
+				"issuer":                                ait.authorizedIntegration.Issuer,
+				"jwks_uri":                              fmt.Sprintf("%s/.keys", ait.authorizedIntegration.Issuer),
+				"id_token_signing_alg_values_supported": []string{"RS256"},
+			}
+			err := json.NewEncoder(w).Encode(retval)
+			require.NoError(t, err)
+			return
+		}
+		if r.URL.Path == "/api/actions/.keys" {
+			jwk, err := ait.jwtSigningKey.ToJWK()
+			require.NoError(t, err)
+			jwk["use"] = "sig"
+			retval := map[string]any{
+				"keys": []map[string]string{jwk},
+			}
+			_ = json.NewEncoder(w).Encode(retval) // no error checking -- some tests abort read
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	// trust TLS cert of our NewTLSServer  by inserting the test client for our test server in as the HTTP client to use
+	ait.resetHTTPClient = test.MockVariableValue(
+		&auth_service.GetAuthorizedIntegrationHTTPClient,
+		func() *http.Client {
+			return ait.testServer.Client()
+		})
+
+	ait.authorizedIntegration = &auth.AuthorizedIntegration{
+		UserID:   2,
+		Scope:    auth.AccessTokenScopeAll,
+		Issuer:   fmt.Sprintf("%s/api/actions", ait.testServer.URL),
+		Audience: fmt.Sprintf("https://forgejo.example.org/-/coolguy/authorized-integration/%s", gouuid.New().String()),
+		ClaimRules: &auth.ClaimRules{
+			Rules: []auth.ClaimRule{
+				{
+					Claim:      "custom-claim",
+					Comparison: auth.ClaimEqual,
+					Value:      "custom-claim-value",
+				},
+			},
+		},
+		ResourceAllRepos: true,
+		Name:             fmt.Sprintf("AI %s", t.Name()),
+		Description:      fmt.Sprintf("An Authorized Integration created for the test case %s.\nIt's pretty neat.", t.Name()),
+		UI:               auth.AuthorizedIntegrationUIGeneric,
+	}
+	for _, setup := range setupAI {
+		setup(ait.authorizedIntegration)
+	}
+	_, err = db.GetEngine(t.Context()).Insert(ait.authorizedIntegration)
+	require.NoError(t, err)
+
+	ait.resetAllowLocalNetworks = test.MockVariableValue(&setting.AuthorizedIntegration.AllowLocalNetworks, true)
+
+	return ait
+}
+
+func (ait *AuthorizedIntegrationTester) signedJWT() string {
+	claims := jwt.MapClaims{
+		"iss":          ait.authorizedIntegration.Issuer,
+		"aud":          ait.authorizedIntegration.Audience,
+		"custom-claim": "custom-claim-value",
+	}
+	signedToken, err := ait.jwtSigningKey.JWT(claims)
+	require.NoError(ait.t, err)
+	return signedToken
+}
+
+func (ait *AuthorizedIntegrationTester) close() {
+	ait.resetAllowLocalNetworks()
+	ait.resetHTTPClient()
+	ait.testServer.Close()
 }

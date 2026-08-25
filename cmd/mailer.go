@@ -4,16 +4,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"forgejo.org/modules/private"
 	"forgejo.org/modules/setting"
 
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
-func runSendMail(c *cli.Context) error {
-	ctx, cancel := installSignals()
+func runSendMail(ctx context.Context, c *cli.Command) error {
+	ctx, cancel := installSignals(ctx)
 	defer cancel()
 
 	setting.MustInstalled()
@@ -23,10 +24,10 @@ func runSendMail(c *cli.Context) error {
 	}
 
 	subject := c.String("title")
-	confirmSkiped := c.Bool("force")
+	confirmSkipped := c.Bool("force")
 	body := c.String("content")
 
-	if !confirmSkiped {
+	if !confirmSkipped {
 		if len(body) == 0 {
 			fmt.Print("warning: Content is empty")
 		}

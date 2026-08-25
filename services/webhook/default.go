@@ -36,8 +36,7 @@ func (dh defaultHandler) Type() webhook_module.HookType {
 
 func (dh defaultHandler) Icon(size int) template.HTML {
 	if dh.forgejo {
-		// forgejo.svg is not in web_src/svg/, so svg.RenderHTML does not work
-		return shared.ImgIcon("forgejo.svg", size)
+		return svg.RenderHTML("gitea-forgejo", size, "img")
 	}
 	return svg.RenderHTML("gitea-gitea", size, "img")
 }
@@ -123,11 +122,8 @@ func (defaultHandler) NewRequest(ctx context.Context, w *webhook_model.Webhook, 
 	case http.MethodPut:
 		switch w.Type {
 		case webhook_module.MATRIX: // used when t.Version == 1
-			txnID, err := getMatrixTxnID([]byte(payloadContent))
-			if err != nil {
-				return nil, nil, err
-			}
-			url := fmt.Sprintf("%s/%s", w.URL, url.PathEscape(txnID))
+			stateKey := getMatrixStateKey(t)
+			url := fmt.Sprintf("%s/%s", w.URL, stateKey)
 			req, err = http.NewRequest("PUT", url, strings.NewReader(payloadContent))
 			if err != nil {
 				return nil, nil, err

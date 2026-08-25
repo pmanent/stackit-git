@@ -266,9 +266,7 @@ func updateActivation(ctx context.Context, email *EmailAddress, activate bool) e
 	if err != nil {
 		return err
 	}
-	if user.Rands, err = GetUserSalt(); err != nil {
-		return err
-	}
+	user.Rands = GetUserSalt()
 	email.IsActivated = activate
 	if _, err := db.GetEngine(ctx).ID(email.ID).Cols("is_activated").Update(email); err != nil {
 		return err
@@ -325,12 +323,12 @@ func SearchEmails(ctx context.Context, opts *SearchEmailOptions) ([]*SearchEmail
 		))
 	}
 
-	if opts.IsPrimary.Has() {
-		cond = cond.And(builder.Eq{"email_address.is_primary": opts.IsPrimary.Value()})
+	if has, value := opts.IsPrimary.Get(); has {
+		cond = cond.And(builder.Eq{"email_address.is_primary": value})
 	}
 
-	if opts.IsActivated.Has() {
-		cond = cond.And(builder.Eq{"email_address.is_activated": opts.IsActivated.Value()})
+	if has, value := opts.IsActivated.Get(); has {
+		cond = cond.And(builder.Eq{"email_address.is_activated": value})
 	}
 
 	count, err := db.GetEngine(ctx).Join("INNER", "`user`", "`user`.id = email_address.uid").
@@ -403,9 +401,7 @@ func ActivateUserEmail(ctx context.Context, userID int64, email string, activate
 		// The user's activation state should be synchronized with the primary email
 		if user.IsActive != activate {
 			user.IsActive = activate
-			if user.Rands, err = GetUserSalt(); err != nil {
-				return fmt.Errorf("unable to generate salt: %w", err)
-			}
+			user.Rands = GetUserSalt()
 			if err = UpdateUserCols(ctx, user, "is_active", "rands"); err != nil {
 				return fmt.Errorf("unable to updateUserCols() for user ID: %d: %w", userID, err)
 			}

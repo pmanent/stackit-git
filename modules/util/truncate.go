@@ -47,10 +47,19 @@ func SplitTrimSpace(input, sep string) []string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 
 	var stringList []string
-	for _, s := range strings.Split(input, sep) {
+	for s := range strings.SplitSeq(input, sep) {
 		// trim leading and trailing space
 		stringList = append(stringList, strings.TrimSpace(s))
 	}
 
 	return stringList
+}
+
+// TruncateRunes returns a truncated string with given rune limit,
+// it returns input string if its rune length doesn't exceed the limit.
+func TruncateRunes(str string, limit int) string {
+	if utf8.RuneCountInString(str) < limit {
+		return str
+	}
+	return string([]rune(str)[:limit])
 }

@@ -196,11 +196,23 @@
   --color-orange-badge: #ea580c;
   --color-orange-badge-bg: #ea580c22;
   --color-orange-badge-hover-bg: #ea580c44;
-  --color-git: #f05133;
-  /* Icon colors (PR/Issue/...) */
-  --color-icon-green: #3fb950;
-  --color-icon-red: #f85149;
-  --color-icon-purple: #aa76ff;
+  /* Colors for thin elements: octicons, text, borders */
+  --thin-lightness: 0.68;
+  --regular-chroma: 0.19;
+  --color-thin-green: oklch(var(--thin-lightness) var(--regular-chroma) 145deg);
+  --color-thin-red: oklch(var(--thin-lightness) var(--regular-chroma) 27deg);
+  --color-thin-purple: oklch(var(--thin-lightness) var(--regular-chroma) 298deg);
+  --color-thin-orange: oklch(var(--thin-lightness) var(--regular-chroma) 41deg);
+
+  /* Ditto but when additional highlight is needed, e.g. on user interaction */
+  --thin-lightness-highlight: 0.75;
+  --color-thin-red-highlight: oklch(var(--thin-lightness-highlight) var(--regular-chroma) 27deg);
+
+  /* Background colors. WIP, currently only covers danger buttons */
+  --bg-lightness: 0.26;
+  --bg-chroma: 0.05;
+  --color-danger-bg: oklch(var(--bg-lightness) var(--bg-chroma) 27deg);
+
   /* target-based colors */
   --color-body: var(--steel-800);
   --color-box-header: var(--steel-700);
@@ -228,6 +240,8 @@
   --color-active: var(--steel-650);
   --color-menu: var(--steel-700);
   --color-card: var(--steel-700);
+  --fancy-card-bg: var(--steel-650);
+  --fancy-card-border: var(--steel-600);
   --color-markup-table-row: #ffffff06;
   --color-markup-code-block: var(--steel-800);
   --color-markup-code-inline: var(--steel-850);
@@ -250,7 +264,6 @@
   --color-tooltip-bg: #000000f0;
   --color-nav-bg: var(--steel-900);
   --color-nav-hover-bg: var(--steel-600);
-  --color-nav-text: var(--color-text);
   --color-secondary-nav-bg: var(--color-body);
   --color-label-text: #fff;
   --color-label-bg: var(--steel-600);
@@ -262,9 +275,17 @@
   --color-highlight-fg: var(--color-primary-light-4);
   --color-highlight-bg: var(--color-primary-alpha-20);
   --color-overlay-backdrop: #080808c0;
+  --color-selection-bg: var(--steel-100);
+  --color-selection-fg: var(--color-pure-black);
   /* pattern colors for image diff */
   --checkerboard-color-1: #474747;
   --checkerboard-color-2: #313131;
+  --color-indicator-offline: #a1a1aa;
+  --color-indicator-offline-20: #a1a1aa1a;
+  --color-indicator-idle: #16a34a;
+  --color-indicator-idle-20: #16a34a1a;
+  --color-indicator-active: #2185d0;
+  --color-indicator-active-20: #2185d033;
   accent-color: var(--color-accent);
   color-scheme: dark;
 }
@@ -308,11 +329,6 @@ i.grey.icon.icon.icon.icon {
 .ui.primary.labels .label {
   background-color: var(--color-primary-light-3) !important;
 }
-.repository.view.issue .comment-list .code-comment + .code-comment {
-  margin: 1.25rem 0 !important;
-  padding-top: 1.25rem !important;
-  border-top-color: var(--steel-650) !important;
-}
 .ui.labeled.icon.buttons > .button > .icon,
 .ui.labeled.icon.button > .icon {
   background-color: var(--color-light) !important;
@@ -320,7 +336,7 @@ i.grey.icon.icon.icon.icon {
 #review-box .review-comments-counter {
   background-color: var(--color-shadow) !important;
   color: var(--color-white) !important;
-  margin-left: 0.5em;
+  margin-inline-start: 0.5em;
 }
 .ui.basic.labels .primary.label,
 .ui.ui.ui.basic.primary.label {
@@ -328,10 +344,6 @@ i.grey.icon.icon.icon.icon {
 }
 .ui.yellow.label.pending-label {
   color: var(--color-warning-text) !important;
-}
-::selection {
-  background: var(--steel-100) !important;
-  color: var(--color-pure-black) !important;
 }
 strong.attention-important, svg.attention-important {
   color: var(--color-violet-light);

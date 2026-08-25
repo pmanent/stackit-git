@@ -1,15 +1,16 @@
 // Copyright 2023, 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-package forgefed
+package forgefed_test
 
 import (
-	"fmt"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"forgejo.org/modules/forgefed"
 	"forgejo.org/modules/validation"
 
 	ap "github.com/go-ap/activitypub"
@@ -26,7 +27,7 @@ func Test_NewForgeUndoLike(t *testing.T) {
 		`"object":"https://codeberg.org/api/v1/activitypub/repository-id/1"}}`)
 
 	startTime, _ := time.Parse("2006-Jan-02", "2024-Mar-27")
-	sut, err := NewForgeUndoLike(actorIRI, objectIRI, startTime)
+	sut, err := forgefed.NewForgeUndoLike(actorIRI, objectIRI, startTime)
 	if err != nil {
 		t.Errorf("unexpected error: %v\n", err)
 	}
@@ -46,24 +47,24 @@ func Test_NewForgeUndoLike(t *testing.T) {
 
 func Test_UndoLikeMarshalJSON(t *testing.T) {
 	type testPair struct {
-		item    ForgeUndoLike
+		item    forgefed.ForgeUndoLike
 		want    []byte
 		wantErr error
 	}
 
 	startTime, _ := time.Parse("2006-Jan-02", "2024-Mar-27")
-	like, _ := NewForgeLike("https://repo.prod.meissa.de/api/v1/activitypub/user-id/1", "https://codeberg.org/api/v1/activitypub/repository-id/1", startTime)
+	like, _ := forgefed.NewForgeLike("https://repo.prod.meissa.de/api/v1/activitypub/user-id/1", "https://codeberg.org/api/v1/activitypub/repository-id/1", startTime)
 	tests := map[string]testPair{
 		"empty": {
-			item: ForgeUndoLike{},
+			item: forgefed.ForgeUndoLike{},
 			want: nil,
 		},
 		"valid": {
-			item: ForgeUndoLike{
+			item: forgefed.ForgeUndoLike{
 				Activity: ap.Activity{
 					StartTime: startTime,
 					Actor:     ap.IRI("https://repo.prod.meissa.de/api/v1/activitypub/user-id/1"),
-					Type:      "Undo",
+					Type:      ap.UndoType,
 					Object:    like,
 				},
 			},
@@ -95,12 +96,12 @@ func Test_UndoLikeMarshalJSON(t *testing.T) {
 func Test_UndoLikeUnmarshalJSON(t *testing.T) {
 	type testPair struct {
 		item    []byte
-		want    *ForgeUndoLike
+		want    *forgefed.ForgeUndoLike
 		wantErr error
 	}
 
 	startTime, _ := time.Parse("2006-Jan-02", "2024-Mar-27")
-	like, _ := NewForgeLike("https://repo.prod.meissa.de/api/v1/activitypub/user-id/1", "https://codeberg.org/api/v1/activitypub/repository-id/1", startTime)
+	like, _ := forgefed.NewForgeLike("https://repo.prod.meissa.de/api/v1/activitypub/user-id/1", "https://codeberg.org/api/v1/activitypub/repository-id/1", startTime)
 
 	tests := map[string]testPair{
 		"valid": {
@@ -112,11 +113,11 @@ func Test_UndoLikeUnmarshalJSON(t *testing.T) {
 				`"startTime":"2024-03-27T00:00:00Z",` +
 				`"actor":"https://repo.prod.meissa.de/api/v1/activitypub/user-id/1",` +
 				`"object":"https://codeberg.org/api/v1/activitypub/repository-id/1"}}`),
-			want: &ForgeUndoLike{
+			want: &forgefed.ForgeUndoLike{
 				Activity: ap.Activity{
 					StartTime: startTime,
 					Actor:     ap.IRI("https://repo.prod.meissa.de/api/v1/activitypub/user-id/1"),
-					Type:      "Undo",
+					Type:      ap.UndoType,
 					Object:    like,
 				},
 			},
@@ -125,13 +126,13 @@ func Test_UndoLikeUnmarshalJSON(t *testing.T) {
 		"invalid": {
 			item:    []byte(`invalid JSON`),
 			want:    nil,
-			wantErr: fmt.Errorf("cannot parse JSON"),
+			wantErr: errors.New("cannot parse JSON"),
 		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := new(ForgeUndoLike)
+			got := new(forgefed.ForgeUndoLike)
 			err := got.UnmarshalJSON(test.item)
 			if test.wantErr != nil {
 				if err == nil {
@@ -151,7 +152,7 @@ func Test_UndoLikeUnmarshalJSON(t *testing.T) {
 }
 
 func TestActivityValidationUndo(t *testing.T) {
-	sut := new(ForgeUndoLike)
+	sut := new(forgefed.ForgeUndoLike)
 
 	_ = sut.UnmarshalJSON([]byte(`
 		{"type":"Undo",
@@ -173,7 +174,7 @@ func TestActivityValidationUndo(t *testing.T) {
 		  "startTime":"2024-03-27T00:00:00Z",
 		  "actor":"https://repo.prod.meissa.de/api/v1/activitypub/user-id/1",
 		  "object":"https://codeberg.org/api/v1/activitypub/repository-id/1"}}`))
-	if err := validateAndCheckError(sut, "type should not be empty"); err != nil {
+	if err := validateAndCheckError(sut, "Value type should not be empty"); err != nil {
 		t.Error(*err)
 	}
 

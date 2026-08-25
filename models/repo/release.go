@@ -77,7 +77,7 @@ type Release struct {
 	Target               string
 	TargetBehind         string `xorm:"-"` // to handle non-existing or empty target
 	Title                string
-	Sha1                 string `xorm:"VARCHAR(64)"`
+	Sha1                 string `xorm:"INDEX VARCHAR(64)"`
 	HideArchiveLinks     bool   `xorm:"NOT NULL DEFAULT false"`
 	NumCommits           int64
 	NumCommitsBehind     int64                            `xorm:"-"`
@@ -180,7 +180,11 @@ func (r *Release) HTMLURL() string {
 }
 
 // APIUploadURL the api url to upload assets to a release. release must have attributes loaded
-func (r *Release) APIUploadURL() string {
+// If `githubFormat` is true, then `{?name,label}` is added to match the Github API.
+func (r *Release) APIUploadURL(githubFormat bool) string {
+	if githubFormat {
+		return r.APIURL() + "/assets{?name,label}"
+	}
 	return r.APIURL() + "/assets"
 }
 
@@ -220,18 +224,14 @@ func UpdateRelease(ctx context.Context, rel *Release) error {
 }
 
 // AddReleaseAttachments adds a release attachments
-func AddReleaseAttachments(ctx context.Context, releaseID int64, attachmentUUIDs []string) (err error) {
-	// Check attachments
-	attachments, err := GetAttachmentsByUUIDs(ctx, attachmentUUIDs)
+func AddReleaseAttachments(ctx context.Context, release *Release, attachmentUUIDs []string) (err error) {
+	attachments, err := FindRepoAttachmentsByUUID(ctx, release.RepoID, attachmentUUIDs, FindAttachmentOptions{})
 	if err != nil {
-		return fmt.Errorf("GetAttachmentsByUUIDs [uuids: %v]: %w", attachmentUUIDs, err)
+		return fmt.Errorf("FindRepoAttachmentsByUUID[uuids=%q,repoID=%d]: %w", attachmentUUIDs, release.RepoID, err)
 	}
 
 	for i := range attachments {
-		if attachments[i].ReleaseID != 0 {
-			return util.NewPermissionDeniedErrorf("release permission denied")
-		}
-		attachments[i].ReleaseID = releaseID
+		attachments[i].ReleaseID = release.ID
 		// No assign value could be 0, so ignore AllCols().
 		if _, err = db.GetEngine(ctx).ID(attachments[i].ID).Update(attachments[i]); err != nil {
 			return fmt.Errorf("update attachment [%d]: %w", attachments[i].ID, err)
@@ -308,14 +308,14 @@ func (opts FindReleasesOptions) ToConds() builder.Cond {
 	if len(opts.TagNames) > 0 {
 		cond = cond.And(builder.In("tag_name", opts.TagNames))
 	}
-	if opts.IsPreRelease.Has() {
-		cond = cond.And(builder.Eq{"is_prerelease": opts.IsPreRelease.Value()})
+	if has, value := opts.IsPreRelease.Get(); has {
+		cond = cond.And(builder.Eq{"is_prerelease": value})
 	}
-	if opts.IsDraft.Has() {
-		cond = cond.And(builder.Eq{"is_draft": opts.IsDraft.Value()})
+	if has, value := opts.IsDraft.Get(); has {
+		cond = cond.And(builder.Eq{"is_draft": value})
 	}
-	if opts.HasSha1.Has() {
-		if opts.HasSha1.Value() {
+	if has, value := opts.HasSha1.Get(); has {
+		if value {
 			cond = cond.And(builder.Neq{"sha1": ""})
 		} else {
 			cond = cond.And(builder.Eq{"sha1": ""})
@@ -608,6 +608,7 @@ func InsertReleases(ctx context.Context, rels ...*Release) error {
 		if len(rel.Attachments) > 0 {
 			for i := range rel.Attachments {
 				rel.Attachments[i].ReleaseID = rel.ID
+				rel.Attachments[i].RepoID = rel.RepoID
 			}
 
 			if _, err := sess.NoAutoTime().Insert(rel.Attachments); err != nil {
@@ -617,4 +618,18 @@ func InsertReleases(ctx context.Context, rels ...*Release) error {
 	}
 
 	return committer.Commit()
+}
+
+func FindTagsByCommitIDs(ctx context.Context, repoID int64, commitIDs ...string) (map[string][]*Release, error) {
+	releases := make([]*Release, 0, len(commitIDs))
+	if err := db.GetEngine(ctx).Where("repo_id=?", repoID).
+		In("sha1", commitIDs).
+		Find(&releases); err != nil {
+		return nil, err
+	}
+	res := make(map[string][]*Release, len(releases))
+	for _, r := range releases {
+		res[r.Sha1] = append(res[r.Sha1], r)
+	}
+	return res, nil
 }

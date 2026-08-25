@@ -6,6 +6,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"forgejo.org/models/db"
@@ -62,7 +63,7 @@ func DeleteRepository(ctx context.Context, doer *user_model.User, repo *repo_mod
 		notify_service.DeleteRepository(ctx, doer, repo)
 	}
 
-	return DeleteRepositoryDirectly(ctx, doer, repo.ID)
+	return DeleteRepositoryDirectly(ctx, repo.ID, DeleteRepositoryOpts{})
 }
 
 // PushCreateRepo creates a repository when a new repository is pushed to an appropriate namespace
@@ -72,10 +73,10 @@ func PushCreateRepo(ctx context.Context, authUser, owner *user_model.User, repoN
 			if ok, err := organization.CanCreateOrgRepo(ctx, owner.ID, authUser.ID); err != nil {
 				return nil, err
 			} else if !ok {
-				return nil, fmt.Errorf("cannot push-create repository for org")
+				return nil, errors.New("cannot push-create repository for org")
 			}
 		} else if authUser.ID != owner.ID {
-			return nil, fmt.Errorf("cannot push-create repository for another user")
+			return nil, errors.New("cannot push-create repository for another user")
 		}
 	}
 
@@ -116,6 +117,60 @@ func UpdateRepository(ctx context.Context, repo *repo_model.Repository, visibili
 	}
 
 	return committer.Commit()
+}
+
+// ConvertMirrorToNormalRepo converts a mirror to a normal repo
+func ConvertMirrorToNormalRepo(ctx context.Context, repo *repo_model.Repository) error {
+	repo.IsMirror = false
+
+	if _, err := CleanUpMigrateInfo(ctx, repo); err != nil {
+		return err
+	}
+
+	if err := repo_model.DeleteMirrorByRepoID(ctx, repo.ID); err != nil {
+		return err
+	}
+
+	// Mirrors are created without certain units (e.g. Actions, PullRequests).
+	// Add back any units from DefaultRepoUnits that the mirror is missing.
+	repo.Units = nil // force reload from DB to get accurate current state
+	if err := repo.LoadUnits(ctx); err != nil {
+		return fmt.Errorf("LoadUnits: %w", err)
+	}
+	existingTypes := make(map[unit.Type]struct{}, len(repo.Units))
+	for _, u := range repo.Units {
+		existingTypes[u.Type] = struct{}{}
+	}
+	var missingUnits []repo_model.RepoUnit
+	for _, tp := range unit.DefaultRepoUnits {
+		if _, ok := existingTypes[tp]; ok {
+			continue
+		}
+		u := repo_model.RepoUnit{RepoID: repo.ID, Type: tp}
+		switch tp {
+		case unit.TypeIssues:
+			u.Config = &repo_model.IssuesConfig{
+				EnableTimetracker:                setting.Service.DefaultEnableTimetracking,
+				AllowOnlyContributorsToTrackTime: setting.Service.DefaultAllowOnlyContributorsToTrackTime,
+				EnableDependencies:               setting.Service.DefaultEnableDependencies,
+			}
+		case unit.TypePullRequests:
+			u.Config = &repo_model.PullRequestsConfig{
+				AllowMerge: true, AllowRebase: true, AllowRebaseMerge: true, AllowSquash: true, AllowFastForwardOnly: true,
+				DefaultMergeStyle:  repo_model.MergeStyle(setting.Repository.PullRequest.DefaultMergeStyle),
+				DefaultUpdateStyle: repo_model.UpdateStyle(setting.Repository.PullRequest.DefaultUpdateStyle),
+				AllowRebaseUpdate:  true,
+			}
+		}
+		missingUnits = append(missingUnits, u)
+	}
+	if len(missingUnits) > 0 {
+		if err := UpdateRepositoryUnits(ctx, repo, missingUnits, nil); err != nil {
+			return fmt.Errorf("UpdateRepositoryUnits: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // LinkedRepository returns the linked repo if any

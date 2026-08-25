@@ -5,6 +5,7 @@
 package git
 
 import (
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -21,16 +22,12 @@ type TreeEntry struct {
 	entryMode EntryMode
 	name      string
 
-	size     int64
-	sized    bool
-	fullName string
+	size  int64
+	sized bool
 }
 
 // Name returns the name of the entry
 func (te *TreeEntry) Name() string {
-	if te.fullName != "" {
-		return te.fullName
-	}
 	return te.name
 }
 
@@ -68,8 +65,8 @@ func (te *TreeEntry) Size() int64 {
 	return te.size
 }
 
-// IsSubModule if the entry is a sub module
-func (te *TreeEntry) IsSubModule() bool {
+// IsSubmodule if the entry is a submodule
+func (te *TreeEntry) IsSubmodule() bool {
 	return te.entryMode == EntryModeCommit
 }
 
@@ -116,32 +113,37 @@ func (te *TreeEntry) Type() string {
 	}
 }
 
-// FollowLink returns the entry pointed to by a symlink
-func (te *TreeEntry) FollowLink() (*TreeEntry, string, error) {
+// LinkTarget returns the target of the symlink as string.
+func (te *TreeEntry) LinkTarget() (string, error) {
 	if !te.IsLink() {
-		return nil, "", ErrBadLink{te.Name(), "not a symlink"}
+		return "", ErrBadLink{te.Name(), "not a symlink"}
 	}
 
+	const symlinkLimit = 4096 // according to git config core.longpaths https://stackoverflow.com/a/22575737
+	blob := te.Blob()
+	if blob.Size() > symlinkLimit {
+		return "", ErrBadLink{te.Name(), "symlink too large"}
+	}
+
+	rc, size, err := blob.NewTruncatedReader(symlinkLimit)
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+
+	buf := make([]byte, int(size))
+	_, err = io.ReadFull(rc, buf)
+	return string(buf), err
+}
+
+// FollowLink returns the entry pointed to by a symlink
+func (te *TreeEntry) FollowLink() (*TreeEntry, error) {
 	// read the link
-	r, err := te.Blob().DataAsync()
+	lnk, err := te.LinkTarget()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = r.Close()
-		}
-	}()
-	buf := make([]byte, te.Size())
-	_, err = io.ReadFull(r, buf)
-	if err != nil {
-		return nil, "", err
-	}
-	_ = r.Close()
-	closed = true
 
-	lnk := string(buf)
 	t := te.ptree
 
 	// traverse up directories
@@ -150,35 +152,33 @@ func (te *TreeEntry) FollowLink() (*TreeEntry, string, error) {
 	}
 
 	if t == nil {
-		return nil, "", ErrBadLink{te.Name(), "points outside of repo"}
+		return nil, ErrBadLink{te.Name(), "points outside of repo"}
 	}
 
 	target, err := t.GetTreeEntryByPath(lnk)
 	if err != nil {
 		if IsErrNotExist(err) {
-			return nil, "", ErrBadLink{te.Name(), "broken link"}
+			return nil, ErrBadLink{te.Name(), "broken link"}
 		}
-		return nil, "", err
+		return nil, err
 	}
-	return target, lnk, nil
+	return target, nil
 }
 
 // FollowLinks returns the entry ultimately pointed to by a symlink
-func (te *TreeEntry) FollowLinks() (*TreeEntry, string, error) {
+func (te *TreeEntry) FollowLinks() (*TreeEntry, error) {
 	if !te.IsLink() {
-		return nil, "", ErrBadLink{te.Name(), "not a symlink"}
+		return nil, ErrBadLink{te.Name(), "not a symlink"}
 	}
 	entry := te
-	entryLink := ""
-	for i := 0; i < 999; i++ {
+	for range 999 {
 		if entry.IsLink() {
-			next, link, err := entry.FollowLink()
-			entryLink = link
+			next, err := entry.FollowLink()
 			if err != nil {
-				return nil, "", err
+				return nil, err
 			}
 			if next.ID == entry.ID {
-				return nil, "", ErrBadLink{
+				return nil, ErrBadLink{
 					entry.Name(),
 					"recursive link",
 				}
@@ -189,12 +189,12 @@ func (te *TreeEntry) FollowLinks() (*TreeEntry, string, error) {
 		}
 	}
 	if entry.IsLink() {
-		return nil, "", ErrBadLink{
+		return nil, ErrBadLink{
 			te.Name(),
 			"too many levels of symbolic links",
 		}
 	}
-	return entry, entryLink, nil
+	return entry, nil
 }
 
 // returns the Tree pointed to by this TreeEntry, or nil if this is not a tree
@@ -207,9 +207,45 @@ func (te *TreeEntry) Tree() *Tree {
 	return t
 }
 
+// returns the calulcated path within the tree of this TreeEntry, or an error if it can be determined
+func (te *TreeEntry) Path() (string, error) {
+	targetPath := te.Name()
+	parentTree := te.ptree
+	if parentTree == nil {
+		return "", fmt.Errorf("couldn't find the parent tree of the entry")
+	}
+
+	prevID := parentTree.ID
+	parentTree = parentTree.ptree
+	for parentTree != nil {
+		entries, err := parentTree.ListEntries()
+		if err != nil {
+			return "", fmt.Errorf("couldn't list entries: %v", err)
+		}
+
+		var matchingEntry *TreeEntry
+		for _, entry := range entries {
+			if entry.ID == prevID {
+				matchingEntry = entry
+				break
+			}
+		}
+
+		if matchingEntry == nil {
+			return "", fmt.Errorf("this shouldn't happen: couldn't find entry (ID: %s) in tree (ID: %s)", prevID, parentTree.ID)
+		}
+
+		targetPath = matchingEntry.name + "/" + targetPath
+		prevID = parentTree.ID
+		parentTree = parentTree.ptree
+	}
+
+	return targetPath, nil
+}
+
 // GetSubJumpablePathName return the full path of subdirectory jumpable ( contains only one directory )
 func (te *TreeEntry) GetSubJumpablePathName() string {
-	if te.IsSubModule() || !te.IsDir() {
+	if te.IsSubmodule() || !te.IsDir() {
 		return ""
 	}
 	tree, err := te.ptree.SubTree(te.Name())
@@ -236,7 +272,7 @@ type customSortableEntries struct {
 
 var sorter = []func(t1, t2 *TreeEntry, cmp func(s1, s2 string) bool) bool{
 	func(t1, t2 *TreeEntry, cmp func(s1, s2 string) bool) bool {
-		return (t1.IsDir() || t1.IsSubModule()) && !t2.IsDir() && !t2.IsSubModule()
+		return (t1.IsDir() || t1.IsSubmodule()) && !t2.IsDir() && !t2.IsSubmodule()
 	},
 	func(t1, t2 *TreeEntry, cmp func(s1, s2 string) bool) bool {
 		return cmp(t1.Name(), t2.Name())

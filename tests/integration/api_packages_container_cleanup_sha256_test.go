@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPackagesContainerCleanupSHA256(t *testing.T) {
+func TestPackageContainerCleanupSHA256(t *testing.T) {
 	defer tests.PrepareTestEnv(t, 1)()
 	defer test.MockVariableValue(&setting.Packages.Storage.Type, setting.LocalStorageType)()
 	defer test.MockVariableValue(&packages_container.SHA256BatchSize, 1)()
@@ -53,7 +53,7 @@ func TestPackagesContainerCleanupSHA256(t *testing.T) {
 		for range expected {
 			filtered = append(filtered, true)
 		}
-		assert.EqualValues(t, filtered, logFiltered, expected)
+		assert.Equal(t, filtered, logFiltered, expected)
 	}
 
 	userToken := ""

@@ -1,4 +1,8 @@
 name: Integration tests for the release process
+enable-email-notifications: true
+
+env:
+  FORGEJO_VERSION: 11.0.15 # renovate: datasource=docker depName=data.forgejo.org/forgejo/forgejo
 
 on:
   push:
@@ -25,14 +29,14 @@ jobs:
     if: vars.ROLE == 'forgejo-coding'
     runs-on: lxc-bookworm
     steps:
-      - uses: https://data.forgejo.org/actions/checkout@v4
+      - uses: https://data.forgejo.org/actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - id: forgejo
-        uses: https://data.forgejo.org/actions/setup-forgejo@v3.0.1
+        uses: https://data.forgejo.org/actions/setup-forgejo@bb44e99c35dc50942a2a7b346a3de7c6c33c83f9 # v3.2.3
         with:
           user: root
           password: admin1234
-          image-version: 1.21
+          image-version: ${{ env.FORGEJO_VERSION }}
           lxc-ip-prefix: 10.0.9
 
       - name: publish the forgejo release

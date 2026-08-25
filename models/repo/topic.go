@@ -20,6 +20,9 @@ func init() {
 	db.RegisterModel(new(RepoTopic))
 }
 
+// MaxTopicsPerRepo caps the amount of topics allowed per repository.
+const MaxTopicsPerRepo = 25
+
 var topicPattern = regexp.MustCompile(`^[a-z0-9][-.a-z0-9]*$`)
 
 // Topic represents a topic of repositories
@@ -164,7 +167,7 @@ func FindTopics(ctx context.Context, opts *FindTopicOptions) ([]*Topic, int64, e
 	orderBy := "topic.repo_count DESC"
 	if opts.RepoID > 0 {
 		sess.Join("INNER", "repo_topic", "repo_topic.topic_id = topic.id")
-		orderBy = "topic.name" // when render topics for a repo, it's better to sort them by name, to get consistent result
+		orderBy = "topic.name" // When rendering topics for a repo, it's better to sort them by name to get consistent results
 	}
 	if opts.PageSize > 0 {
 		sess = db.SetSessionPagination(sess, opts)

@@ -16,7 +16,9 @@ import (
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/test"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/assert"
@@ -76,7 +78,7 @@ func TestAPIAdminDeleteUnauthorizedKey(t *testing.T) {
 	var newPublicKey api.PublicKey
 	DecodeJSON(t, resp, &newPublicKey)
 
-	token = getUserToken(t, normalUsername)
+	token = getUserToken(t, normalUsername, auth_model.AccessTokenScopeWriteAdmin)
 	req = NewRequestf(t, "DELETE", "/api/v1/admin/users/%s/keys/%d", adminUsername, newPublicKey.ID).
 		AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusForbidden)
@@ -95,6 +97,43 @@ func TestAPISudoUser(t *testing.T) {
 	DecodeJSON(t, resp, &user)
 
 	assert.Equal(t, normalUsername, user.UserName)
+}
+
+// Variation of TestAPISudoUser which verifies the usability of `sudo` with various access token restrictions.
+func TestAPISudoUserAuthorizationReducer(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	adminUsername := "user1"
+	normalUsername := "user2"
+	session := loginUser(t, adminUsername)
+
+	test := func(t *testing.T, token string, expectedStatus int) {
+		req := NewRequest(t, "GET", fmt.Sprintf("/api/v1/user?sudo=%s", normalUsername)).
+			AddTokenAuth(token)
+		resp := MakeRequest(t, req, expectedStatus)
+		if expectedStatus == http.StatusOK {
+			var user api.User
+			DecodeJSON(t, resp, &user)
+			assert.Equal(t, normalUsername, user.UserName)
+		}
+	}
+
+	t.Run("all access token", func(t *testing.T) {
+		allToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeReadUser)
+		test(t, allToken, http.StatusOK)
+	})
+
+	t.Run("public-only access token", func(t *testing.T) {
+		publicOnlyToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopePublicOnly, auth_model.AccessTokenScopeReadUser)
+		test(t, publicOnlyToken, http.StatusForbidden)
+	})
+
+	t.Run("specific repo access token", func(t *testing.T) {
+		repo2OnlyToken := createFineGrainedRepoAccessToken(t, adminUsername,
+			[]auth_model.AccessTokenScope{auth_model.AccessTokenScopeReadUser},
+			[]int64{2},
+		)
+		test(t, repo2OnlyToken, http.StatusForbidden)
+	})
 }
 
 func TestAPISudoUserForbidden(t *testing.T) {
@@ -126,8 +165,42 @@ func TestAPIListUsers(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
-	numberOfUsers := unittest.GetCount(t, &user_model.User{}, "type = 0")
+	numberOfUsers := unittest.GetCount(t, &user_model.User{}, "type = 0") +
+		unittest.GetCount(t, &user_model.User{}, "type = 5")
+
 	assert.Len(t, users, numberOfUsers)
+}
+
+func TestAPIListUsersNo2FA(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	adminUsername := "user1"
+	token := getUserToken(t, adminUsername, auth_model.AccessTokenScopeReadAdmin)
+
+	req := NewRequest(t, "GET", "/api/v1/admin/users?is_2fa_enabled=0").
+		AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+	total := resp.Header().Get("X-Total-Count")
+
+	numberOfUsers := "28"
+
+	assert.Equal(t, numberOfUsers, total)
+}
+
+func TestAPIListUsers2FA(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	adminUsername := "user1"
+	token := getUserToken(t, adminUsername, auth_model.AccessTokenScopeReadAdmin)
+
+	req := NewRequest(t, "GET", "/api/v1/admin/users?is_2fa_enabled=1").
+		AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+	total := resp.Header().Get("X-Total-Count")
+
+	numberOfUsers := "2"
+
+	assert.Equal(t, numberOfUsers, total)
 }
 
 func TestAPIListUsersNotLoggedIn(t *testing.T) {
@@ -139,7 +212,7 @@ func TestAPIListUsersNotLoggedIn(t *testing.T) {
 func TestAPIListUsersNonAdmin(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	nonAdminUsername := "user2"
-	token := getUserToken(t, nonAdminUsername)
+	token := getUserToken(t, nonAdminUsername, auth_model.AccessTokenScopeReadAdmin)
 	req := NewRequest(t, "GET", "/api/v1/admin/users").
 		AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusForbidden)
@@ -211,7 +284,7 @@ func TestAPIEditUser(t *testing.T) {
 
 	errMap := make(map[string]any)
 	json.Unmarshal(resp.Body.Bytes(), &errMap)
-	assert.EqualValues(t, "e-mail invalid [email: ]", errMap["message"].(string))
+	assert.Equal(t, "e-mail invalid [email: ]", errMap["message"].(string))
 
 	user2 = unittest.AssertExistsAndLoadBean(t, &user_model.User{LoginName: "user2"})
 	assert.False(t, user2.IsRestricted)
@@ -222,6 +295,28 @@ func TestAPIEditUser(t *testing.T) {
 	MakeRequest(t, req, http.StatusOK)
 	user2 = unittest.AssertExistsAndLoadBean(t, &user_model.User{LoginName: "user2"})
 	assert.True(t, user2.IsRestricted)
+
+	// Test hide_email functionality
+	user2 = unittest.AssertExistsAndLoadBean(t, &user_model.User{LoginName: "user2"})
+	assert.True(t, user2.KeepEmailPrivate) // user2 starts with keep_email_private: true in fixtures
+
+	// Test setting hide_email to false
+	bFalse := false
+	req = NewRequestWithJSON(t, "PATCH", urlStr, api.EditUserOption{
+		HideEmail: &bFalse,
+	}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusOK)
+	user2 = unittest.AssertExistsAndLoadBean(t, &user_model.User{LoginName: "user2"})
+	assert.False(t, user2.KeepEmailPrivate)
+
+	// Test setting hide_email back to true
+	bTrue = true
+	req = NewRequestWithJSON(t, "PATCH", urlStr, api.EditUserOption{
+		HideEmail: &bTrue,
+	}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusOK)
+	user2 = unittest.AssertExistsAndLoadBean(t, &user_model.User{LoginName: "user2"})
+	assert.True(t, user2.KeepEmailPrivate)
 }
 
 func TestAPIEditUserWithLoginName(t *testing.T) {
@@ -333,11 +428,11 @@ func TestAPICron(t *testing.T) {
 			AddTokenAuth(token)
 		resp := MakeRequest(t, req, http.StatusOK)
 
-		assert.Equal(t, "28", resp.Header().Get("X-Total-Count"))
+		assert.Equal(t, "30", resp.Header().Get("X-Total-Count"))
 
 		var crons []api.Cron
 		DecodeJSON(t, resp, &crons)
-		assert.Len(t, crons, 28)
+		assert.Len(t, crons, 30)
 	})
 
 	t.Run("Execute", func(t *testing.T) {
@@ -417,4 +512,188 @@ func TestAPIEditUser_NotAllowedEmailDomain(t *testing.T) {
 		Email: &originalEmail,
 	}).AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusOK)
+}
+
+func TestAPIUser_Website(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	session := loginUser(t, "user1")
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteAdmin)
+	user := forgery.CreateUser(t, nil)
+	urlStr := fmt.Sprintf("/api/v1/admin/users/%s", user.Name)
+
+	t.Run("an HTTPS website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should work
+		website := "https://codeberg.org"
+		req := NewRequestWithJSON(t, "PATCH", urlStr, &api.EditUserOption{
+			Website: &website,
+		}).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+
+		var apiUser api.User
+		DecodeJSON(t, resp, &apiUser)
+
+		assert.Equal(t, website, apiUser.Website)
+	})
+
+	t.Run("an H3 website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should not work
+		website := "h3://codeberg.org"
+		req := NewRequestWithJSON(t, "PATCH", urlStr, &api.EditUserOption{
+			Website: &website,
+		}).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusUnprocessableEntity)
+
+		var apiErr api.APIError
+		DecodeJSON(t, resp, &apiErr)
+
+		assert.Equal(t, "[Website]: Url", apiErr.Message)
+	})
+
+	t.Run("an H3 website under custom schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		defer test.MockProtect(&setting.Service.ValidSiteURLSchemes)()
+		setting.Service.ValidSiteURLSchemes = append(setting.Service.ValidSiteURLSchemes, "h3")
+
+		// changing website should work
+		website := "h3://codeberg.org"
+		req := NewRequestWithJSON(t, "PATCH", urlStr, &api.EditUserOption{
+			Website: &website,
+		}).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+
+		var apiUser api.User
+		DecodeJSON(t, resp, &apiUser)
+
+		assert.Equal(t, website, apiUser.Website)
+	})
+}
+
+func TestAPIAdminListUserEmails(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	adminUsername := "user1"
+	token := getUserToken(t, adminUsername, auth_model.AccessTokenScopeWriteAdmin)
+	urlStr := fmt.Sprintf("/api/v1/admin/users/%s/emails", "user2")
+
+	req := NewRequest(t, "GET", urlStr).AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+
+	var emails []*api.Email
+	DecodeJSON(t, resp, &emails)
+
+	// user2 should have at least one email (primary)
+	assert.GreaterOrEqual(t, len(emails), 1)
+
+	// Check that we get the expected email structure
+	for _, email := range emails {
+		assert.NotEmpty(t, email.Email)
+	}
+}
+
+func TestAPIAdminDeleteUserEmails(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	adminUsername := "user1"
+	token := getUserToken(t, adminUsername, auth_model.AccessTokenScopeWriteAdmin)
+	urlStr := fmt.Sprintf("/api/v1/admin/users/%s/emails", "user2")
+
+	// Test deleting a non-primary email
+	emailToDelete := "user2-2@example.com"
+	deleteReq := NewRequestWithJSON(t, "DELETE", urlStr, api.DeleteEmailOption{
+		Emails: []string{emailToDelete},
+	}).AddTokenAuth(token)
+	MakeRequest(t, deleteReq, http.StatusNoContent)
+
+	// Verify the email was deleted by listing emails again
+	req := NewRequest(t, "GET", urlStr).AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+
+	var remainingEmails []*api.Email
+	DecodeJSON(t, resp, &remainingEmails)
+
+	// The deleted email should not be in the list
+	for _, email := range remainingEmails {
+		assert.NotEqual(t, emailToDelete, email.Email)
+	}
+}
+
+func TestAPIAdminDeleteUserEmailsPrimary(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	adminUsername := "user1"
+	token := getUserToken(t, adminUsername, auth_model.AccessTokenScopeWriteAdmin)
+	urlStr := fmt.Sprintf("/api/v1/admin/users/%s/emails", "user2")
+
+	// Test deleting the primary email - this should fail
+	deleteReq := NewRequestWithJSON(t, "DELETE", urlStr, api.DeleteEmailOption{
+		Emails: []string{"user2@example.com"},
+	}).AddTokenAuth(token)
+	resp := MakeRequest(t, deleteReq, http.StatusUnprocessableEntity)
+
+	// Verify we get an error response
+	var errorResp map[string]any
+	DecodeJSON(t, resp, &errorResp)
+	assert.Contains(t, errorResp, "message")
+}
+
+func TestAPIAdminDeleteUserEmailsMultiple(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	adminUsername := "user1"
+	token := getUserToken(t, adminUsername, auth_model.AccessTokenScopeWriteAdmin)
+	urlStr := fmt.Sprintf("/api/v1/admin/users/%s/emails", "user1")
+
+	// Verify initial state: user1 should have 3 emails
+	req := NewRequest(t, "GET", urlStr).AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+	var initialEmails []*api.Email
+	DecodeJSON(t, resp, &initialEmails)
+	assert.Len(t, initialEmails, 3)
+
+	// Test deleting multiple emails in one API call
+	emailsToDelete := []string{"user1-2@example.com", "user1-3@example.com"}
+	deleteReq := NewRequestWithJSON(t, "DELETE", urlStr, api.DeleteEmailOption{
+		Emails: emailsToDelete,
+	}).AddTokenAuth(token)
+	MakeRequest(t, deleteReq, http.StatusNoContent)
+
+	// Verify final state: only primary email should remain
+	req = NewRequest(t, "GET", urlStr).AddTokenAuth(token)
+	resp = MakeRequest(t, req, http.StatusOK)
+	var remainingEmails []*api.Email
+	DecodeJSON(t, resp, &remainingEmails)
+	assert.Len(t, remainingEmails, 1, "Only 1 email should remain after deletion")
+	assert.Equal(t, "user1@example.com", remainingEmails[0].Email, "Only primary email should remain")
+	assert.True(t, remainingEmails[0].Primary, "Remaining email should be primary")
+}
+
+func TestAPIAdminListHooksPagination(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	token := getUserToken(t, "user1", auth_model.AccessTokenScopeWriteAdmin)
+
+	for i := range 20 {
+		req := NewRequestWithJSON(t, "POST", "/api/v1/admin/hooks", api.CreateHookOption{
+			Config: api.CreateHookOptionConfig{
+				"url":               fmt.Sprintf("http://localhost/hook-%d", i),
+				"content_type":      "json",
+				"is_system_webhook": "true",
+			},
+			Type: "forgejo",
+		}).AddTokenAuth(token)
+		MakeRequest(t, req, http.StatusCreated)
+	}
+
+	req := NewRequest(t, "GET", "/api/v1/admin/hooks?page=1&limit=10").AddTokenAuth(token)
+	resp := MakeRequest(t, req, http.StatusOK)
+	var hooksList []api.Hook
+	t.Logf("got response %s", resp.Body)
+	DecodeJSON(t, resp, &hooksList)
+	assert.Len(t, hooksList, 10, "page length should equal `limit` param")
+	assert.Equal(t, "20", resp.Header().Get("X-Total-Count"))
 }

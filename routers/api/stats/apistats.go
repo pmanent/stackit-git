@@ -28,7 +28,7 @@ func Add(value float64, httpStatus int) {
 	defer mutex.Unlock()
 
 	// --- Update value statistics (min, max, avg) ---
-	old_count := float64(accumulator.Count)
+	oldCount := float64(accumulator.Count)
 	accumulator.Count++
 
 	if accumulator.Count == 1 {
@@ -42,7 +42,7 @@ func Add(value float64, httpStatus int) {
 		if value > accumulator.Max {
 			accumulator.Max = value
 		}
-		accumulator.Avg = (accumulator.Avg*old_count + value) / float64(accumulator.Count)
+		accumulator.Avg = (accumulator.Avg*oldCount + value) / float64(accumulator.Count)
 	}
 
 	// --- Update HTTP status counts ---

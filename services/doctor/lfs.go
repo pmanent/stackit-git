@@ -5,7 +5,7 @@ package doctor
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"forgejo.org/modules/log"
@@ -27,7 +27,7 @@ func init() {
 
 func garbageCollectLFSCheck(ctx context.Context, logger log.Logger, autofix bool) error {
 	if !setting.LFS.StartServer {
-		return fmt.Errorf("LFS support is disabled")
+		return errors.New("LFS support is disabled")
 	}
 
 	if err := repository.GarbageCollectLFSMetaObjects(ctx, repository.GarbageCollectLFSMetaObjectsOptions{
@@ -44,9 +44,9 @@ func garbageCollectLFSCheck(ctx context.Context, logger log.Logger, autofix bool
 		OlderThan: time.Now().Add(-24 * time.Hour * 7),
 		// We don't set the UpdatedLessRecentlyThan because we want to do a full GC
 	}); err != nil {
-		logger.Error("Couldn't garabage collect LFS objects: %v", err)
+		logger.Error("Couldn't garbage collect LFS objects: %v", err)
 		return err
 	}
 
-	return checkStorage(&checkStorageOptions{LFS: true})(ctx, logger, autofix)
+	return CheckStorage(&CheckStorageOptions{LFS: true})(ctx, logger, autofix)
 }

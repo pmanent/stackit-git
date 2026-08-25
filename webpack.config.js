@@ -2,10 +2,9 @@ import fastGlob from 'fast-glob';
 import wrapAnsi from 'wrap-ansi';
 import {init as licenseChecker} from 'license-checker-rseidelsohn';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
-import MonacoWebpackPlugin from 'monaco-editor-webpack-plugin';
 import {VueLoaderPlugin} from 'vue-loader';
 import EsBuildLoader from 'esbuild-loader';
-import {parse, dirname} from 'node:path';
+import {parse} from 'node:path';
 import webpack from 'webpack';
 import {fileURLToPath} from 'node:url';
 import {readFileSync, writeFileSync} from 'node:fs';
@@ -16,10 +15,10 @@ import tailwindcssNesting from 'tailwindcss/nesting/index.js';
 import postcssNesting from 'postcss-nesting';
 
 const {EsbuildPlugin} = EsBuildLoader;
-const {SourceMapDevToolPlugin, DefinePlugin} = webpack;
+const {SourceMapDevToolPlugin, DefinePlugin, ProgressPlugin} = webpack;
 const formatLicenseText = (licenseText) => wrapAnsi(licenseText || '', 80).trim();
 
-const baseDirectory = dirname(fileURLToPath(new URL(import.meta.url)));
+const baseDirectory = import.meta.dirname;
 const glob = (pattern) => fastGlob.sync(pattern, {
   cwd: baseDirectory,
   absolute: true,
@@ -30,15 +29,15 @@ for (const path of glob('web_src/css/themes/*.css')) {
   themes[parse(path).name] = [path];
 }
 
-/*
-  >>> @@@ STACKIT CODE @@@
-*/
+//
+// >>> @@@ STACKIT CODE @@@
+//
 const customThemes = {};
 for (const path of glob('custom/public/assets/css/themes/*.css')) {
   customThemes[parse(path).name] = [path];
 }
-console.log("Custom themes found:");
-console.log(customThemes);
+console.info('Custom themes found:');
+console.info(customThemes);
 
 const customCSS = {};
 const customCSSList = [];
@@ -46,11 +45,11 @@ for (const path of glob('custom/public/assets/css/*.css')) {
   customCSS[parse(path).name] = [path];
   customCSSList.push(path);
 }
-console.log("Custom CSS found:");
-console.log(customCSS);
-/*
-  >>> @@@ STACKIT CODE @@@
-*/
+console.info('Custom CSS found:');
+console.info(customCSS);
+//
+// >>> @@@ STACKIT CODE @@@
+//
 
 const isProduction = env.NODE_ENV !== 'development';
 
@@ -102,12 +101,13 @@ if ('ENABLE_SOURCEMAP' in env) {
 // define which web components we use for Vue to not interpret them as Vue components
 const webComponents = new Set([
   // our own, in web_src/js/webcomponents
+  'i18n',
   'overflow-menu',
   'origin-url',
   'absolute-date',
+  'relative-time',
   // from dependencies
   'markdown-toolbar',
-  'relative-time',
   'text-expander',
 ]);
 
@@ -138,13 +138,13 @@ export default {
       fileURLToPath(new URL('node_modules/easymde/dist/easymde.min.css', import.meta.url)),
       fileURLToPath(new URL('web_src/fomantic/build/semantic.css', import.meta.url)),
       fileURLToPath(new URL('web_src/css/index.css', import.meta.url)),
-      /*
-        >>> @@@ STACKIT CODE @@@
-      */
-      ...(customCSSList.map(v => fileURLToPath(new URL(v, import.meta.url)))),
-      /*
-        >>> @@@ STACKIT CODE @@@
-      */
+      //
+      // >>> @@@ STACKIT CODE @@@
+      //
+      ...(customCSSList.map((v) => fileURLToPath(new URL(v, import.meta.url)))),
+      //
+      // >>> @@@ STACKIT CODE @@@
+      //
     ],
     webcomponents: [
       fileURLToPath(new URL('web_src/js/webcomponents/index.js', import.meta.url)),
@@ -161,27 +161,26 @@ export default {
       fileURLToPath(new URL('web_src/js/features/eventsource.sharedworker.js', import.meta.url)),
     ],
     ...(!isProduction && {
-      devtest: [
-        fileURLToPath(new URL('web_src/js/standalone/devtest.js', import.meta.url)),
-        fileURLToPath(new URL('web_src/css/standalone/devtest.css', import.meta.url)),
+      demo: [
+        fileURLToPath(new URL('web_src/js/standalone/demo.js', import.meta.url)),
+        fileURLToPath(new URL('web_src/css/standalone/demo.css', import.meta.url)),
       ],
     }),
     ...themes,
-    /*
-      >>> @@@ STACKIT CODE @@@
-    */
+    //
+    // >>> @@@ STACKIT CODE @@@
+    //
     ...customThemes,
-    /*
-      >>> @@@ STACKIT CODE @@@
-    */
+    //
+    // >>> @@@ STACKIT CODE @@@
+    //
   },
   devtool: false,
   output: {
     path: fileURLToPath(new URL('public/assets', import.meta.url)),
     filename: () => 'js/[name].js',
-    chunkFilename: ({chunk}) => {
-      const language = (/monaco.*languages?_.+?_(.+?)_/.exec(chunk.id) || [])[1];
-      return `js/${language ? `monaco-language-${language.toLowerCase()}` : `[name]`}.[contenthash:8].js`;
+    chunkFilename: () => {
+      return `js/[name].[contenthash:8].js`;
     },
   },
   optimization: {
@@ -269,8 +268,11 @@ export default {
     ],
   },
   plugins: [
+    new ProgressPlugin({
+      activeModules: true,
+    }),
     new webpack.ProvidePlugin({ // for htmx extensions
-      htmx: 'htmx.org',
+      htmx: ['htmx.org', 'default'],
     }),
     new DefinePlugin({
       __VUE_OPTIONS_API__: true, // at the moment, many Vue components still use the Vue Options API
@@ -285,9 +287,6 @@ export default {
     sourceMaps !== 'false' && new SourceMapDevToolPlugin({
       filename: '[file].[contenthash:8].map',
       ...(sourceMaps === 'reduced' && {include: /^js\/index\.js$/}),
-    }),
-    new MonacoWebpackPlugin({
-      filename: 'js/monaco-[name].[contenthash:8].worker.js',
     }),
   ],
   performance: {
@@ -315,7 +314,6 @@ export default {
     colors: true,
     entrypoints: false,
     excludeAssets: [
-      /^js\/monaco-language-.+\.js$/,
       !isProduction && /^licenses.txt$/,
     ].filter(Boolean),
     groupAssetsByChunk: false,

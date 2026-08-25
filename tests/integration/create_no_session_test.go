@@ -6,12 +6,12 @@ package integration
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 	"forgejo.org/routers"
 	"forgejo.org/tests"
 
@@ -30,8 +30,9 @@ func getSessionID(t *testing.T, resp *httptest.ResponseRecorder) string {
 			found = true
 		}
 	}
-	assert.True(t, found)
-	assert.NotEmpty(t, sessionID)
+	if found {
+		assert.NotEmpty(t, sessionID)
+	}
 	return sessionID
 }
 
@@ -39,30 +40,13 @@ func sessionFile(tmpDir, sessionID string) string {
 	return filepath.Join(tmpDir, sessionID[0:1], sessionID[1:2], sessionID)
 }
 
-func sessionFileExist(t *testing.T, tmpDir, sessionID string) bool {
-	sessionFile := sessionFile(tmpDir, sessionID)
-	_, err := os.Lstat(sessionFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		require.NoError(t, err)
-	}
-	return true
-}
-
 func TestSessionFileCreation(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-
-	oldSessionConfig := setting.SessionConfig.ProviderConfig
-	defer func() {
-		setting.SessionConfig.ProviderConfig = oldSessionConfig
-		testWebRoutes = routers.NormalRoutes()
-	}()
+	defer test.MockProtect(&setting.SessionConfig.ProviderConfig)()
+	defer test.MockProtect(&testWebRoutes)()
 
 	var config session.Options
-
-	err := json.Unmarshal([]byte(oldSessionConfig), &config)
+	err := json.Unmarshal([]byte(setting.SessionConfig.ProviderConfig), &config)
 	require.NoError(t, err)
 
 	config.Provider = "file"
@@ -86,7 +70,7 @@ func TestSessionFileCreation(t *testing.T) {
 		sessionID := getSessionID(t, resp)
 
 		// We're not logged in so there should be no session
-		assert.False(t, sessionFileExist(t, tmpDir, sessionID))
+		assert.Empty(t, sessionID)
 	})
 	t.Run("CreateSessionOnLogin", func(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
@@ -96,11 +80,9 @@ func TestSessionFileCreation(t *testing.T) {
 		sessionID := getSessionID(t, resp)
 
 		// We're not logged in so there should be no session
-		assert.False(t, sessionFileExist(t, tmpDir, sessionID))
+		assert.Empty(t, sessionID)
 
-		doc := NewHTMLParser(t, resp.Body)
 		req = NewRequestWithValues(t, "POST", "/user/login", map[string]string{
-			"_csrf":     doc.GetCSRF(),
 			"user_name": "user2",
 			"password":  userPassword,
 		})

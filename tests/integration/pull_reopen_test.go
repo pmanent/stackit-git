@@ -20,27 +20,28 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/translation"
-	gitea_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	issue_service "forgejo.org/services/issue"
 	pull_service "forgejo.org/services/pull"
 	repo_service "forgejo.org/services/repository"
 	files_service "forgejo.org/services/repository/files"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPullrequestReopen(t *testing.T) {
-	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 		org26 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 26})
 
-		// Create an base repository.
-		baseRepo, _, f := tests.CreateDeclarativeRepo(t, user2, "reopen-base",
-			[]unit_model.Type{unit_model.TypePullRequests}, nil, nil,
-		)
-		defer f()
+		// Create an base repository with an initial commit.
+		baseRepo := forgery.CreateRepository(t, user2, &forgery.CreateRepositoryOptions{
+			Files: forgery.FilesInit{},
+		})
+		forgery.EnableRepoUnits(t, baseRepo, unit_model.TypePullRequests)
 
 		// Create a new branch on the base branch, so it can be deleted later.
 		_, err := files_service.ChangeRepoFiles(git.DefaultContext, baseRepo, user2, &files_service.ChangeRepoFilesOptions{
@@ -137,7 +138,6 @@ func TestPullrequestReopen(t *testing.T) {
 
 			link := fmt.Sprintf("%s/pulls/%d/comments", baseRepo.FullName(), issue.Index)
 			req := NewRequestWithValues(t, "POST", link, map[string]string{
-				"_csrf":  GetCSRF(t, session, fmt.Sprintf("%s/pulls/%d", baseRepo.FullName(), issue.Index)),
 				"status": "reopen",
 			})
 			return session.MakeRequest(t, req, expectedStatus)
@@ -147,12 +147,10 @@ func TestPullrequestReopen(t *testing.T) {
 			t.Helper()
 
 			link := fmt.Sprintf("/%s/branches", repoName)
-			req := NewRequestWithValues(t, "POST", fmt.Sprintf("%s/restore?branch_id=%d&name=%s", link, branchID, branchName), map[string]string{
-				"_csrf": GetCSRF(t, session, link),
-			})
+			req := NewRequest(t, "POST", fmt.Sprintf("%s/restore?branch_id=%d&name=%s", link, branchID, branchName))
 			session.MakeRequest(t, req, http.StatusOK)
 
-			flashCookie := session.GetCookie(gitea_context.CookieNameFlash)
+			flashCookie := session.GetCookie(app_context.CookieNameFlash)
 			assert.NotNil(t, flashCookie)
 			assert.Contains(t, flashCookie.Value, "success%3DBranch%2B%2522"+branchName+"%2522%2Bhas%2Bbeen%2Brestored.")
 		}
@@ -161,12 +159,10 @@ func TestPullrequestReopen(t *testing.T) {
 			t.Helper()
 
 			link := fmt.Sprintf("/%s/branches", repoName)
-			req := NewRequestWithValues(t, "POST", fmt.Sprintf("%s/delete?name=%s", link, branchName), map[string]string{
-				"_csrf": GetCSRF(t, session, link),
-			})
+			req := NewRequest(t, "POST", fmt.Sprintf("%s/delete?name=%s", link, branchName))
 			session.MakeRequest(t, req, http.StatusOK)
 
-			flashCookie := session.GetCookie(gitea_context.CookieNameFlash)
+			flashCookie := session.GetCookie(app_context.CookieNameFlash)
 			assert.NotNil(t, flashCookie)
 			assert.Contains(t, flashCookie.Value, "success%3DBranch%2B%2522"+branchName+"%2522%2Bhas%2Bbeen%2Bdeleted.")
 		}

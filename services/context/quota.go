@@ -41,7 +41,7 @@ func QuotaGroupAssignmentAPI() func(ctx *APIContext) {
 			ctx.NotFound()
 			return
 		}
-		ctx.QuotaGroup = group
+		ctx.quotaGroup = group
 	}
 }
 
@@ -58,13 +58,13 @@ func QuotaRuleAssignmentAPI() func(ctx *APIContext) {
 			ctx.NotFound()
 			return
 		}
-		ctx.QuotaRule = rule
+		ctx.quotaRule = rule
 	}
 }
 
 // ctx.CheckQuota checks whether the user in question is within quota limits (web context)
 func (ctx *Context) CheckQuota(subject quota_model.LimitSubject, userID int64, username string) bool {
-	ok, err := checkQuota(ctx.Base.originCtx, subject, userID, username, func(userID int64, username string) {
+	ok, err := checkQuota(ctx.originCtx, subject, userID, username, func(userID int64, username string) {
 		showHTML := false
 		for _, part := range ctx.Req.Header["Accept"] {
 			if strings.Contains(part, "text/html") {
@@ -91,7 +91,7 @@ func (ctx *Context) CheckQuota(subject quota_model.LimitSubject, userID int64, u
 
 // ctx.CheckQuota checks whether the user in question is within quota limits (API context)
 func (ctx *APIContext) CheckQuota(subject quota_model.LimitSubject, userID int64, username string) bool {
-	ok, err := checkQuota(ctx.Base.originCtx, subject, userID, username, func(userID int64, username string) {
+	ok, err := checkQuota(ctx.originCtx, subject, userID, username, func(userID int64, username string) {
 		ctx.JSON(http.StatusRequestEntityTooLarge, APIQuotaExceeded{
 			Message:  "quota exceeded",
 			UserID:   userID,
@@ -168,11 +168,11 @@ func (ctx *Context) GetQuotaTargetUserName(target QuotaTargetType) string {
 func (ctx *APIContext) GetQuotaTargetUserID(target QuotaTargetType) int64 {
 	switch target {
 	case QuotaTargetUser:
-		return ctx.Doer.ID
+		return ctx.Doer().ID
 	case QuotaTargetRepo:
-		return ctx.Repo.Repository.OwnerID
+		return ctx.Repo().Repository.OwnerID
 	case QuotaTargetOrg:
-		return ctx.Org.Organization.ID
+		return ctx.Org().Organization.ID
 	default:
 		return 0
 	}
@@ -181,11 +181,11 @@ func (ctx *APIContext) GetQuotaTargetUserID(target QuotaTargetType) int64 {
 func (ctx *APIContext) GetQuotaTargetUserName(target QuotaTargetType) string {
 	switch target {
 	case QuotaTargetUser:
-		return ctx.Doer.Name
+		return ctx.Doer().Name
 	case QuotaTargetRepo:
-		return ctx.Repo.Repository.Owner.Name
+		return ctx.Repo().Repository.Owner.Name
 	case QuotaTargetOrg:
-		return ctx.Org.Organization.Name
+		return ctx.Org().Organization.Name
 	default:
 		return ""
 	}

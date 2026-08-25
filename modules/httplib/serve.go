@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"path"
@@ -35,6 +36,8 @@ type ServeHeaderOptions struct {
 	Filename           string
 	CacheDuration      time.Duration // defaults to 5 minutes
 	LastModified       time.Time
+	AdditionalHeaders  http.Header
+	RedirectStatusCode int
 }
 
 // ServeSetHeaders sets necessary content serve headers
@@ -82,6 +85,10 @@ func ServeSetHeaders(w http.ResponseWriter, opts *ServeHeaderOptions) {
 		// http.TimeFormat required a UTC time, refer to https://pkg.go.dev/net/http#TimeFormat
 		header.Set("Last-Modified", opts.LastModified.UTC().Format(http.TimeFormat))
 	}
+
+	if opts.AdditionalHeaders != nil {
+		maps.Copy(header, opts.AdditionalHeaders)
+	}
 }
 
 // ServeData download file from io.Reader
@@ -91,7 +98,7 @@ func setServeHeadersByFile(r *http.Request, w http.ResponseWriter, filePath stri
 		Filename: path.Base(filePath),
 	}
 
-	sniffedType := typesniffer.DetectContentType(mineBuf)
+	sniffedType := typesniffer.DetectContentType(mineBuf, opts.Filename)
 
 	// the "render" parameter came from year 2016: 638dd24c, it doesn't have clear meaning, so I think it could be removed later
 	isPlain := sniffedType.IsText() || r.FormValue("render") != ""

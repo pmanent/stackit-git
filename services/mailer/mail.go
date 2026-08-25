@@ -297,6 +297,11 @@ func composeIssueCommentMessages(ctx *mailCommentContext, lang string, recipient
 		"Language":        locale.Language(),
 		"CanReply":        setting.IncomingEmail.Enabled && commentType != issues_model.CommentTypePullRequestPush,
 	}
+	if closeIssueByCommit, ok := ctx.ActionAdditionalData.(ActionCloseIssueByCommit); ok {
+		mailMeta["CloseIssueByCommit"] = closeIssueByCommit.CommitID
+	} else {
+		mailMeta["CloseIssueByCommit"] = ""
+	}
 
 	var mailSubject bytes.Buffer
 	if err := subjectTemplates.ExecuteTemplate(&mailSubject, tplName, mailMeta); err == nil {
@@ -337,16 +342,13 @@ func composeIssueCommentMessages(ctx *mailCommentContext, lang string, recipient
 
 	msgs := make([]*Message, 0, len(recipients))
 	for _, recipient := range recipients {
-
 		// >>> @@@ STACKIT CODE @@@
 		// User Story 53019
 		mailMeta["Recipient"] = recipient.Name
-
 		if err := bodyTemplates.ExecuteTemplate(&mailBody, tplName, mailMeta); err != nil {
 			log.Error("ExecuteTemplate [%s]: %v", tplName+"/body", err)
 		}
 		// <<< @@@ STACKIT CODE @@@
-
 		msg := NewMessageFrom(
 			recipient.Email,
 			fromDisplayName(ctx.Doer),
@@ -357,7 +359,6 @@ func composeIssueCommentMessages(ctx *mailCommentContext, lang string, recipient
 		// >>> @@@ STACKIT CODE @@@
 		// User Story 53019
 		mailBody.Reset()
-
 		// <<< @@@ STACKIT CODE @@@
 		msg.Info = fmt.Sprintf("Subject: %s, %s", subject, info)
 
@@ -591,7 +592,7 @@ func fromDisplayName(u *user_model.User) string {
 	if setting.MailService.FromDisplayNameFormatTemplate != nil {
 		var ctx bytes.Buffer
 		err := setting.MailService.FromDisplayNameFormatTemplate.Execute(&ctx, map[string]any{
-			"DisplayName": u.DisplayName(),
+			"DisplayName": u.GetDisplayName(),
 			"AppName":     setting.AppName,
 			"Domain":      setting.Domain,
 		})
@@ -701,19 +702,14 @@ func SendRemovedSecurityKey(ctx context.Context, u *user_model.User, securityKey
 	}
 	locale := translation.NewLocale(u.Language)
 
-	hasWebAuthn, err := auth_model.HasWebAuthnRegistrationsByUID(ctx, u.ID)
-	if err != nil {
-		return err
-	}
-	hasTOTP, err := auth_model.HasTOTPByUID(ctx, u.ID)
+	hasTwoFactor, err := auth_model.HasTwoFactorByUID(ctx, u.ID)
 	if err != nil {
 		return err
 	}
 
 	data := map[string]any{
 		"locale":          locale,
-		"HasWebAuthn":     hasWebAuthn,
-		"HasTOTP":         hasTOTP,
+		"HasTwoFactor":    hasTwoFactor,
 		"SecurityKeyName": securityKeyName,
 		"DisplayName":     u.DisplayName(),
 		"Username":        u.Name,

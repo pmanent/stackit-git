@@ -54,7 +54,7 @@ func TestExtractMetadata(t *testing.T) {
 		var meta IssueTemplate
 		body, err := ExtractMetadata(fmt.Sprintf("%s\n%s\n%s", sepTest, frontTest, sepTest), &meta)
 		require.NoError(t, err)
-		assert.Equal(t, "", body)
+		assert.Empty(t, body)
 		assert.Equal(t, metaTest, meta)
 		assert.True(t, meta.Valid())
 	})
@@ -63,7 +63,7 @@ func TestExtractMetadata(t *testing.T) {
 func TestExtractMetadataBytes(t *testing.T) {
 	t.Run("ValidFrontAndBody", func(t *testing.T) {
 		var meta IssueTemplate
-		body, err := ExtractMetadataBytes([]byte(fmt.Sprintf("%s\n%s\n%s\n%s", sepTest, frontTest, sepTest, bodyTest)), &meta)
+		body, err := ExtractMetadataBytes(fmt.Appendf(nil, "%s\n%s\n%s\n%s", sepTest, frontTest, sepTest, bodyTest), &meta)
 		require.NoError(t, err)
 		assert.Equal(t, bodyTest, string(body))
 		assert.Equal(t, metaTest, meta)
@@ -72,21 +72,21 @@ func TestExtractMetadataBytes(t *testing.T) {
 
 	t.Run("NoFirstSeparator", func(t *testing.T) {
 		var meta IssueTemplate
-		_, err := ExtractMetadataBytes([]byte(fmt.Sprintf("%s\n%s\n%s", frontTest, sepTest, bodyTest)), &meta)
+		_, err := ExtractMetadataBytes(fmt.Appendf(nil, "%s\n%s\n%s", frontTest, sepTest, bodyTest), &meta)
 		require.Error(t, err)
 	})
 
 	t.Run("NoLastSeparator", func(t *testing.T) {
 		var meta IssueTemplate
-		_, err := ExtractMetadataBytes([]byte(fmt.Sprintf("%s\n%s\n%s", sepTest, frontTest, bodyTest)), &meta)
+		_, err := ExtractMetadataBytes(fmt.Appendf(nil, "%s\n%s\n%s", sepTest, frontTest, bodyTest), &meta)
 		require.Error(t, err)
 	})
 
 	t.Run("NoBody", func(t *testing.T) {
 		var meta IssueTemplate
-		body, err := ExtractMetadataBytes([]byte(fmt.Sprintf("%s\n%s\n%s", sepTest, frontTest, sepTest)), &meta)
+		body, err := ExtractMetadataBytes(fmt.Appendf(nil, "%s\n%s\n%s", sepTest, frontTest, sepTest), &meta)
 		require.NoError(t, err)
-		assert.Equal(t, "", string(body))
+		assert.Empty(t, string(body))
 		assert.Equal(t, metaTest, meta)
 		assert.True(t, meta.Valid())
 	})

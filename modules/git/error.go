@@ -4,11 +4,10 @@
 package git
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 
+	"forgejo.org/modules/process"
 	"forgejo.org/modules/util"
 )
 
@@ -120,10 +119,7 @@ func (err *ErrPushRejected) GenerateMessage() {
 		err.Message = ""
 		return
 	}
-	for {
-		if len(err.StdErr) <= i+8 {
-			break
-		}
+	for len(err.StdErr) > i+8 {
 		if err.StdErr[i:i+8] != "remote: " {
 			break
 		}
@@ -157,9 +153,8 @@ func (err *ErrMoreThanOne) Error() string {
 	return fmt.Sprintf("ErrMoreThanOne Error: %v: %s\n%s", err.Err, err.StdErr, err.StdOut)
 }
 
+// Check if an error from running a git command is either context cancellation, or a process exit which appears to be
+// caused by context cancellation.
 func IsErrCanceledOrKilled(err error) bool {
-	// When "cancel()" a git command's context, the returned error of "Run()" could be one of them:
-	// - context.Canceled
-	// - *exec.ExitError: "signal: killed"
-	return err != nil && (errors.Is(err, context.Canceled) || err.Error() == "signal: killed")
+	return process.IsErrCancellableCommandCancellation(err)
 }

@@ -15,7 +15,7 @@ type CreateUserOption struct {
 	FullName string `json:"full_name" binding:"MaxSize(100)"`
 	// required: true
 	// swagger:strfmt email
-	Email                        string  `json:"email" binding:"Required;Email;MaxSize(254)"`
+	Email                        string  `json:"email" binding:"Required;EmailForAdmin;MaxSize(254)"`
 	Password                     string  `json:"password" binding:"MaxSize(255)"`
 	MustChangePassword           *bool   `json:"must_change_password"`
 	SendNotify                   bool    `json:"send_notify"`
@@ -39,7 +39,7 @@ type EditUserOption struct {
 	FullName                     *string `json:"full_name" binding:"MaxSize(100)"`
 	Password                     string  `json:"password" binding:"MaxSize(255)"`
 	MustChangePassword           *bool   `json:"must_change_password"`
-	Website                      *string `json:"website" binding:"OmitEmpty;ValidUrl;MaxSize(255)"`
+	Website                      *string `json:"website" binding:"OmitEmpty;ValidSiteUrl;MaxSize(255)"`
 	Location                     *string `json:"location" binding:"MaxSize(50)"`
 	Pronouns                     *string `json:"pronouns" binding:"MaxSize(50)"`
 	Description                  *string `json:"description" binding:"MaxSize(255)"`
@@ -52,5 +52,6 @@ type EditUserOption struct {
 	AllowCreateOrganization      *bool   `json:"allow_create_organization"`
 	Restricted                   *bool   `json:"restricted"`
 	Visibility                   string  `json:"visibility" binding:"In(,public,limited,private)"`
-	EmailNotificationsPreference *string `json:"email_notifications_preference" binding:"In(,enabled,disabled,onmention)"`
+	HideEmail                    *bool   `json:"hide_email"`
+	EmailNotificationsPreference *string `json:"email_notifications_preference" binding:"In(,enabled,disabled,onmention)"` // @@@ STACKIT CODE @@@
 }

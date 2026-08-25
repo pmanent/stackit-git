@@ -6,6 +6,7 @@ package mirror
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 	notify_service "forgejo.org/services/notify"
 )
 
@@ -31,55 +33,27 @@ const gitShortEmptySha = "0000000"
 
 // UpdateAddress writes new address to Git repository and database
 func UpdateAddress(ctx context.Context, m *repo_model.Mirror, addr string) error {
-	u, err := giturl.Parse(addr)
-	if err != nil {
-		return fmt.Errorf("invalid addr: %v", err)
-	}
-
 	remoteName := m.GetRemoteName()
 	repoPath := m.GetRepository(ctx).RepoPath()
-	// Remove old remote
-	_, _, err = git.NewCommand(ctx, "remote", "rm").AddDynamicArguments(remoteName).RunStdString(&git.RunOpts{Dir: repoPath})
-	if err != nil && !git.IsRemoteNotExistError(err) {
-		return err
-	}
-
-	cmd := git.NewCommand(ctx, "remote", "add").AddDynamicArguments(remoteName).AddArguments("--mirror=fetch").AddDynamicArguments(addr)
-	if strings.Contains(addr, "://") && strings.Contains(addr, "@") {
-		cmd.SetDescription(fmt.Sprintf("remote add %s --mirror=fetch %s [repo_path: %s]", remoteName, util.SanitizeCredentialURLs(addr), repoPath))
-	} else {
-		cmd.SetDescription(fmt.Sprintf("remote add %s --mirror=fetch %s [repo_path: %s]", remoteName, addr, repoPath))
-	}
-	_, _, err = cmd.RunStdString(&git.RunOpts{Dir: repoPath})
-	if err != nil && !git.IsRemoteNotExistError(err) {
+	_, _, err := git.NewCommand(ctx, "remote", "set-url").
+		AddDynamicArguments(remoteName, addr).
+		RunStdString(&git.RunOpts{Dir: repoPath})
+	if err != nil {
 		return err
 	}
 
 	if m.Repo.HasWiki() {
 		wikiPath := m.Repo.WikiPath()
 		wikiRemotePath := repo_module.WikiRemoteURL(ctx, addr)
-		// Remove old remote of wiki
-		_, _, err = git.NewCommand(ctx, "remote", "rm").AddDynamicArguments(remoteName).RunStdString(&git.RunOpts{Dir: wikiPath})
-		if err != nil && !git.IsRemoteNotExistError(err) {
-			return err
-		}
-
-		cmd = git.NewCommand(ctx, "remote", "add").AddDynamicArguments(remoteName).AddArguments("--mirror=fetch").AddDynamicArguments(wikiRemotePath)
-		if strings.Contains(wikiRemotePath, "://") && strings.Contains(wikiRemotePath, "@") {
-			cmd.SetDescription(fmt.Sprintf("remote add %s --mirror=fetch %s [repo_path: %s]", remoteName, util.SanitizeCredentialURLs(wikiRemotePath), wikiPath))
-		} else {
-			cmd.SetDescription(fmt.Sprintf("remote add %s --mirror=fetch %s [repo_path: %s]", remoteName, wikiRemotePath, wikiPath))
-		}
-		_, _, err = cmd.RunStdString(&git.RunOpts{Dir: wikiPath})
-		if err != nil && !git.IsRemoteNotExistError(err) {
+		_, _, err = git.NewCommand(ctx, "remote", "set-url").
+			AddDynamicArguments(remoteName, wikiRemotePath).
+			RunStdString(&git.RunOpts{Dir: wikiPath})
+		if err != nil {
 			return err
 		}
 	}
 
-	// erase authentication before storing in database
-	u.User = nil
-	m.Repo.OriginalURL = u.String()
-	return repo_model.UpdateRepositoryCols(ctx, m.Repo, "original_url")
+	return nil
 }
 
 // mirrorSyncResult contains information of a updated reference.
@@ -244,6 +218,98 @@ func pruneBrokenReferences(ctx context.Context,
 	return pruneErr
 }
 
+// checkRecoverableSyncError takes an error message from a git fetch command and returns false if it should be a fatal/blocking error
+func checkRecoverableSyncError(stderrMessage string) bool {
+	switch {
+	case strings.Contains(stderrMessage, "unable to resolve reference") && strings.Contains(stderrMessage, "reference broken"):
+		return true
+	case strings.Contains(stderrMessage, "remote error") && strings.Contains(stderrMessage, "not our ref"):
+		return true
+	case strings.Contains(stderrMessage, "cannot lock ref") && strings.Contains(stderrMessage, "but expected"):
+		return true
+	case strings.Contains(stderrMessage, "cannot lock ref") && strings.Contains(stderrMessage, "unable to resolve reference"):
+		return true
+	case strings.Contains(stderrMessage, "Unable to create") && strings.Contains(stderrMessage, ".lock"):
+		return true
+	default:
+		return false
+	}
+}
+
+// Decrypt RemoteAddressAuth from the mirror. If absent on the mirror database table, fallback to the older method where
+// credentials are stored in the git config file as the remote's address, encrypt those credentials and store them in
+// the database, and wipe them from the git config file so that they're only stored in the one encrypted location in DB.
+func DecryptOrRecoverRemoteAddress(ctx context.Context, m *repo_model.Mirror) (*giturl.GitURL, error) {
+	decryptedRemoteURL, err := m.DecryptRemoteAddress()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt remote address: %w", err)
+	}
+
+	if has, url := decryptedRemoteURL.Get(); has {
+		remoteURL, err := giturl.Parse(url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse decrypted remote address: %w", err)
+		}
+		return remoteURL, nil
+	}
+
+	// fallback to reading remote URL from the git config file for repos that predate DecryptRemoteAddress
+	repoPath := m.GetRepository(ctx).RepoPath()
+	remoteURL, err := git.GetRemoteURL(ctx, repoPath, m.GetRemoteName())
+	if err != nil {
+		return nil, fmt.Errorf("GetRemoteAddress error: %w", err)
+	}
+
+	// Store the full address in the database
+	if err := m.UpdateRemoteAddress(ctx, remoteURL.URL.String()); err != nil {
+		return nil, fmt.Errorf("UpdateRemoteAddress error: %w", err)
+	}
+
+	// Update the git config file to just contain the sanitized address
+	if maybeSanitizedURL, err := m.SanitizedRemoteAddress(); err != nil {
+		return nil, fmt.Errorf("SanitizedRemoteAddress error: %w", err)
+	} else if has, sanitizedURL := maybeSanitizedURL.Get(); !has {
+		return nil, fmt.Errorf("SanitizedRemoteAddress must be present after we just stored it, but had error: %w", err)
+	} else if err := UpdateAddress(ctx, m, sanitizedURL); err != nil {
+		return nil, fmt.Errorf("UpdateAddress error: %w", err)
+	}
+	return remoteURL, nil
+}
+
+// Ensure that an on-disk pull mirror is in a modern expected configuration state, in case those expectations have
+// changed since the time the mirror was created on-disk.
+func ModernizePullMirrorConfig(ctx context.Context, m *repo_model.Mirror) error {
+	repoPath := m.GetRepository(ctx).RepoPath()
+
+	// New pull mirrors are created with http.followRedirects=false to mitigate SSRF risks, as redirection URLs may not
+	// meet Forgejo's configured migration allow/deny host lists. Migrate to that setting if it is not present:
+	followRedirects, _, err := git.
+		NewCommand(ctx, "config", "--get", "http.followRedirects").
+		RunStdString(&git.RunOpts{Dir: repoPath})
+		// git will return a non-zero exit code if the config isn't set, so we'll treat an error the same as missing
+	if err != nil {
+		followRedirects = ""
+	}
+	followRedirects = strings.TrimSpace(followRedirects)
+	if followRedirects != "false" {
+		_, _, err = git.
+			NewCommand(ctx, "config", "--replace-all", "http.followRedirects", "false").
+			RunStdString(&git.RunOpts{Dir: repoPath})
+		if err != nil {
+			return fmt.Errorf("failed to set http.followRedirects config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func recheckPullPermitted(ctx context.Context, m *repo_model.Mirror, remoteURL *url.URL) error {
+	if err := m.Repo.LoadOwner(ctx); err != nil {
+		return err
+	}
+	return migrations_allowlist.IsMigrateURLAllowed(remoteURL.String(), m.Repo.Owner)
+}
+
 // runSync returns true if sync finished without error.
 func runSync(ctx context.Context, m *repo_model.Mirror) ([]*mirrorSyncResult, bool) {
 	repoPath := m.Repo.RepoPath()
@@ -252,18 +318,41 @@ func runSync(ctx context.Context, m *repo_model.Mirror) ([]*mirrorSyncResult, bo
 
 	log.Trace("SyncMirrors [repo: %-v]: running git remote update...", m.Repo)
 
+	if err := ModernizePullMirrorConfig(ctx, m); err != nil {
+		log.Error("SyncMirrors [repo: %-v]: failed to modernize pull mirror configuration: %v", m.Repo, err)
+		return nil, false
+	}
+
+	remoteURL, err := DecryptOrRecoverRemoteAddress(ctx, m)
+	if err != nil {
+		log.Error("SyncMirrors [repo: %-v]: failed to get remote address: %v", m.Repo, err)
+		return nil, false
+	}
+
+	// Recheck that the remote address is still permitted before pulling. The address passed IsMigrateURLAllowed at
+	// creation time, but the allow/block lists may have changed since, or DNS for the remote host may now resolve to an
+	// internal address (DNS rebinding).
+	if err := recheckPullPermitted(ctx, m, remoteURL.URL); err != nil {
+		log.Error("SyncMirrors [repo: %-v]: pull mirror failed to meet migration URL requirements: %v", m.Repo, err)
+		return nil, false
+	}
+
+	cmd := git.NewCommand(ctx)
+
+	// Setup credential helper to authenticate the fetch; needs to occur before the `fetch` arg.
+	_, credCleanup, err := cmd.AddAuthCredentialHelperForRemote(remoteURL.URL.String())
+	if err != nil {
+		log.Error("SyncMirrors [repo: %-v]: AddAuthCredentialHelperForRemote Error %v", m.Repo, err)
+		return nil, false
+	}
+	defer credCleanup()
+
 	// use fetch but not remote update because git fetch support --tags but remote update doesn't
-	cmd := git.NewCommand(ctx, "fetch")
+	cmd.AddArguments("fetch")
 	if m.EnablePrune {
 		cmd.AddArguments("--prune")
 	}
 	cmd.AddArguments("--tags").AddDynamicArguments(m.GetRemoteName())
-
-	remoteURL, remoteErr := git.GetRemoteURL(ctx, repoPath, m.GetRemoteName())
-	if remoteErr != nil {
-		log.Error("SyncMirrors [repo: %-v]: GetRemoteAddress Error %v", m.Repo, remoteErr)
-		return nil, false
-	}
 
 	envs := proxy.EnvWithProxy(remoteURL.URL)
 
@@ -286,7 +375,7 @@ func runSync(ctx context.Context, m *repo_model.Mirror) ([]*mirrorSyncResult, bo
 		stdoutMessage := util.SanitizeCredentialURLs(stdout)
 
 		// Now check if the error is a resolve reference due to broken reference
-		if strings.Contains(stderr, "unable to resolve reference") && strings.Contains(stderr, "reference broken") {
+		if checkRecoverableSyncError(stderr) {
 			log.Warn("SyncMirrors [repo: %-v]: failed to update mirror repository due to broken references:\nStdout: %s\nStderr: %s\nErr: %v\nAttempting Prune", m.Repo, stdoutMessage, stderrMessage, err)
 			err = nil
 
@@ -337,6 +426,15 @@ func runSync(ctx context.Context, m *repo_model.Mirror) ([]*mirrorSyncResult, bo
 		return nil, false
 	}
 
+	if m.LFS && setting.LFS.StartServer {
+		log.Trace("SyncMirrors [repo: %-v]: syncing LFS objects...", m.Repo)
+		endpoint := lfs.DetermineEndpoint(remoteURL.String(), m.LFSEndpoint)
+		lfsClient := lfs.NewClient(endpoint, migrations_allowlist.NewMigrationHTTPTransport())
+		if err = repo_module.StoreMissingLfsObjectsInRepository(ctx, m.Repo, gitRepo, lfsClient); err != nil {
+			log.Error("SyncMirrors [repo: %-v]: failed to synchronize LFS objects for repository: %v", m.Repo, err)
+		}
+	}
+
 	log.Trace("SyncMirrors [repo: %-v]: syncing branches...", m.Repo)
 	if _, err = repo_module.SyncRepoBranchesWithRepo(ctx, m.Repo, gitRepo, 0); err != nil {
 		log.Error("SyncMirrors [repo: %-v]: failed to synchronize branches: %v", m.Repo, err)
@@ -345,15 +443,6 @@ func runSync(ctx context.Context, m *repo_model.Mirror) ([]*mirrorSyncResult, bo
 	log.Trace("SyncMirrors [repo: %-v]: syncing releases with tags...", m.Repo)
 	if err = repo_module.SyncReleasesWithTags(ctx, m.Repo, gitRepo); err != nil {
 		log.Error("SyncMirrors [repo: %-v]: failed to synchronize tags to releases: %v", m.Repo, err)
-	}
-
-	if m.LFS && setting.LFS.StartServer {
-		log.Trace("SyncMirrors [repo: %-v]: syncing LFS objects...", m.Repo)
-		endpoint := lfs.DetermineEndpoint(remoteURL.String(), m.LFSEndpoint)
-		lfsClient := lfs.NewClient(endpoint, nil)
-		if err = repo_module.StoreMissingLfsObjectsInRepository(ctx, m.Repo, gitRepo, lfsClient); err != nil {
-			log.Error("SyncMirrors [repo: %-v]: failed to synchronize LFS objects for repository: %v", m.Repo, err)
-		}
 	}
 	gitRepo.Close()
 
@@ -382,7 +471,7 @@ func runSync(ctx context.Context, m *repo_model.Mirror) ([]*mirrorSyncResult, bo
 			stdoutMessage := util.SanitizeCredentialURLs(stdout)
 
 			// Now check if the error is a resolve reference due to broken reference
-			if strings.Contains(stderrMessage, "unable to resolve reference") && strings.Contains(stderrMessage, "reference broken") {
+			if checkRecoverableSyncError(stderrMessage) {
 				log.Warn("SyncMirrors [repo: %-v Wiki]: failed to update mirror wiki repository due to broken references:\nStdout: %s\nStderr: %s\nErr: %v\nAttempting Prune", m.Repo, stdoutMessage, stderrMessage, err)
 				err = nil
 
@@ -569,7 +658,7 @@ func SyncPullMirror(ctx context.Context, repoID int64) bool {
 	}
 	if !isEmpty {
 		// Get latest commit date and update to current repository updated time
-		commitDate, err := git.GetLatestCommitTime(ctx, m.Repo.RepoPath())
+		commitDate, err := gitRepo.GetLatestCommitTime()
 		if err != nil {
 			log.Error("SyncMirrors [repo: %-v]: unable to GetLatestCommitDate: %v", m.Repo, err)
 			return false

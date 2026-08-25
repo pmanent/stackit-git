@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -19,7 +20,7 @@ import (
 	webhook_module "forgejo.org/modules/webhook"
 	commitstatus_service "forgejo.org/services/repository/commitstatus"
 
-	"github.com/nektos/act/pkg/jobparser"
+	"code.forgejo.org/forgejo/runner/v12/act/jobparser"
 )
 
 // CreateCommitStatus creates a commit status for the given job.
@@ -33,6 +34,13 @@ func CreateCommitStatus(ctx context.Context, jobs ...*actions_model.ActionRunJob
 }
 
 func createCommitStatus(ctx context.Context, job *actions_model.ActionRunJob) error {
+	if incompleteMatrix, _, err := job.HasIncompleteMatrix(); err != nil {
+		return fmt.Errorf("job HasIncompleteMatrix: %w", err)
+	} else if incompleteMatrix {
+		// Don't create commit statuses for incomplete matrix jobs because they are never completed.
+		return nil
+	}
+
 	if err := job.LoadAttributes(ctx); err != nil {
 		return fmt.Errorf("load run: %w", err)
 	}
@@ -51,7 +59,7 @@ func createCommitStatus(ctx context.Context, job *actions_model.ActionRunJob) er
 			return fmt.Errorf("GetPushEventPayload: %w", err)
 		}
 		if payload.HeadCommit == nil {
-			return fmt.Errorf("head commit is missing in event payload")
+			return errors.New("head commit is missing in event payload")
 		}
 		sha = payload.HeadCommit.ID
 	case webhook_module.HookEventPullRequest, webhook_module.HookEventPullRequestSync, webhook_module.HookEventPullRequestLabel, webhook_module.HookEventPullRequestAssign, webhook_module.HookEventPullRequestMilestone:
@@ -65,9 +73,9 @@ func createCommitStatus(ctx context.Context, job *actions_model.ActionRunJob) er
 			return fmt.Errorf("GetPullRequestEventPayload: %w", err)
 		}
 		if payload.PullRequest == nil {
-			return fmt.Errorf("pull request is missing in event payload")
+			return errors.New("pull request is missing in event payload")
 		} else if payload.PullRequest.Head == nil {
-			return fmt.Errorf("head of pull request is missing in event payload")
+			return errors.New("head of pull request is missing in event payload")
 		}
 		sha = payload.PullRequest.Head.Sha
 	case webhook_module.HookEventRelease:
@@ -99,7 +107,7 @@ func createCommitStatus(ctx context.Context, job *actions_model.ActionRunJob) er
 	repo := run.Repo
 	// TODO: store workflow name as a field in ActionRun to avoid parsing
 	runName := path.Base(run.WorkflowID)
-	if wfs, err := jobparser.Parse(job.WorkflowPayload); err == nil && len(wfs) > 0 {
+	if wfs, err := jobparser.Parse(job.WorkflowPayload, false); err == nil && len(wfs) > 0 {
 		runName = wfs[0].Name
 	}
 	ctxname := fmt.Sprintf("%s / %s (%s)", runName, job.Name, event)
@@ -144,8 +152,10 @@ func createCommitStatus(ctx context.Context, job *actions_model.ActionRunJob) er
 
 func toCommitStatus(status actions_model.Status) api.CommitStatusState {
 	switch status {
-	case actions_model.StatusSuccess, actions_model.StatusSkipped:
+	case actions_model.StatusSuccess:
 		return api.CommitStatusSuccess
+	case actions_model.StatusSkipped:
+		return api.CommitStatusSkipped
 	case actions_model.StatusFailure, actions_model.StatusCancelled:
 		return api.CommitStatusFailure
 	case actions_model.StatusWaiting, actions_model.StatusBlocked, actions_model.StatusRunning:

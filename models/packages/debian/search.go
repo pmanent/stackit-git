@@ -10,7 +10,6 @@ import (
 	"forgejo.org/models/db"
 	"forgejo.org/models/packages"
 	debian_module "forgejo.org/modules/packages/debian"
-	"forgejo.org/modules/setting"
 
 	"xorm.io/builder"
 )
@@ -77,41 +76,35 @@ func ExistPackages(ctx context.Context, opts *PackageSearchOptions) (bool, error
 
 // SearchPackages gets the packages matching the search options
 func SearchPackages(ctx context.Context, opts *PackageSearchOptions, iter func(*packages.PackageFileDescriptor)) error {
-	var start int
-	batchSize := setting.Database.IterateBufferSize
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			beans := make([]*packages.PackageFile, 0, batchSize)
-
-			if err := db.GetEngine(ctx).
-				Table("package_file").
-				Select("package_file.*").
-				Join("INNER", "package_version", "package_version.id = package_file.version_id").
-				Join("INNER", "package", "package.id = package_version.package_id").
-				Where(opts.toCond()).
-				Asc("package.lower_name", "package_version.created_unix").
-				Limit(batchSize, start).
-				Find(&beans); err != nil {
-				return err
-			}
-			if len(beans) == 0 {
-				return nil
-			}
-			start += len(beans)
-
-			for _, bean := range beans {
-				pfd, err := packages.GetPackageFileDescriptor(ctx, bean)
-				if err != nil {
-					return err
-				}
-
-				iter(pfd)
-			}
-		}
+	// Forgejo's db library doesn't have an iterate method that allows us to do this query, *sorted*, in chunks.  xorm's
+	// `Iterate` isn't usable because sometimes we are in a transaction, and GetPackageFileDescriptor will make
+	// supplemental DB calls which will fail in xorm's Iterate as the same connection will come back from
+	// db.GetEngine(ctx) due to the transaction, and that connection is already being used for the iterate.
+	//
+	// Aside from the reasons we can't do this iteratively, `SearchPackages` is only used when we're rebuilding the
+	// package index, and the caller `buildPackagesIndices` is already building *three* in-memory files referencing all
+	// this same information -- so the memory usage to load this information in one chunk shouldn't be significantly
+	// worse than the index rebuild side anyway.
+	pfs := make([]*packages.PackageFile, 0, 100)
+	err := db.GetEngine(ctx).
+		Table("package_file").
+		Select("package_file.*").
+		Join("INNER", "package_version", "package_version.id = package_file.version_id").
+		Join("INNER", "package", "package.id = package_version.package_id").
+		Where(opts.toCond()).
+		Asc("package.lower_name", "package_version.created_unix").
+		Find(&pfs)
+	if err != nil {
+		return err
 	}
+	for _, pf := range pfs {
+		pfd, err := packages.GetPackageFileDescriptor(ctx, pf)
+		if err != nil {
+			return err
+		}
+		iter(pfd)
+	}
+	return nil
 }
 
 // GetDistributions gets all available distributions

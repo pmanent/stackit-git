@@ -1,4 +1,5 @@
 // Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2026 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 // Package contexttest provides utilities for testing Web/API contexts with models.
@@ -21,6 +22,7 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/gitrepo"
+	"forgejo.org/modules/json"
 	"forgejo.org/modules/templates"
 	"forgejo.org/modules/translation"
 	"forgejo.org/modules/web/middleware"
@@ -68,7 +70,7 @@ func MockContext(t *testing.T, reqPath string, opts ...MockContextOption) (*cont
 	ctx.PageData = map[string]any{}
 	ctx.Data["PageStartTime"] = time.Now()
 	chiCtx := chi.NewRouteContext()
-	ctx.Base.AppendContextValue(chi.RouteCtxKey, chiCtx)
+	ctx.AppendContextValue(chi.RouteCtxKey, chiCtx)
 	return ctx, resp
 }
 
@@ -83,7 +85,7 @@ func MockAPIContext(t *testing.T, reqPath string) (*context.APIContext, *httptes
 	_ = baseCleanUp // during test, it doesn't need to do clean up. TODO: this can be improved later
 
 	chiCtx := chi.NewRouteContext()
-	ctx.Base.AppendContextValue(chi.RouteCtxKey, chiCtx)
+	ctx.AppendContextValue(chi.RouteCtxKey, chiCtx)
 	return ctx, resp
 }
 
@@ -96,7 +98,7 @@ func MockPrivateContext(t *testing.T, reqPath string) (*context.PrivateContext, 
 	ctx := &context.PrivateContext{Base: base}
 	_ = baseCleanUp // during test, it doesn't need to do clean up. TODO: this can be improved later
 	chiCtx := chi.NewRouteContext()
-	ctx.Base.AppendContextValue(chi.RouteCtxKey, chiCtx)
+	ctx.AppendContextValue(chi.RouteCtxKey, chiCtx)
 	return ctx, resp
 }
 
@@ -109,8 +111,8 @@ func LoadRepo(t *testing.T, ctx gocontext.Context, repoID int64) {
 		ctx.Repo = repo
 		doer = ctx.Doer
 	case *context.APIContext:
-		ctx.Repo = repo
-		doer = ctx.Doer
+		ctx.SetRepo(repo)
+		doer = ctx.Doer()
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}
@@ -131,7 +133,7 @@ func LoadRepoCommit(t *testing.T, ctx gocontext.Context) {
 	case *context.Context:
 		repo = ctx.Repo
 	case *context.APIContext:
-		repo = ctx.Repo
+		repo = ctx.Repo()
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}
@@ -156,7 +158,7 @@ func LoadUser(t *testing.T, ctx gocontext.Context, userID int64) {
 	case *context.Context:
 		ctx.Doer = doer
 	case *context.APIContext:
-		ctx.Doer = doer
+		ctx.SetDoer(doer)
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}
@@ -169,7 +171,7 @@ func LoadOrganization(t *testing.T, ctx gocontext.Context, orgID int64) {
 	case *context.Context:
 		ctx.Org.Organization = org
 	case *context.APIContext:
-		ctx.Org.Organization = org
+		ctx.Org().Organization = org
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}
@@ -183,7 +185,7 @@ func LoadGitRepo(t *testing.T, ctx gocontext.Context) {
 	case *context.Context:
 		repo = ctx.Repo
 	case *context.APIContext:
-		repo = ctx.Repo
+		repo = ctx.Repo()
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}
@@ -205,4 +207,11 @@ func (tr *MockRender) HTML(w io.Writer, status int, _ string, _ any, _ gocontext
 		resp.WriteHeader(status)
 	}
 	return nil
+}
+
+func DecodeJSON(t testing.TB, resp *httptest.ResponseRecorder, v any) {
+	t.Helper()
+
+	decoder := json.NewDecoder(resp.Body)
+	require.NoError(t, decoder.Decode(v))
 }

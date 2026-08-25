@@ -38,6 +38,8 @@ _testmain.go
 
 *coverage.out
 coverage.all
+coverage.html
+coverage.html.gz
 coverage/
 cpu.out
 coverage.html
@@ -56,6 +58,8 @@ coverage/**
 *.log
 *.log.*.gz
 
+/build/lint-locale/lint-locale
+/build/lint-locale-usage/lint-locale-usage
 /gitea
 /gitea-vet
 /debug
@@ -107,6 +111,7 @@ coverage/**
 /.air
 /.go-licenses
 /.cur-deadcode-out
+/.deadcode.diff
 
 # Files and folders that were previously generated
 /public/assets/img/webpack
@@ -133,6 +138,7 @@ prime/
 
 # Manpage
 /man
+tests/integration/api_activitypub_person_inbox_useractivity_test.go
 
 # Local .terraform directories
 **/.terraform/*
@@ -159,3 +165,5 @@ tools/tmp/*
 
 
 .scannerwork
+# Mise version management
+mise.toml

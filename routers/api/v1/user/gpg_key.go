@@ -4,6 +4,7 @@
 package user
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -70,7 +71,7 @@ func ListGPGKeys(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	listGPGKeys(ctx, ctx.ContextUser.ID, utils.GetListOptions(ctx))
+	listGPGKeys(ctx, ctx.User().ID, utils.GetListOptions(ctx))
 }
 
 // ListMyGPGKeys get the GPG key list of the authenticated user
@@ -97,7 +98,7 @@ func ListMyGPGKeys(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	listGPGKeys(ctx, ctx.Doer.ID, utils.GetListOptions(ctx))
+	listGPGKeys(ctx, ctx.Doer().ID, utils.GetListOptions(ctx))
 }
 
 // GetGPGKey get the GPG key based on a id
@@ -124,7 +125,7 @@ func GetGPGKey(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	key, err := asymkey_model.GetGPGKeyForUserByID(ctx, ctx.Doer.ID, ctx.ParamsInt64(":id"))
+	key, err := asymkey_model.GetGPGKeyForUserByID(ctx, ctx.Doer().ID, ctx.ParamsInt64(":id"))
 	if err != nil {
 		if asymkey_model.IsErrGPGKeyNotExist(err) {
 			ctx.NotFound()
@@ -142,13 +143,13 @@ func GetGPGKey(ctx *context.APIContext) {
 
 // CreateUserGPGKey creates new GPG key to given user by ID.
 func CreateUserGPGKey(ctx *context.APIContext, form api.CreateGPGKeyOption, uid int64) {
-	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageGPGKeys) {
-		ctx.NotFound("Not Found", fmt.Errorf("gpg keys setting is not allowed to be visited"))
+	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer(), setting.UserFeatureManageGPGKeys) {
+		ctx.NotFound("Not Found", errors.New("gpg keys setting is not allowed to be visited"))
 		return
 	}
 
-	token := asymkey_model.VerificationToken(ctx.Doer, 1)
-	lastToken := asymkey_model.VerificationToken(ctx.Doer, 0)
+	token := asymkey_model.VerificationToken(ctx.Doer(), 1)
+	lastToken := asymkey_model.VerificationToken(ctx.Doer(), 0)
 
 	keys, err := asymkey_model.AddGPGKey(ctx, uid, form.ArmoredKey, token, form.Signature)
 	if err != nil && asymkey_model.IsErrGPGInvalidTokenSignature(err) {
@@ -179,8 +180,14 @@ func GetVerificationToken(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	token := asymkey_model.VerificationToken(ctx.Doer, 1)
+	token := asymkey_model.VerificationToken(ctx.Doer(), 1)
 	ctx.PlainText(http.StatusOK, token)
+}
+
+// swagger:parameters userVerifyGPGKey
+type swaggerUserVerifyGPGKey struct {
+	// in:body
+	Form api.VerifyGPGKeyOption
 }
 
 // VerifyUserGPGKey creates new GPG key to given user by ID.
@@ -192,6 +199,11 @@ func VerifyUserGPGKey(ctx *context.APIContext) {
 	// - application/json
 	// produces:
 	// - application/json
+	// parameters:
+	// - name: body
+	//   in: body
+	//   schema:
+	//     "$ref": "#/definitions/VerifyGPGKeyOption"
 	// responses:
 	//   "201":
 	//     "$ref": "#/responses/GPGKey"
@@ -205,8 +217,8 @@ func VerifyUserGPGKey(ctx *context.APIContext) {
 	//     "$ref": "#/responses/validationError"
 
 	form := web.GetForm(ctx).(*api.VerifyGPGKeyOption)
-	token := asymkey_model.VerificationToken(ctx.Doer, 1)
-	lastToken := asymkey_model.VerificationToken(ctx.Doer, 0)
+	token := asymkey_model.VerificationToken(ctx.Doer(), 1)
+	lastToken := asymkey_model.VerificationToken(ctx.Doer(), 0)
 
 	form.KeyID = strings.TrimLeft(form.KeyID, "0")
 	if form.KeyID == "" {
@@ -214,9 +226,9 @@ func VerifyUserGPGKey(ctx *context.APIContext) {
 		return
 	}
 
-	_, err := asymkey_model.VerifyGPGKey(ctx, ctx.Doer.ID, form.KeyID, token, form.Signature)
+	_, err := asymkey_model.VerifyGPGKey(ctx, ctx.Doer().ID, form.KeyID, token, form.Signature)
 	if err != nil && asymkey_model.IsErrGPGInvalidTokenSignature(err) {
-		_, err = asymkey_model.VerifyGPGKey(ctx, ctx.Doer.ID, form.KeyID, lastToken, form.Signature)
+		_, err = asymkey_model.VerifyGPGKey(ctx, ctx.Doer().ID, form.KeyID, lastToken, form.Signature)
 	}
 
 	if err != nil {
@@ -225,6 +237,7 @@ func VerifyUserGPGKey(ctx *context.APIContext) {
 			return
 		}
 		ctx.Error(http.StatusInternalServerError, "VerifyUserGPGKey", err)
+		return
 	}
 
 	keys, err := db.Find[asymkey_model.GPGKey](ctx, asymkey_model.FindGPGKeyOptions{
@@ -248,11 +261,11 @@ type swaggerUserCurrentPostGPGKey struct {
 	Form api.CreateGPGKeyOption
 }
 
-// CreateGPGKey create a GPG key belonging to the authenticated user
+// CreateGPGKey adds a GPG public key doer's account
 func CreateGPGKey(ctx *context.APIContext) {
 	// swagger:operation POST /user/gpg_keys user userCurrentPostGPGKey
 	// ---
-	// summary: Create a GPG key
+	// summary: Add a GPG public key to current user's account
 	// consumes:
 	// - application/json
 	// produces:
@@ -270,14 +283,14 @@ func CreateGPGKey(ctx *context.APIContext) {
 	//     "$ref": "#/responses/validationError"
 
 	form := web.GetForm(ctx).(*api.CreateGPGKeyOption)
-	CreateUserGPGKey(ctx, *form, ctx.Doer.ID)
+	CreateUserGPGKey(ctx, *form, ctx.Doer().ID)
 }
 
-// DeleteGPGKey remove a GPG key belonging to the authenticated user
+// DeleteGPGKey removes a GPG public key from doer's account
 func DeleteGPGKey(ctx *context.APIContext) {
 	// swagger:operation DELETE /user/gpg_keys/{id} user userCurrentDeleteGPGKey
 	// ---
-	// summary: Remove a GPG key
+	// summary: Remove a GPG public key from current user's account
 	// produces:
 	// - application/json
 	// parameters:
@@ -297,12 +310,12 @@ func DeleteGPGKey(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageGPGKeys) {
-		ctx.NotFound("Not Found", fmt.Errorf("gpg keys setting is not allowed to be visited"))
+	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer(), setting.UserFeatureManageGPGKeys) {
+		ctx.NotFound("Not Found", errors.New("gpg keys setting is not allowed to be visited"))
 		return
 	}
 
-	if err := asymkey_model.DeleteGPGKey(ctx, ctx.Doer, ctx.ParamsInt64(":id")); err != nil {
+	if err := asymkey_model.DeleteGPGKey(ctx, ctx.Doer(), ctx.ParamsInt64(":id")); err != nil {
 		ctx.Error(http.StatusInternalServerError, "DeleteGPGKey", err)
 		return
 	}

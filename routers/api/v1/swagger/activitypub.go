@@ -4,6 +4,7 @@
 package swagger
 
 import (
+	"forgejo.org/modules/forgefed"
 	api "forgejo.org/modules/structs"
 )
 
@@ -12,4 +13,11 @@ import (
 type swaggerResponseActivityPub struct {
 	// in:body
 	Body api.ActivityPub `json:"body"`
+}
+
+// Outbox
+// swagger:response Outbox
+type swaggerResponseOutbox struct {
+	// in:body
+	Body forgefed.ForgeOutbox `json:"body"`
 }

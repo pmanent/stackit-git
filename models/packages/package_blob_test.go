@@ -19,7 +19,8 @@ func TestPackagesGetOrInsertBlob(t *testing.T) {
 	blake2bIsSet := unittest.AssertExistsAndLoadBean(t, &PackageBlob{ID: 1})
 	blake2bNotSet := unittest.AssertExistsAndLoadBean(t, &PackageBlob{ID: 2})
 
-	blake2bSetToRandom := *blake2bNotSet
+	var blake2bSetToRandom PackageBlob
+	blake2bSetToRandom = *blake2bNotSet
 	blake2bSetToRandom.HashBlake2b = "SOMETHING RANDOM"
 
 	for _, testCase := range []struct {

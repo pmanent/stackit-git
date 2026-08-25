@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_CmdForgejo_Actions(t *testing.T) {
-	onGiteaRun(t, func(*testing.T, *url.URL) {
+func TestActions_CmdForgejo_Actions(t *testing.T) {
+	onApplicationRun(t, func(*testing.T, *url.URL) {
 		token, err := runMainApp("forgejo-cli", "actions", "generate-runner-token")
 		require.NoError(t, err)
 		assert.Len(t, token, 40)
@@ -69,7 +69,7 @@ func Test_CmdForgejo_Actions(t *testing.T) {
 			t.Run(testCase.testName, func(t *testing.T) {
 				defer tests.PrintCurrentTest(t)()
 				output, err := runMainApp("forgejo-cli", "actions", "register", "--secret", testCase.secret, "--scope", testCase.scope)
-				assert.EqualValues(t, "", output)
+				assert.Empty(t, output)
 
 				var exitErr *exec.ExitError
 				require.ErrorAs(t, err, &exitErr)
@@ -108,9 +108,9 @@ func Test_CmdForgejo_Actions(t *testing.T) {
 			},
 		} {
 			t.Run(testCase.testName, func(t *testing.T) {
-				uuid, err := runMainAppWithStdin(testCase.stdin, "forgejo-cli", "actions", "register", testCase.secretOption(), "--scope=org26")
+				uuid, err := tests.RunMainAppWithStdin(testCase.stdin, "forgejo-cli", "actions", "register", testCase.secretOption(), "--scope=org26")
 				require.NoError(t, err)
-				assert.EqualValues(t, expecteduuid, uuid)
+				assert.Equal(t, expecteduuid, uuid)
 			})
 		}
 
@@ -183,30 +183,34 @@ func Test_CmdForgejo_Actions(t *testing.T) {
 				//
 				// Run twice to verify it is idempotent
 				//
-				for i := 0; i < 2; i++ {
+				for range 2 {
 					uuid, err := runMainApp("forgejo-cli", cmd...)
 					require.NoError(t, err)
-					if assert.EqualValues(t, testCase.uuid, uuid) {
+					if assert.Equal(t, testCase.uuid, uuid) {
 						ownerName, repoName, found := strings.Cut(testCase.scope, "/")
 						action, err := actions_model.GetRunnerByUUID(t.Context(), uuid)
 						require.NoError(t, err)
 
-						user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: action.OwnerID})
-						assert.Equal(t, ownerName, user.Name, action.OwnerID)
-
 						if found {
+							assert.Zero(t, action.OwnerID)
+
 							repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: action.RepoID})
 							assert.Equal(t, repoName, repo.Name, action.RepoID)
+						} else {
+							assert.Zero(t, action.RepoID)
+
+							user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: action.OwnerID})
+							assert.Equal(t, ownerName, user.Name, action.OwnerID)
 						}
 						if testCase.name != "" {
-							assert.EqualValues(t, testCase.name, action.Name)
+							assert.Equal(t, testCase.name, action.Name)
 						}
 						if testCase.labels != "" {
 							labels := strings.Split(testCase.labels, ",")
-							assert.EqualValues(t, labels, action.AgentLabels)
+							assert.Equal(t, labels, action.AgentLabels)
 						}
 						if testCase.version != "" {
-							assert.EqualValues(t, testCase.version, action.Version)
+							assert.Equal(t, testCase.version, action.Version)
 						}
 					}
 				}

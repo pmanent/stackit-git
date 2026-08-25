@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,9 +16,12 @@ import (
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/test"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -38,7 +42,15 @@ func TestAdminViewUsers(t *testing.T) {
 
 		// 6th column is the 2FA column.
 		// One user that has TOTP and another user that has WebAuthn.
-		assert.EqualValues(t, 2, htmlDoc.Find(".admin-setting-content table tbody tr td:nth-child(6) .octicon-check").Length())
+		assert.Equal(t, 2, htmlDoc.Find(".admin-setting-content table tbody tr td:nth-child(6) .octicon-check").Length())
+
+		// account type 5 is for remote users (eg. users from the federation)
+		req = NewRequest(t, "GET", "/admin/users?status_filter[account_type]=5")
+		resp = session.MakeRequest(t, req, http.StatusOK)
+		htmlDoc = NewHTMLParser(t, resp.Body)
+
+		// Only one user (id 43) is a remote user
+		assert.Equal(t, 1, htmlDoc.Find("table tbody tr").Length())
 	})
 
 	t.Run("Normal user", func(t *testing.T) {
@@ -72,18 +84,118 @@ func TestAdminViewUser(t *testing.T) {
 func TestAdminEditUser(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
-	testSuccessfullEdit(t, user_model.User{ID: 2, Name: "newusername", LoginName: "otherlogin", Email: "new@e-mail.gitea"})
+	testSuccessfulEdit(t, user_model.User{ID: 2, Name: "newusername", LoginName: "otherlogin", Email: "new@e-mail.gitea"})
 }
 
-func testSuccessfullEdit(t *testing.T, formData user_model.User) {
+func TestAdminEditUserHideEmail(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	session := loginUser(t, "user1")
+	userID := int64(2) // user2 from fixtures
+
+	// Test setting hide_email to false
+	req := NewRequestWithValues(t, "POST", fmt.Sprintf("/admin/users/%d/edit", userID), map[string]string{
+		"user_name":  "user2",
+		"login_name": "user2",
+		"login_type": "0-0",
+		"email":      "user2@example.com",
+		"hide_email": "false",
+	})
+	session.MakeRequest(t, req, http.StatusSeeOther)
+
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: userID})
+	assert.False(t, user.KeepEmailPrivate)
+
+	// Verify the form now loads with hide_email not checked
+	req = NewRequest(t, "GET", fmt.Sprintf("/admin/users/%d/edit", userID))
+	resp := session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc := NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertElement(t, `input[name="hide_email"]:not([checked])`, true)
+
+	// Test setting hide_email to true
+	req = NewRequestWithValues(t, "POST", fmt.Sprintf("/admin/users/%d/edit", userID), map[string]string{
+		"user_name":  "user2",
+		"login_name": "user2",
+		"login_type": "0-0",
+		"email":      "user2@example.com",
+		"hide_email": "true",
+	})
+	session.MakeRequest(t, req, http.StatusSeeOther)
+
+	user = unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: userID})
+	assert.True(t, user.KeepEmailPrivate)
+
+	// Verify the form loads with hide_email checked
+	req = NewRequest(t, "GET", fmt.Sprintf("/admin/users/%d/edit", userID))
+	resp = session.MakeRequest(t, req, http.StatusOK)
+	htmlDoc = NewHTMLParser(t, resp.Body)
+	htmlDoc.AssertElement(t, `input[name="hide_email"][checked]`, true)
+}
+
+func TestAdminEditUserWebsite(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	session := loginUser(t, "user1")
+	user := forgery.CreateUser(t, nil)
+	urlStr := fmt.Sprintf("/admin/users/%d/edit", user.ID)
+
+	t.Run("an HTTPS website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should work
+		req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
+			"user_name":  user.Name,
+			"login_name": user.LoginName,
+			"login_type": "0-0",
+			"email":      user.Email,
+			"website":    "https://codeberg.org",
+		})
+		resp := session.MakeRequest(t, req, http.StatusSeeOther)
+		assertHasFlashMessages(t, resp, "success")
+	})
+
+	t.Run("an H3 website under default schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		// changing website should not work
+		req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
+			"user_name":  user.Name,
+			"login_name": user.LoginName,
+			"login_type": "0-0",
+			"email":      user.Email,
+			"website":    "h3://codeberg.org",
+		})
+		resp := session.MakeRequest(t, req, http.StatusOK)
+		doc := NewHTMLParser(t, resp.Body)
+		flash := doc.Find("#flash-message").Text()
+		assert.Equal(t, `Website"Url" is not a valid URL.`, strings.TrimSpace(flash))
+	})
+
+	t.Run("an H3 website under custom schemes", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		defer test.MockProtect(&setting.Service.ValidSiteURLSchemes)()
+		setting.Service.ValidSiteURLSchemes = append(setting.Service.ValidSiteURLSchemes, "h3")
+
+		// changing website should work
+		req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
+			"user_name":  user.Name,
+			"login_name": user.LoginName,
+			"login_type": "0-0",
+			"email":      user.Email,
+			"website":    "h3://codeberg.org",
+		})
+		resp := session.MakeRequest(t, req, http.StatusSeeOther)
+		assertHasFlashMessages(t, resp, "success")
+	})
+}
+
+func testSuccessfulEdit(t *testing.T, formData user_model.User) {
 	makeRequest(t, formData, http.StatusSeeOther)
 }
 
 func makeRequest(t *testing.T, formData user_model.User, headerCode int) {
 	session := loginUser(t, "user1")
-	csrf := GetCSRF(t, session, "/admin/users/"+strconv.Itoa(int(formData.ID))+"/edit")
 	req := NewRequestWithValues(t, "POST", "/admin/users/"+strconv.Itoa(int(formData.ID))+"/edit", map[string]string{
-		"_csrf":      csrf,
 		"user_name":  formData.Name,
 		"login_name": formData.LoginName,
 		"login_type": "0-0",
@@ -107,9 +219,7 @@ func TestAdminDeleteUser(t *testing.T) {
 
 	unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{PosterID: userID})
 
-	csrf := GetCSRF(t, session, fmt.Sprintf("/admin/users/%d/edit", userID))
 	req := NewRequestWithValues(t, "POST", fmt.Sprintf("/admin/users/%d/delete", userID), map[string]string{
-		"_csrf": csrf,
 		"purge": "true",
 	})
 	session.MakeRequest(t, req, http.StatusSeeOther)
@@ -122,11 +232,11 @@ func TestSourceId(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
 	testUser23 := &user_model.User{
-		Name:        "ausersourceid23",
-		LoginName:   "ausersourceid23",
+		Name:        "@ausersourceid23@example.net",
+		LoginName:   "@ausersourceid23@example.net",
 		Email:       "ausersourceid23@example.com",
 		Passwd:      "ausersourceid23password",
-		Type:        user_model.UserTypeIndividual,
+		Type:        user_model.UserTypeRemoteUser,
 		LoginType:   auth_model.Plain,
 		LoginSource: 23,
 	}
@@ -135,27 +245,31 @@ func TestSourceId(t *testing.T) {
 	session := loginUser(t, "user1")
 	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeReadAdmin)
 
-	// Our new user start with 'a' so it should be the first one
+	// Historic background: The user was previously called "ausersourceid23", but the
+	// test started failing on PostgreSQL specifically because of another federated user
+	// in a fixture called @federated@example.net - this did not apply to other database
+	// engines. Said user's username began with an 'a' so that it comes up on top, so, we
+	// simply made another federated user that starts with '@a' here as an easy way out.
 	req := NewRequest(t, "GET", "/api/v1/admin/users?limit=1").AddTokenAuth(token)
 	resp := session.MakeRequest(t, req, http.StatusOK)
 	var users []api.User
 	DecodeJSON(t, resp, &users)
 	assert.Len(t, users, 1)
-	assert.Equal(t, "ausersourceid23", users[0].UserName)
+	assert.Equal(t, "@ausersourceid23@example.net", users[0].UserName)
 
 	// Now our new user should not be in the list, because we filter by source_id 0
 	req = NewRequest(t, "GET", "/api/v1/admin/users?limit=1&source_id=0").AddTokenAuth(token)
 	resp = session.MakeRequest(t, req, http.StatusOK)
 	DecodeJSON(t, resp, &users)
 	assert.Len(t, users, 1)
-	assert.Equal(t, "the_34-user.with.all.allowedChars", users[0].UserName)
+	assert.Equal(t, "imported", users[0].UserName)
 
 	// Now our new user should be in the list, because we filter by source_id 23
 	req = NewRequest(t, "GET", "/api/v1/admin/users?limit=1&source_id=23").AddTokenAuth(token)
 	resp = session.MakeRequest(t, req, http.StatusOK)
 	DecodeJSON(t, resp, &users)
 	assert.Len(t, users, 1)
-	assert.Equal(t, "ausersourceid23", users[0].UserName)
+	assert.Equal(t, "@ausersourceid23@example.net", users[0].UserName)
 }
 
 func TestAdminViewUsersSorted(t *testing.T) {
@@ -192,9 +306,9 @@ func TestAdminViewUsersSorted(t *testing.T) {
 		sortType      string
 		expectedUsers []string
 	}{
-		{0, "alphabetically", []string{"the_34-user.with.all.allowedChars", "user1", "user10", "user11"}},
+		{0, "alphabetically", []string{"imported", "the_34-user.with.all.allowedChars", "user1", "user10"}},
 		{0, "reversealphabetically", []string{"user9", "user8", "user5", "user40"}},
-		{0, "newest", []string{"user40", "user39", "user38", "user37"}},
+		{0, "newest", []string{"imported", "user40", "user39", "user38"}},
 		{0, "oldest", []string{"user1", "user2", "user4", "user5"}},
 		{44, "recentupdate", []string{"sorttest1", "sorttest2", "sorttest3", "sorttest4"}},
 		{44, "leastupdate", []string{"sorttest10", "sorttest9", "sorttest8", "sorttest7"}},

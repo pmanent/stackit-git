@@ -22,6 +22,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/tests"
 
+	gouuid "github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +63,7 @@ func createSSHUrl(gitPath string, u *url.URL) *url.URL {
 
 var rootPathRe = regexp.MustCompile("\\[repository\\]\nROOT\\s=\\s.*")
 
-func onGiteaRun[T testing.TB](t T, callback func(T, *url.URL)) {
+func onApplicationRun[T testing.TB](t T, callback func(T, *url.URL)) {
 	defer tests.PrepareTestEnv(t, 1)()
 	s := http.Server{
 		Handler: testWebRoutes,
@@ -143,7 +144,7 @@ func doGitInitTestRepository(dstPath string, objectFormat git.ObjectFormat) func
 		// forcibly set default branch to master
 		_, _, err := git.NewCommand(git.DefaultContext, "symbolic-ref", "HEAD", git.BranchPrefix+"master").RunStdString(&git.RunOpts{Dir: dstPath})
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dstPath, "README.md"), []byte(fmt.Sprintf("# Testing Repository\n\nOriginally created in: %s", dstPath)), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dstPath, "README.md"), fmt.Appendf(nil, "# Testing Repository\n\nOriginally created in: %s", dstPath), 0o644))
 		require.NoError(t, git.AddChanges(dstPath, true))
 		signature := git.Signature{
 			Email: "test@example.com",
@@ -182,19 +183,18 @@ func doGitPushTestRepository(dstPath string, args ...string) func(*testing.T) {
 	}
 }
 
-func doGitPushTestRepositoryFail(dstPath string, args ...string) func(*testing.T) {
-	return func(t *testing.T) {
-		t.Helper()
-		_, _, err := git.NewCommand(git.DefaultContext, "push").AddArguments(git.ToTrustedCmdArgs(args)...).RunStdString(&git.RunOpts{Dir: dstPath})
-		require.Error(t, err)
-	}
+func doGitPushTestRepositoryFail(t *testing.T, dstPath string, args ...string) (stderr string) {
+	t.Helper()
+	_, stderr, err := git.NewCommand(git.DefaultContext, "push").AddArguments(git.ToTrustedCmdArgs(args)...).RunStdString(&git.RunOpts{Dir: dstPath})
+	require.Error(t, err)
+	return stderr
 }
 
 func doGitAddSomeCommits(dstPath, branch string) func(*testing.T) {
 	return func(t *testing.T) {
 		doGitCheckoutBranch(dstPath, branch)(t)
 
-		require.NoError(t, os.WriteFile(filepath.Join(dstPath, fmt.Sprintf("file-%s.txt", branch)), []byte(fmt.Sprintf("file %s", branch)), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dstPath, fmt.Sprintf("file-%s.txt", branch)), fmt.Appendf(nil, "file %s %s", branch, gouuid.New().String()), 0o644))
 		require.NoError(t, git.AddChanges(dstPath, true))
 		signature := git.Signature{
 			Email: "test@test.test",
@@ -228,6 +228,14 @@ func doGitPull(dstPath string, args ...string) func(*testing.T) {
 	return func(t *testing.T) {
 		t.Helper()
 		_, _, err := git.NewCommandContextNoGlobals(git.DefaultContext, git.AllowLFSFiltersArgs()...).AddArguments("pull").AddArguments(git.ToTrustedCmdArgs(args)...).RunStdString(&git.RunOpts{Dir: dstPath})
+		require.NoError(t, err)
+	}
+}
+
+func doGitFetch(dstPath string, args ...string) func(*testing.T) {
+	return func(t *testing.T) {
+		t.Helper()
+		_, _, err := git.NewCommandContextNoGlobals(git.DefaultContext, git.AllowLFSFiltersArgs()...).AddArguments("fetch").AddArguments(git.ToTrustedCmdArgs(args)...).RunStdString(&git.RunOpts{Dir: dstPath})
 		require.NoError(t, err)
 	}
 }

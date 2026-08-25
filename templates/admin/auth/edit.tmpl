@@ -6,7 +6,6 @@
 		<div class="ui attached segment">
 			<form class="ui form" action="{{.Link}}" method="post">
 				{{template "base/disable_form_autofill"}}
-				{{.CsrfTokenHtml}}
 				<input type="hidden" name="id" value="{{.Source.ID}}">
 				<div class="inline field">
 					<label>{{ctx.Locale.Tr "admin.auths.auth_type"}}</label>
@@ -299,6 +298,13 @@
 							<p class="help">{{ctx.Locale.Tr "admin.auths.skip_local_two_fa_helper"}}</p>
 						</div>
 					</div>
+					<div class="optional field">
+						<div class="ui checkbox">
+							<label for="allow_username_change"><strong>{{ctx.Locale.Tr "admin.auths.allow_username_change"}}</strong></label>
+							<input id="allow_username_change" name="allow_username_change" type="checkbox" {{if $cfg.AllowUsernameChange}}checked{{end}}>
+							<p class="help">{{ctx.Locale.Tr "admin.auths.allow_username_change.description"}}</p>
+						</div>
+					</div>
 					<div class="oauth2_use_custom_url inline field">
 						<div class="ui checkbox">
 							<label><strong>{{ctx.Locale.Tr "admin.auths.oauth2_use_custom_url"}}</strong></label>
@@ -378,6 +384,26 @@
 						<label>{{ctx.Locale.Tr "admin.auths.oauth2_map_group_to_team_removal"}}</label>
 						<input name="oauth2_group_team_map_removal" type="checkbox" {{if $cfg.GroupTeamMapRemoval}}checked{{end}}>
 					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.auths.oauth2_dyn_group_maps"}}</label>
+						<textarea name="oauth2_dyn_group_maps" rows="5" placeholder='["group-{org}-{team}", "other-{org}-{team}"]'>{{$cfg.DynGroupMaps}}</textarea>
+					</div>
+					<div class="ui checkbox">
+						<label>{{ctx.Locale.Tr "admin.auths.oauth2_dyn_group_maps_removal"}}</label>
+						<input name="oauth2_dyn_group_maps_removal" type="checkbox" {{if $cfg.DynGroupMapsRemoval}}checked{{end}}>
+					</div>
+					<div class="field">
+						<label for="oauth2_quota_group_claim_name">{{ctx.Locale.Tr "admin.auths.oauth2_quota_group_claim_name"}}</label>
+						<input id="oauth2_quota_group_claim_name" name="oauth2_quota_group_claim_name" value="{{$cfg.QuotaGroupClaimName}}">
+					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.auths.oauth2_quota_group_map"}}</label>
+						<textarea name="oauth2_quota_group_map" rows="5" placeholder='{"Developer": ["MyQuotaGroup"]}'>{{$cfg.QuotaGroupMap}}</textarea>
+					</div>
+					<div class="ui checkbox">
+						<label>{{ctx.Locale.Tr "admin.auths.oauth2_quota_group_map_removal"}}</label>
+						<input name="oauth2_quota_group_map_removal" type="checkbox" {{if $cfg.QuotaGroupMapRemoval}}checked{{end}}>
+					</div>
 				{{end}}
 
 				{{if .Source.IsLDAP}}
@@ -397,7 +423,7 @@
 
 				<div class="field">
 					<button class="ui primary button">{{ctx.Locale.Tr "admin.auths.update"}}</button>
-					<button class="ui red button delete-button" data-url="{{$.Link}}/delete" data-id="{{.Source.ID}}">{{ctx.Locale.Tr "admin.auths.delete"}}</button>
+					<button class="ui red button delete-button" data-url="{{$.Link}}/delete" data-id="{{.Source.ID}}" data-modal-id="delete-auth-source">{{ctx.Locale.Tr "admin.auths.delete"}}</button>
 				</div>
 			</form>
 		</div>
@@ -414,7 +440,7 @@
 		</div>
 	</div>
 
-<div class="ui g-modal-confirm delete modal">
+<div class="ui g-modal-confirm delete modal" id="delete-auth-source">
 	<div class="header">
 		{{svg "octicon-trash"}}
 		{{ctx.Locale.Tr "admin.auths.delete_auth_title"}}

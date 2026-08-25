@@ -27,7 +27,8 @@ func GetThread(ctx *context.APIContext) {
 	// - name: id
 	//   in: path
 	//   description: id of notification thread
-	//   type: string
+	//   type: integer
+	//   format: int64
 	//   required: true
 	// responses:
 	//   "200":
@@ -62,7 +63,8 @@ func ReadThread(ctx *context.APIContext) {
 	// - name: id
 	//   in: path
 	//   description: id of notification thread
-	//   type: string
+	//   type: integer
+	//   format: int64
 	//   required: true
 	// - name: to-status
 	//   in: query
@@ -88,7 +90,7 @@ func ReadThread(ctx *context.APIContext) {
 		targetStatus = activities_model.NotificationStatusRead
 	}
 
-	notif, err := activities_model.SetNotificationStatus(ctx, n.ID, ctx.Doer, targetStatus)
+	notif, err := activities_model.SetNotificationStatus(ctx, n.ID, ctx.Doer(), targetStatus)
 	if err != nil {
 		ctx.InternalServerError(err)
 		return
@@ -110,7 +112,7 @@ func getThread(ctx *context.APIContext) *activities_model.Notification {
 		}
 		return nil
 	}
-	if n.UserID != ctx.Doer.ID && !ctx.Doer.IsAdmin {
+	if n.UserID != ctx.Doer().ID && !ctx.IsUserSiteAdmin() {
 		ctx.Error(http.StatusForbidden, "GetNotificationByID", fmt.Errorf("only user itself and admin are allowed to read/change this thread %d", n.ID))
 		return nil
 	}

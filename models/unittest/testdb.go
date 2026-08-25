@@ -20,11 +20,13 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/setting/config"
 	"forgejo.org/modules/storage"
+	"forgejo.org/modules/test"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/stats"
 
+	"code.forgejo.org/xorm/xorm"
+	"code.forgejo.org/xorm/xorm/names"
 	"github.com/stretchr/testify/require"
-	"xorm.io/xorm"
-	"xorm.io/xorm/names"
 )
 
 // giteaRoot a path to the gitea root
@@ -45,10 +47,28 @@ func fatalTestError(fmtStr string, args ...any) {
 
 // InitSettings initializes config provider and load common settings for tests
 func InitSettings() {
-	if setting.CustomConf == "" {
-		setting.CustomConf = filepath.Join(setting.CustomPath, "conf/app-unittest-tmp.ini")
-		_ = os.Remove(setting.CustomConf)
+	InitCustomSettings("unittest.ini")
+}
+
+func InitCustomSettings(confFileName string) {
+	root := base.SetupGiteaRoot()
+	if root == "" {
+		fatalTestError("Environment variable $GITEA_ROOT not set")
 	}
+	if setting.CustomConf == "" {
+		templateFile := confFileName + ".tmpl"
+		content, err := os.ReadFile(filepath.Join(root, "tests", templateFile))
+		if err != nil {
+			log.Fatalf("couldn't read config template: %s", templateFile)
+		}
+		err = os.WriteFile(filepath.Join(root, "tests", confFileName), content, 0o644)
+		if err != nil {
+			log.Fatalf("couldn't write config: %s", confFileName)
+		}
+		setting.CustomConf = filepath.Join(root, "tests", confFileName)
+	}
+	os.Setenv("GITEA_CONF", setting.CustomConf)
+
 	setting.InitCfgProvider(setting.CustomConf)
 	setting.LoadCommonSettings()
 
@@ -70,14 +90,24 @@ func InitSettings() {
 
 // TestOptions represents test options
 type TestOptions struct {
-	FixtureFiles []string
-	SetUp        func() error // SetUp will be executed before all tests in this package
-	TearDown     func() error // TearDown will be executed after all tests in this package
+	FixtureFiles    []string
+	SetUp           func() error // SetUp will be executed before all tests in this package
+	TearDown        func() error // TearDown will be executed after all tests in this package
+	IniFileOverride string
 }
 
 // MainTest a reusable TestMain(..) function for unit tests that need to use a
 // test database. Creates the test database, and sets necessary settings.
 func MainTest(m *testing.M, testOpts ...*TestOptions) {
+	if _, ok := os.LookupEnv("GIT_DIR"); ok {
+		// The wiki tests require perform git operations.
+		// It worked before dropping the need for the gitea binary because in case of wiki push,
+		// the git hooks do not perform http requests (access permission is checked before git invocation).
+		log.Println("Fake git hook which accepts everything (GIT_DIR is set).")
+		log.Println("Forgejo with proper http hooks is available in integration tests.")
+		os.Exit(0)
+	}
+
 	searchDir, _ := os.Getwd()
 	for searchDir != "" {
 		if _, err := os.Stat(filepath.Join(searchDir, "go.mod")); err == nil {
@@ -95,7 +125,11 @@ func MainTest(m *testing.M, testOpts ...*TestOptions) {
 
 	giteaRoot = searchDir
 	setting.CustomPath = filepath.Join(giteaRoot, "custom")
-	InitSettings()
+	if len(testOpts) == 0 || testOpts[0].IniFileOverride == "" {
+		InitSettings()
+	} else {
+		InitCustomSettings(testOpts[0].IniFileOverride)
+	}
 
 	fixturesDir = filepath.Join(giteaRoot, "models", "fixtures")
 	var opts FixturesOptions
@@ -158,6 +192,7 @@ func MainTest(m *testing.M, testOpts ...*TestOptions) {
 	if err = storage.Init(); err != nil {
 		fatalTestError("storage.Init: %v\n", err)
 	}
+	initStats()
 	if err = util.RemoveAll(repoRootPath); err != nil {
 		fatalTestError("util.RemoveAll: %v\n", err)
 	}
@@ -211,12 +246,31 @@ func MainTest(m *testing.M, testOpts ...*TestOptions) {
 	os.Exit(exitStatus)
 }
 
+func initStats() {
+	// Use an in-memory queue for the `stats` module during testing.  This queue will collect requests for recalc during
+	// tests which can be performed by invoking `unittest.FlushAsyncCalcs(t)`.
+	cfg, err := setting.NewConfigProviderFromData(`
+[queue.stats_recalc]
+TYPE = channel
+`)
+	if err != nil {
+		fatalTestError("NewConfigProviderFromData: %v\n", err)
+	}
+	defer test.MockVariableValue(&setting.CfgProvider, cfg)()
+	if err := stats.Init(); err != nil {
+		fatalTestError("stats.Init: %v\n", err)
+	}
+}
+
 // FixturesOptions fixtures needs to be loaded options
 type FixturesOptions struct {
 	Dir   string
 	Files []string
 	Dirs  []string
 	Base  string
+	// By default all registered models are cleaned, even if they do not have fixture. When OnlyAffectModels is not-nil,
+	// cleaning registered models will be skipped and only these models with fixtures are considered.
+	OnlyAffectModels []any
 }
 
 // CreateTestEngine creates a memory database and loads the fixture data from fixturesDir
@@ -229,6 +283,7 @@ func CreateTestEngine(opts FixturesOptions) error {
 		return err
 	}
 	x.SetMapper(names.GonicMapper{})
+	x.AddHook(faultInjectorHook{})
 	db.SetDefaultEngine(context.Background(), x)
 
 	if err = db.SyncAllTables(); err != nil {
@@ -252,6 +307,7 @@ func PrepareTestDatabase() error {
 func PrepareTestEnv(t testing.TB) {
 	require.NoError(t, PrepareTestDatabase())
 	require.NoError(t, util.RemoveAll(setting.RepoRootPath))
+	giteaRoot = base.SetupGiteaRoot() // Makes sure GITEA_ROOT is set
 	metaPath := filepath.Join(giteaRoot, "tests", "gitea-repositories-meta")
 	require.NoError(t, CopyDir(metaPath, setting.RepoRootPath))
 	ownerDirs, err := os.ReadDir(setting.RepoRootPath)
@@ -269,6 +325,4 @@ func PrepareTestEnv(t testing.TB) {
 			_ = os.MkdirAll(filepath.Join(setting.RepoRootPath, ownerDir.Name(), repoDir.Name(), "refs", "tag"), 0o755)
 		}
 	}
-
-	base.SetupGiteaRoot() // Makes sure GITEA_ROOT is set
 }

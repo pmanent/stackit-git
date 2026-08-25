@@ -10,10 +10,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
-
-	// For timeutil if needed
-
-	services_ctx "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +38,7 @@ func (m *mockResponseWriter) Size() int {
 
 // Before implements context.ResponseWriter
 // We can leave this empty for unit tests as we aren't testing middleware chains
-func (m *mockResponseWriter) Before(f func(services_ctx.ResponseWriter)) {
+func (m *mockResponseWriter) Before(f func(app_context.ResponseWriter)) {
 	// no-op
 }
 
@@ -148,10 +145,10 @@ func TestCreateUser_Complete(t *testing.T) {
 			}
 
 			// Populate Context Data for web.GetForm
-			ctxData := make(map[string]interface{})
+			ctxData := make(map[string]any)
 			ctxData["__form"] = formOption
 
-			innerCtx := &services_ctx.Base{
+			innerCtx := &app_context.Base{
 				Data: ctxData,
 				// Dummy repo
 				Resp: mockResp,
@@ -164,10 +161,10 @@ func TestCreateUser_Complete(t *testing.T) {
 				IsAdmin: true,
 			}
 
-			apiCtx := &services_ctx.APIContext{
+			apiCtx := &app_context.APIContext{
 				Base: innerCtx,
-				Doer: doer,
 			}
+			apiCtx.SetDoer(doer)
 
 			// --- EXECUTE ---
 			CreateUser(apiCtx)
@@ -178,7 +175,6 @@ func TestCreateUser_Complete(t *testing.T) {
 			// Verify Mail Logic
 			assert.Equal(t, tc.wantResetMail, resetCalled, "Mismatch in Reset Mail expectation")
 			assert.Equal(t, tc.wantNotifyMail, notifyCalled, "Mismatch in Notify Mail expectation")
-
 		})
 	}
 }

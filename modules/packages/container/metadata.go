@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	PropertyRepository        = "container.repository"
-	PropertyDigest            = "container.digest"
-	PropertyMediaType         = "container.mediatype"
-	PropertyManifestTagged    = "container.manifest.tagged"
-	PropertyManifestReference = "container.manifest.reference"
+	PropertyRepository                   = "container.repository"
+	PropertyRepositoryAutolinkingPending = "container.repository.autolinking-pending"
+	PropertyDigest                       = "container.digest"
+	PropertyMediaType                    = "container.mediatype"
+	PropertyManifestTagged               = "container.manifest.tagged"
+	PropertyManifestReference            = "container.manifest.reference"
 
 	DefaultPlatform = "linux/amd64"
 
@@ -63,6 +64,7 @@ type Metadata struct {
 	Labels           map[string]string `json:"labels,omitempty"`
 	ImageLayers      []string          `json:"layer_creation,omitempty"`
 	Manifests        []*Manifest       `json:"manifests,omitempty"`
+	Annotations      map[string]string `json:"annotations,omitempty"`
 }
 
 type Manifest struct {
@@ -84,6 +86,13 @@ func ParseImageConfig(mt string, r io.Reader) (*Metadata, error) {
 func parseOCIImageConfig(r io.Reader) (*Metadata, error) {
 	var image oci.Image
 	if err := json.NewDecoder(r).Decode(&image); err != nil {
+		// Handle empty config blobs (common in OCI artifacts)
+		if err == io.EOF {
+			return &Metadata{
+				Type:     TypeOCI,
+				Platform: DefaultPlatform,
+			}, nil
+		}
 		return nil, err
 	}
 

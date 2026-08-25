@@ -15,9 +15,9 @@
 				{{template "repo/unicode_escape_prompt" dict "EscapeStatus" .EscapeStatus "root" $}}
 				<div class="file-view{{if .IsMarkup}} markup {{.MarkupType}}{{else if .IsPlainText}} plain-text{{else if .IsTextFile}} code-view{{end}}">
 					{{if .IsMarkup}}
-						{{if .FileContent}}{{.FileContent | SafeHTML}}{{end}}
+						{{if .FileContent}}{{.FileContent | TrustHTML}}{{end}}
 					{{else if .IsPlainText}}
-						<pre>{{if .FileContent}}{{.FileContent | SafeHTML}}{{end}}</pre>
+						<pre>{{if .FileContent}}{{.FileContent | TrustHTML}}{{end}}</pre>
 					{{else if not .IsTextFile}}
 						<div class="view-raw">
 							{{if .IsImageFile}}
@@ -31,7 +31,15 @@
 									<strong>{{ctx.Locale.Tr "repo.audio_not_supported_in_browser"}}</strong>
 								</audio>
 							{{else if .IsPDFFile}}
-								<div class="pdf-content is-loading" data-src="{{$.RawFileLink}}" data-fallback-button-text="{{ctx.Locale.Tr "repo.diff.view_file"}}"></div>
+								<lazy-webc tag="pdf-object" src="{{$.RawFileLink}}">
+									<a href="{{$.RawFileLink}}" class="ui basic button">{{ctx.Locale.Tr "repo.diff.view_file"}}</a>
+								</lazy-webc>
+							{{else if .Is3DModelFile}}
+								{{if .IsGLBFile}}
+									<lazy-webc tag="model-viewer" src="{{$.RawFileLink}}" ar shadow-intensity="2" camera-controls touch-action="pan-y"></lazy-webc>
+								{{else}}
+									<a href="{{$.RawFileLink}}" rel="nofollow">{{ctx.Locale.Tr "repo.file_view_raw"}}!</a>
+								{{end}}
 							{{else}}
 								<a href="{{$.RawFileLink}}" rel="nofollow">{{ctx.Locale.Tr "repo.file_view_raw"}}</a>
 							{{end}}

@@ -58,6 +58,7 @@ func (l *LoggerImpl) SendLogEvent(event *Event) {
 		}
 		select {
 		case w.Base().Queue <- formatted:
+			break
 		default:
 			bs, _ := json.Marshal(event)
 			FallbackErrorf("log writer %q queue is full, event: %v", w.GetWriterName(), string(bs))
@@ -198,11 +199,6 @@ func (l *LoggerImpl) Log(skip int, level Level, format string, logArgs ...any) {
 
 	if l.stacktraceLevel.Load() <= int32(level) {
 		event.Stacktrace = Stack(skip + 1)
-	}
-
-	labels := getGoroutineLabels()
-	if labels != nil {
-		event.GoroutinePid = labels["pid"]
 	}
 
 	// get a simple text message without color

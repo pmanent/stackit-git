@@ -14,13 +14,12 @@
 		</div>
 		<div class="ui attached segment">
 			<form class="ui form" action="{{.Link}}" method="post">
-				{{.CsrfTokenHtml}}
 				<fieldset>
 					<legend>{{ctx.Locale.Tr "settings.profile_desc"}}</legend>
 					<label {{if .Err_Name}}class="field error"{{end}}>
 						{{ctx.Locale.Tr "username"}}
-						<input name="name" value="{{.SignedUser.Name}}" data-name="{{.SignedUser.Name}}" autofocus required {{if or (not .SignedUser.IsLocal) .IsReverseProxy}}disabled{{end}} maxlength="40">
-						{{if or (not .SignedUser.IsLocal) .IsReverseProxy}}
+						<input name="name" value="{{.SignedUser.Name}}" data-name="{{.SignedUser.Name}}" autofocus required {{if or .UserRenameDisabled .IsReverseProxy}}disabled{{end}} maxlength="40">
+						{{if or .UserRenameDisabled .IsReverseProxy}}
 							<span class="help">{{ctx.Locale.Tr "settings.password_username_disabled"}}</span>
 						{{else}}
 							<span class="help">
@@ -56,7 +55,8 @@
 
 					<label {{if .Err_Website}}class="field error"{{end}}>
 						{{ctx.Locale.Tr "settings.website"}}
-						<input name="website" type="url" value="{{.SignedUser.Website}}" maxlength="255">
+						<input name="website" type="url" value="{{.SignedUser.Website}}" maxlength="255" pattern="{{.ValidSiteURLPattern}}">
+						<span class="help">{{ctx.Locale.Tr "form.website.valid_url_schemes" (StringUtils.Join .ValidSiteURLSchemes ", ")}}</span>
 					</label>
 
 					<label>
@@ -92,6 +92,7 @@
 								{{end}}
 							</div>
 						</div>
+						<span class="help">{{ctx.Locale.Tr "settings.visibility.description" "https://forgejo.org/docs/latest/user/repo-permissions/#profile-and-visibility"}}</span>
 					</label>
 					<label>
 						<input name="keep_email_private" type="checkbox" {{if .SignedUser.KeepEmailPrivate}}checked{{end}}>
@@ -116,12 +117,11 @@
 			</form>
 		</div>
 
-		<h4 class="ui top attached header">
+		<h4 id="avatar-settings" class="ui top attached header">
 			{{ctx.Locale.Tr "settings.avatar"}}
 		</h4>
 		<div class="ui attached segment">
 			<form class="ui form" action="{{.Link}}/avatar" method="post" enctype="multipart/form-data">
-				{{.CsrfTokenHtml}}
 				{{if not .DisableGravatar}}
 				<div class="inline field">
 					<div class="ui radio checkbox">
@@ -145,11 +145,12 @@
 				<div class="inline field tw-pl-4">
 					<label for="new-avatar">{{ctx.Locale.Tr "settings.choose_new_avatar"}}</label>
 					<input id="new-avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+					<br/><span class=help>{{ctx.Locale.Tr "avatar.constraints_hint" (ctx.Locale.TrSize .MaxAvatarFileSize) .MaxAvatarWidth .MaxAvatarHeight}}</span>
 				</div>
 
-				<div class="field">
-					<button class="ui primary button">{{ctx.Locale.Tr "settings.update_avatar"}}</button>
-					<button class="ui red button link-action" data-url="{{.Link}}/avatar/delete">{{ctx.Locale.Tr "settings.delete_current_avatar"}}</button>
+				<div class="field button-sequence">
+					<button class="primary button">{{ctx.Locale.Tr "settings.update_avatar"}}</button>
+					<button class="danger button link-action" data-url="{{.Link}}/avatar/delete">{{ctx.Locale.Tr "settings.delete_current_avatar"}}</button>
 				</div>
 			</form>
 		</div>

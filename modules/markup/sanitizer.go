@@ -1,5 +1,6 @@
-// Copyright 2017 The Gitea Authors. All rights reserved.
 // Copyright 2017 The Gogs Authors. All rights reserved.
+// Copyright 2017 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package markup
@@ -78,6 +79,9 @@ func createDefaultPolicy() *bluemonday.Policy {
 	policy.AllowAttrs("type").Matching(regexp.MustCompile(`^checkbox$`)).OnElements("input")
 	policy.AllowAttrs("checked", "disabled", "data-source-position").OnElements("input")
 
+	// Buttons
+	policy.AllowAttrs("type").Matching(regexp.MustCompile(`^button$`)).OnElements("button")
+
 	// Custom URL-Schemes
 	if len(setting.Markdown.CustomURLSchemes) > 0 {
 		policy.AllowURLSchemes(setting.Markdown.CustomURLSchemes...)
@@ -125,7 +129,7 @@ func createDefaultPolicy() *bluemonday.Policy {
 	policy.AllowAttrs("class").Matching(regexp.MustCompile("^ui table$")).OnElements("div")
 	policy.AllowAttrs("class").Matching(regexp.MustCompile("^header$")).OnElements("div")
 	policy.AllowAttrs("data-line-number").Matching(regexp.MustCompile("^[0-9]+$")).OnElements("span")
-	policy.AllowAttrs("class").Matching(regexp.MustCompile("^text small grey$")).OnElements("span")
+	policy.AllowAttrs("class").Matching(regexp.MustCompile("^text grey$")).OnElements("span")
 	policy.AllowAttrs("class").Matching(regexp.MustCompile("^file-preview$")).OnElements("table")
 	policy.AllowAttrs("class").Matching(regexp.MustCompile("^lines-escape$")).OnElements("td")
 	policy.AllowAttrs("class").Matching(regexp.MustCompile("^toggle-escape-button btn interact-bg$")).OnElements("button")

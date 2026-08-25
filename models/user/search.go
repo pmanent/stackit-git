@@ -13,8 +13,8 @@ import (
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/structs"
 
+	"code.forgejo.org/xorm/xorm"
 	"xorm.io/builder"
-	"xorm.io/xorm"
 )
 
 // SearchUserOptions contains the options for searching
@@ -38,6 +38,7 @@ type SearchUserOptions struct {
 	IsRestricted       optional.Option[bool]
 	IsTwoFactorEnabled optional.Option[bool]
 	IsProhibitLogin    optional.Option[bool]
+	AccountType        optional.Option[UserType]
 	IncludeReserved    bool
 
 	Load2FAStatus     bool
@@ -52,13 +53,14 @@ func (opts *SearchUserOptions) toSearchQueryBase(ctx context.Context) *xorm.Sess
 		cond = builder.Eq{"type": opts.Type}
 	}
 	if opts.IncludeReserved {
-		if opts.Type == UserTypeIndividual {
+		switch opts.Type {
+		case UserTypeIndividual:
 			cond = cond.Or(builder.Eq{"type": UserTypeUserReserved}).Or(
 				builder.Eq{"type": UserTypeBot},
 			).Or(
 				builder.Eq{"type": UserTypeRemoteUser},
 			)
-		} else if opts.Type == UserTypeOrganization {
+		case UserTypeOrganization:
 			cond = cond.Or(builder.Eq{"type": UserTypeOrganizationReserved})
 		}
 	}
@@ -99,36 +101,41 @@ func (opts *SearchUserOptions) toSearchQueryBase(ctx context.Context) *xorm.Sess
 		cond = cond.And(builder.Eq{"id": opts.UID})
 	}
 
-	if opts.SourceID.Has() {
-		cond = cond.And(builder.Eq{"login_source": opts.SourceID.Value()})
+	if has, value := opts.SourceID.Get(); has {
+		cond = cond.And(builder.Eq{"login_source": value})
 	}
 	if opts.LoginName != "" {
 		cond = cond.And(builder.Eq{"login_name": opts.LoginName})
 	}
 
-	if opts.IsActive.Has() {
-		cond = cond.And(builder.Eq{"is_active": opts.IsActive.Value()})
+	if has, value := opts.IsActive.Get(); has {
+		cond = cond.And(builder.Eq{"is_active": value})
 	}
 
-	if opts.IsAdmin.Has() {
-		cond = cond.And(builder.Eq{"is_admin": opts.IsAdmin.Value()})
+	if has, value := opts.IsAdmin.Get(); has {
+		cond = cond.And(builder.Eq{"is_admin": value})
 	}
 
-	if opts.IsRestricted.Has() {
-		cond = cond.And(builder.Eq{"is_restricted": opts.IsRestricted.Value()})
+	if has, value := opts.IsRestricted.Get(); has {
+		cond = cond.And(builder.Eq{"is_restricted": value})
 	}
 
-	if opts.IsProhibitLogin.Has() {
-		cond = cond.And(builder.Eq{"prohibit_login": opts.IsProhibitLogin.Value()})
+	if has, value := opts.IsProhibitLogin.Get(); has {
+		cond = cond.And(builder.Eq{"prohibit_login": value})
+	}
+
+	if has, value := opts.AccountType.Get(); has {
+		cond = cond.And(builder.Eq{"type": value})
 	}
 
 	e := db.GetEngine(ctx)
-	if !opts.IsTwoFactorEnabled.Has() {
+	hasTwoFactor, isTwoFactorEnabled := opts.IsTwoFactorEnabled.Get()
+	if !hasTwoFactor {
 		return e.Where(cond)
 	}
 
 	// Check if the user has two factor enabled, which is TOTP or Webauthn.
-	if opts.IsTwoFactorEnabled.Value() {
+	if isTwoFactorEnabled {
 		cond = cond.And(builder.Expr("two_factor.uid IS NOT NULL OR webauthn_credential.user_id IS NOT NULL"))
 	} else {
 		cond = cond.And(builder.Expr("two_factor.uid IS NULL AND webauthn_credential.user_id IS NULL"))

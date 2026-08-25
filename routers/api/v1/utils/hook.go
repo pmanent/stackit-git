@@ -16,6 +16,7 @@ import (
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
+	"forgejo.org/modules/validation"
 	webhook_module "forgejo.org/modules/webhook"
 	"forgejo.org/services/context"
 	webhook_service "forgejo.org/services/webhook"
@@ -93,6 +94,10 @@ func checkCreateHookOption(ctx *context.APIContext, form *api.CreateHookOption) 
 		ctx.Error(http.StatusUnprocessableEntity, "", "Invalid content type")
 		return false
 	}
+	if !validation.IsValidURL(form.Config["url"]) {
+		ctx.Error(http.StatusUnprocessableEntity, "", "Invalid url")
+		return false
+	}
 	return true
 }
 
@@ -124,7 +129,7 @@ func AddOwnerHook(ctx *context.APIContext, owner *user_model.User, form *api.Cre
 
 // AddRepoHook add a hook to a repo. Writes to `ctx` accordingly
 func AddRepoHook(ctx *context.APIContext, form *api.CreateHookOption) {
-	repo := ctx.Repo
+	repo := ctx.Repo()
 	hook, ok := addHook(ctx, form, 0, repo.Repository.ID)
 	if !ok {
 		return
@@ -205,16 +210,15 @@ func addHook(ctx *context.APIContext, form *api.CreateHookOption, ownerID, repoI
 				Wiki:                     util.SliceContainsString(form.Events, string(webhook_module.HookEventWiki), true),
 				Repository:               util.SliceContainsString(form.Events, string(webhook_module.HookEventRepository), true),
 				Release:                  util.SliceContainsString(form.Events, string(webhook_module.HookEventRelease), true),
+				Package:                  util.SliceContainsString(form.Events, string(webhook_module.HookEventPackage), true),
+				ActionRunFailure:         util.SliceContainsString(form.Events, string(webhook_module.HookEventActionRunFailure), true),
+				ActionRunRecover:         util.SliceContainsString(form.Events, string(webhook_module.HookEventActionRunRecover), true),
+				ActionRunSuccess:         util.SliceContainsString(form.Events, string(webhook_module.HookEventActionRunSuccess), true),
 			},
 			BranchFilter: form.BranchFilter,
 		},
 		IsActive: form.Active,
 		Type:     form.Type,
-	}
-	err := w.SetHeaderAuthorization(form.AuthorizationHeader)
-	if err != nil {
-		ctx.Error(http.StatusInternalServerError, "SetHeaderAuthorization", err)
-		return nil, false
 	}
 	if w.Type == webhook_module.SLACK {
 		channel, ok := form.Config["channel"]
@@ -245,7 +249,9 @@ func addHook(ctx *context.APIContext, form *api.CreateHookOption, ownerID, repoI
 	if err := w.UpdateEvent(); err != nil {
 		ctx.Error(http.StatusInternalServerError, "UpdateEvent", err)
 		return nil, false
-	} else if err := webhook.CreateWebhook(ctx, w); err != nil {
+	}
+
+	if err := webhook.CreateWebhook(ctx, w, form.AuthorizationHeader); err != nil {
 		ctx.Error(http.StatusInternalServerError, "CreateWebhook", err)
 		return nil, false
 	}
@@ -298,7 +304,7 @@ func EditOwnerHook(ctx *context.APIContext, owner *user_model.User, form *api.Ed
 
 // EditRepoHook edit webhook `w` according to `form`. Writes to `ctx` accordingly
 func EditRepoHook(ctx *context.APIContext, form *api.EditHookOption, hookID int64) {
-	repo := ctx.Repo
+	repo := ctx.Repo()
 	hook, err := GetRepoHook(ctx, repo.Repository.ID, hookID)
 	if err != nil {
 		return
@@ -322,6 +328,10 @@ func EditRepoHook(ctx *context.APIContext, form *api.EditHookOption, hookID int6
 func editHook(ctx *context.APIContext, form *api.EditHookOption, w *webhook.Webhook) bool {
 	if form.Config != nil {
 		if url, ok := form.Config["url"]; ok {
+			if !validation.IsValidURL(url) {
+				ctx.Error(http.StatusUnprocessableEntity, "", "Invalid url")
+				return false
+			}
 			w.URL = url
 		}
 		if ct, ok := form.Config["content_type"]; ok {
@@ -366,11 +376,7 @@ func editHook(ctx *context.APIContext, form *api.EditHookOption, w *webhook.Webh
 	w.Release = util.SliceContainsString(form.Events, string(webhook_module.HookEventRelease), true)
 	w.BranchFilter = form.BranchFilter
 
-	err := w.SetHeaderAuthorization(form.AuthorizationHeader)
-	if err != nil {
-		ctx.Error(http.StatusInternalServerError, "SetHeaderAuthorization", err)
-		return false
-	}
+	w.SetHeaderAuthorization(form.AuthorizationHeader)
 
 	// Issues
 	w.Issues = issuesHook(form.Events, "issues_only")

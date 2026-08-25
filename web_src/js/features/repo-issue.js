@@ -8,7 +8,6 @@ import {toAbsoluteUrl} from '../utils.js';
 import {initDropzone} from './common-global.js';
 import {POST, GET} from '../modules/fetch.js';
 import {showErrorToast} from '../modules/toast.js';
-import {emojiHTML} from './emoji.js';
 
 const {appSubUrl} = window.config;
 
@@ -37,27 +36,27 @@ export function initRepoIssueTimeTracking() {
     $('.issue-start-time-modal').modal({
       duration: 200,
       onApprove() {
-        $('#add_time_manual_form').trigger('submit');
+        document.getElementById('add_time_manual_form').requestSubmit();
       },
     }).modal('show');
     $('.issue-start-time-modal input').on('keydown', (e) => {
       if ((e.keyCode || e.key) === 13) {
-        $('#add_time_manual_form').trigger('submit');
+        document.getElementById('add_time_manual_form').requestSubmit();
       }
     });
   });
   $(document).on('click', '.issue-start-time, .issue-stop-time', () => {
-    $('#toggle_stopwatch_form').trigger('submit');
+    document.getElementById('toggle_stopwatch_form').requestSubmit();
   });
   $(document).on('click', '.issue-cancel-time', () => {
-    $('#cancel_stopwatch_form').trigger('submit');
+    document.getElementById('cancel_stopwatch_form').requestSubmit();
   });
   $(document).on('click', 'button.issue-delete-time', function () {
     const sel = `.issue-delete-time-modal[data-id="${$(this).data('id')}"]`;
     $(sel).modal({
       duration: 200,
       onApprove() {
-        $(`${sel} form`).trigger('submit');
+        document.querySelector(`${sel} form`).requestSubmit();
       },
     }).modal('show');
   });
@@ -109,75 +108,6 @@ export function initRepoIssueDue() {
   });
 }
 
-/**
- * @param {HTMLElement} item
- */
-function excludeLabel(item) {
-  const href = item.getAttribute('href');
-  const id = item.getAttribute('data-label-id');
-
-  const regStr = `labels=((?:-?[0-9]+%2c)*)(${id})((?:%2c-?[0-9]+)*)&`;
-  const newStr = 'labels=$1-$2$3&';
-
-  window.location.assign(href.replace(new RegExp(regStr), newStr));
-}
-
-export function initRepoIssueSidebarList() {
-  const repolink = $('#repolink').val();
-  const repoId = $('#repoId').val();
-  const crossRepoSearch = $('#crossRepoSearch').val();
-  const tp = $('#type').val();
-  let issueSearchUrl = `${appSubUrl}/${repolink}/issues/search?q={query}&type=${tp}`;
-  if (crossRepoSearch === 'true') {
-    issueSearchUrl = `${appSubUrl}/issues/search?q={query}&priority_repo_id=${repoId}&type=${tp}`;
-  }
-  $('#new-dependency-drop-list')
-    .dropdown({
-      apiSettings: {
-        url: issueSearchUrl,
-        onResponse(response) {
-          const filteredResponse = {success: true, results: []};
-          const currIssueId = $('#new-dependency-drop-list').data('issue-id');
-          // Parse the response from the api to work with our dropdown
-          $.each(response, (_i, issue) => {
-            // Don't list current issue in the dependency list.
-            if (issue.id === currIssueId) {
-              return;
-            }
-            filteredResponse.results.push({
-              name: `#${issue.number} ${issueTitleHTML(htmlEscape(issue.title))
-              }<div class="text small tw-break-anywhere">${htmlEscape(issue.repository.full_name)}</div>`,
-              value: issue.id,
-            });
-          });
-          return filteredResponse;
-        },
-        cache: false,
-      },
-
-      fullTextSearch: true,
-    });
-
-  $('.menu a.label-filter-item').each(function () {
-    $(this).on('click', function (e) {
-      if (e.altKey) {
-        e.preventDefault();
-        excludeLabel(this);
-      }
-    });
-  });
-
-  $('.menu .ui.dropdown.label-filter').on('keydown', (e) => {
-    if (e.altKey && e.keyCode === 13) {
-      const selectedItem = document.querySelector('.menu .ui.dropdown.label-filter .menu .item.selected');
-      if (selectedItem) {
-        excludeLabel(selectedItem);
-      }
-    }
-  });
-  $('.ui.dropdown.label-filter, .ui.dropdown.select-label').dropdown('setting', {'hideDividers': 'empty'}).dropdown('refreshItems');
-}
-
 export function initRepoIssueCommentDelete() {
   // Delete comment
   document.addEventListener('click', async (e) => {
@@ -223,6 +153,9 @@ export function initRepoIssueCommentDelete() {
           conversationHolder.remove();
         }
 
+        // Recompute multi-line comment highlights so a removed comment no longer leaves a stale range highlight.
+        refreshMultiLineCommentHighlights();
+
         // Check if there is no review content, move the time avatar upward to avoid overlapping the content below.
         if (!parentTimelineGroup?.querySelector('.timeline-item.comment') && !parentTimelineItem?.querySelector('.conversation-holder')) {
           const timelineAvatar = parentTimelineGroup?.querySelector('.timeline-avatar');
@@ -247,7 +180,7 @@ export function initRepoIssueDependencyDelete() {
       onApprove: () => {
         $('#removeDependencyID').val(id);
         $('#dependencyType').val(type);
-        $('#removeDependencyForm').trigger('submit');
+        document.getElementById('removeDependencyForm').requestSubmit();
       },
     }).modal('show');
   });
@@ -257,6 +190,8 @@ export function initRepoIssueCodeCommentCancel() {
   // Cancel inline code comment
   document.addEventListener('click', (e) => {
     if (!e.target.matches('.cancel-code-comment')) return;
+
+    clearMultiLineSelection();
 
     const form = e.target.closest('form');
     if (form?.classList.contains('comment-form')) {
@@ -345,12 +280,12 @@ export function initRepoIssueReferenceRepositorySearch() {
         url: `${appSubUrl}/repo/search?q={query}&limit=20`,
         onResponse(response) {
           const filteredResponse = {success: true, results: []};
-          $.each(response.data, (_r, repo) => {
+          for (const repo of response.data) {
             filteredResponse.results.push({
               name: htmlEscape(repo.repository.full_name),
               value: repo.repository.full_name,
             });
-          });
+          }
           return filteredResponse;
         },
         cache: false,
@@ -369,9 +304,9 @@ export function initRepoIssueWipTitle() {
   $('.title_wip_desc > a').on('click', (e) => {
     e.preventDefault();
 
-    const $issueTitle = $('#issue_title');
-    $issueTitle.trigger('focus');
-    const value = $issueTitle.val().trim().toUpperCase();
+    const issueTitleEl = document.getElementById('issue_title');
+    issueTitleEl.focus();
+    const value = issueTitleEl.value.trim().toUpperCase();
 
     const wipPrefixes = $('.title_wip_desc').data('wip-prefixes');
     for (const prefix of wipPrefixes) {
@@ -380,7 +315,7 @@ export function initRepoIssueWipTitle() {
       }
     }
 
-    $issueTitle.val(`${wipPrefixes[0]} ${$issueTitle.val()}`);
+    issueTitleEl.value = `${wipPrefixes[0]} ${issueTitleEl.value}`;
   });
 }
 
@@ -439,14 +374,91 @@ export async function handleReply($el) {
     // When the page is loaded, the dropzone is initialized by initGlobalDropzone, but the editor is not initialized.
     // When the form is submitted and partially reload, none of them is initialized.
     const dropzone = $form.find('.dropzone')[0];
-    if (!dropzone.dropzone) initDropzone(dropzone);
+    if (!dropzone.dropzone) await initDropzone(dropzone);
     editor = await initComboMarkdownEditor($form.find('.combo-markdown-editor'));
   }
   editor.focus();
   return editor;
 }
 
+// Multi-line comment selection helpers
+
+export function clearMultiLineSelection() {
+  for (const el of document.querySelectorAll('.diff-line-selected')) {
+    el.classList.remove('diff-line-selected');
+  }
+}
+
+function findDiffLineRow(path, side, lineNum) {
+  const fileBox = document.querySelector(`[data-path="${path}"]`);
+  if (!fileBox) return null;
+
+  const numClass = side === 'left' ? 'lines-num-old' : 'lines-num-new';
+  const cells = fileBox.querySelectorAll(`.${numClass}[data-line-num="${lineNum}"]`);
+  for (const cell of cells) {
+    const row = cell.closest('tr');
+    if (row) return row;
+  }
+  return null;
+}
+
+// addLineHighlight applies a highlight class to a single diff line.
+// In split view a row holds both sides, so only the cells of `side` are highlighted to avoid
+// lighting up the opposite column. In unified view there is a single code column, so the whole
+// row is highlighted.
+function addLineHighlight(row, side, className) {
+  if (!row.closest('.code-diff-split')) {
+    row.classList.add(className);
+    return;
+  }
+  const suffix = side === 'left' ? 'old' : 'new';
+  for (const cell of row.querySelectorAll(`.lines-num-${suffix}, .lines-escape-${suffix}, .lines-type-marker-${suffix}, .lines-code-${suffix}`)) {
+    cell.classList.add(className);
+  }
+}
+
+function highlightLineRange(path, side, startLine, endLine) {
+  for (let i = startLine; i <= endLine; i++) {
+    const row = findDiffLineRow(path, side, i);
+    if (row) {
+      addLineHighlight(row, side, 'diff-line-selected');
+    }
+  }
+}
+
+// refreshMultiLineCommentHighlights recomputes the highlight of every existing multi-line
+// comment range from the current DOM. It is idempotent: it first clears all previous range
+// highlights so that comments removed since the last call no longer leave stale highlighting,
+// then re-applies the highlight for every conversation holder still present.
+// Call it on page load and after any dynamic create/delete of a code comment.
+export function refreshMultiLineCommentHighlights() {
+  for (const el of document.querySelectorAll('.diff-line-commented-range')) {
+    el.classList.remove('diff-line-commented-range');
+  }
+
+  for (const holder of document.querySelectorAll('.conversation-holder[data-extra-lines-count]')) {
+    const extraLinesCount = parseInt(holder.getAttribute('data-extra-lines-count'));
+    if (!extraLinesCount) continue;
+
+    const side = holder.getAttribute('data-side');
+    const idx = parseInt(holder.getAttribute('data-idx'));
+    const path = holder.getAttribute('data-path');
+
+    // idx is UnsignedLine (first line), the comment displays at idx + extraLinesCount (last line)
+    // Highlight from idx to idx + extraLinesCount
+    for (let i = idx; i <= idx + extraLinesCount; i++) {
+      const row = findDiffLineRow(path, side, i);
+      if (row) {
+        addLineHighlight(row, side, 'diff-line-commented-range');
+      }
+    }
+  }
+}
+
 export function initRepoPullRequestReview() {
+  // Highlight existing multi-line comment ranges
+  refreshMultiLineCommentHighlights();
+
   if (window.location.hash && window.location.hash.startsWith('#issuecomment-')) {
     // set scrollRestoration to 'manual' when there is a hash in url, so that the scroll position will not be remembered after refreshing
     if (window.history.scrollRestoration !== 'manual') {
@@ -537,8 +549,125 @@ export function initRepoPullRequestReview() {
     });
   }
 
+  // Multi-line comment selection state (drag-based like GitHub)
+  let multiLineDrag = null; // {side, startIdx, path, isSplit, newCommentUrl}
+
+  // Mousedown on + button with Shift held: start multi-line drag
+  $(document).on('mousedown', '.add-code-comment', function (e) {
+    if (e.target.classList.contains('btn-add-single')) return;
+    if (!e.shiftKey) return;
+    if (e.button !== 0) return; // left click only
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const isSplit = this.closest('.code-diff')?.classList.contains('code-diff-split');
+    const side = this.getAttribute('data-side');
+    const idx = parseInt(this.getAttribute('data-idx'));
+    const path = this.closest('[data-path]')?.getAttribute('data-path');
+    const newCommentUrl = this.closest('[data-new-comment-url]')?.getAttribute('data-new-comment-url');
+
+    clearMultiLineSelection();
+    multiLineDrag = {side, startIdx: idx, currentIdx: idx, path, isSplit, newCommentUrl};
+
+    // Highlight the initial line
+    const row = findDiffLineRow(path, side, idx);
+    if (row) addLineHighlight(row, side, 'diff-line-selected');
+
+    // Prevent text selection during drag
+    document.body.style.userSelect = 'none';
+  });
+
+  // Mouseover on diff table rows during drag: extend selection
+  $(document).on('mouseover', 'tr[data-line-type]', function () {
+    if (!multiLineDrag) return;
+
+    // Find the line number from the appropriate side's cell
+    const numClass = multiLineDrag.side === 'left' ? 'lines-num-old' : 'lines-num-new';
+    const numCell = this.querySelector(`.${numClass}[data-line-num]`);
+    if (!numCell) return;
+
+    const lineNum = parseInt(numCell.getAttribute('data-line-num'));
+    if (!lineNum || Number.isNaN(lineNum)) return;
+
+    // Check same file
+    const filePath = this.closest('[data-path]')?.getAttribute('data-path');
+    if (filePath !== multiLineDrag.path) return;
+
+    multiLineDrag.currentIdx = lineNum;
+
+    // Update highlight; the drag can go both ways, highlightLineRange needs ordered bounds
+    clearMultiLineSelection();
+    highlightLineRange(
+      multiLineDrag.path, multiLineDrag.side,
+      Math.min(multiLineDrag.startIdx, multiLineDrag.currentIdx),
+      Math.max(multiLineDrag.startIdx, multiLineDrag.currentIdx),
+    );
+  });
+
+  // Mouseup: finalize multi-line selection
+  $(document).on('mouseup', async () => {
+    if (!multiLineDrag) return;
+
+    document.body.style.userSelect = '';
+
+    const {side, startIdx, currentIdx, path, isSplit, newCommentUrl} = multiLineDrag;
+    const lineStart = Math.min(startIdx, currentIdx);
+    const lineEnd = Math.max(startIdx, currentIdx);
+    const extraLinesCount = lineEnd - lineStart;
+    multiLineDrag = null;
+
+    if (extraLinesCount === 0) {
+      // Single line: clear highlight, no multi-line form
+      clearMultiLineSelection();
+      return;
+    }
+
+    // Open comment form below the last line of the range
+    const endTr = findDiffLineRow(path, side, lineEnd);
+    if (!endTr) return;
+
+    const lineType = endTr.getAttribute('data-line-type') || 'same';
+    const ntr = endTr.nextElementSibling;
+    let $ntr = $(ntr);
+    if (!ntr?.classList.contains('add-comment')) {
+      $ntr = $(`
+        <tr class="add-comment" data-line-type="${lineType}">
+          ${isSplit ? `
+            <td class="add-comment-left" colspan="4"></td>
+            <td class="add-comment-right" colspan="4"></td>
+          ` : `
+            <td class="add-comment-left add-comment-right" colspan="5"></td>
+          `}
+        </tr>`);
+      $(endTr).after($ntr);
+    }
+
+    const $td = $ntr.find(`.add-comment-${side}`);
+    const $commentCloud = $td.find('.comment-code-cloud');
+    if (!$commentCloud.length && !$ntr.find('button[name="pending_review"]').length) {
+      try {
+        const response = await GET(newCommentUrl);
+        const html = await response.text();
+        $td.html(html);
+        $td.find("input[name='line']").val(lineStart);
+        $td.find("input[name='side']").val(side === 'left' ? 'previous' : 'proposed');
+        $td.find("input[name='path']").val(path);
+        $td.find("input[name='extra_lines_count']").val(extraLinesCount);
+
+        await initDropzone($td.find('.dropzone')[0]);
+        const editor = await initComboMarkdownEditor($td.find('.combo-markdown-editor'));
+        editor.focus();
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  });
+
+  // Normal click (no shift): single-line comment (existing behavior)
   $(document).on('click', '.add-code-comment', async function (e) {
     if (e.target.classList.contains('btn-add-single')) return; // https://github.com/go-gitea/gitea/issues/4745
+    if (e.shiftKey) return; // handled by mousedown/mouseup above
     e.preventDefault();
 
     const isSplit = this.closest('.code-diff')?.classList.contains('code-diff-split');
@@ -574,12 +703,25 @@ export function initRepoPullRequestReview() {
         $td.find("input[name='side']").val(side === 'left' ? 'previous' : 'proposed');
         $td.find("input[name='path']").val(path);
 
-        initDropzone($td.find('.dropzone')[0]);
+        await initDropzone($td.find('.dropzone')[0]);
         const editor = await initComboMarkdownEditor($td.find('.combo-markdown-editor'));
         editor.focus();
       } catch (error) {
         console.error(error);
       }
+    }
+  });
+
+  // Clear multi-line selection when pressing Escape or cancelling
+  $(document).on('click', '.cancel-code-comment', () => {
+    clearMultiLineSelection();
+    multiLineDrag = null;
+  });
+  $(document).on('keydown', (e) => {
+    if (e.key === 'Escape' && multiLineDrag) {
+      document.body.style.userSelect = '';
+      clearMultiLineSelection();
+      multiLineDrag = null;
     }
   });
 }
@@ -599,6 +741,10 @@ export function initRepoIssueReferenceIssue() {
   });
 }
 
+export function findWipPrefix(string, wipPrefixes) {
+  return wipPrefixes.find((prefix) => string.toUpperCase().startsWith(prefix.toUpperCase()));
+}
+
 export function initRepoIssueWipToggle() {
   // Toggle WIP
   $('.toggle-wip a, .toggle-wip button').on('click', async (e) => {
@@ -607,7 +753,7 @@ export function initRepoIssueWipToggle() {
     const title = toggleWip.getAttribute('data-title');
     const wipPrefixes = JSON.parse(toggleWip.getAttribute('data-wip-prefixes'));
     const updateUrl = toggleWip.getAttribute('data-update-url');
-    const prefix = wipPrefixes.find((prefix) => title.startsWith(prefix));
+    const prefix = findWipPrefix(title, wipPrefixes);
 
     try {
       const params = new URLSearchParams();
@@ -739,8 +885,8 @@ export function initSingleCommentEditor($commentForm) {
   const statusButton = document.getElementById('status-button');
   if (statusButton) {
     opts.onContentChanged = (editor) => {
-      const statusText = statusButton.getAttribute(editor.value().trim() ? 'data-status-and-comment' : 'data-status');
-      statusButton.textContent = statusText;
+      const newText = statusButton.getAttribute(editor.value().trim() ? 'data-status-and-comment' : 'data-status');
+      statusButton.querySelector('span').textContent = newText;
     };
   }
   initComboMarkdownEditor($commentForm.find('.combo-markdown-editor'), opts);
@@ -794,10 +940,4 @@ export function initArchivedLabelHandler() {
   for (const label of document.querySelectorAll('[data-is-archived]')) {
     toggleElem(label, label.classList.contains('checked'));
   }
-}
-
-// Render the issue's title. It converts emojis and code blocks syntax into their respective HTML equivalent.
-export function issueTitleHTML(title) {
-  return title.replaceAll(/:[-+\w]+:/g, (emoji) => emojiHTML(emoji.substring(1, emoji.length - 1)))
-    .replaceAll(/`[^`]+`/g, (code) => `<code class="inline-code-block">${code.substring(1, code.length - 1)}</code>`);
 }

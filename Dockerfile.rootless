@@ -1,9 +1,9 @@
 FROM --platform=$BUILDPLATFORM data.forgejo.org/oci/xx AS xx
 
-FROM --platform=$BUILDPLATFORM data.forgejo.org/oci/golang:1.25-alpine3.22 AS build-env
+FROM --platform=$BUILDPLATFORM data.forgejo.org/oci/golang:1.26-alpine3.23 AS build-env
 
 ARG GOPROXY
-ENV GOPROXY=${GOPROXY:-direct}
+ENV GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
 
 ARG RELEASE_VERSION
 ARG GITEA_VERSION
@@ -34,10 +34,10 @@ RUN apk --no-cache add build-base git nodejs npm
 COPY . ${GOPATH}/src/forgejo.org
 WORKDIR ${GOPATH}/src/forgejo.org
 
-RUN make clean
+RUN make clean-no-bindata
 RUN make frontend
 RUN go build contrib/environment-to-ini/environment-to-ini.go && xx-verify environment-to-ini
-RUN make GITEA_VERSION=$GITEA_VERSION RELEASE_VERSION=$RELEASE_VERSION go-check generate-backend static-executable && xx-verify gitea
+RUN make GITEA_VERSION=$GITEA_VERSION FORGEJO_GENERATE_SKIP_HASH=true RELEASE_VERSION=$RELEASE_VERSION go-check generate-backend static-executable && xx-verify gitea
 
 # Copy local files
 COPY docker/rootless /tmp/local
@@ -50,7 +50,8 @@ RUN chmod 755 /tmp/local/usr/local/bin/docker-entrypoint.sh \
   /go/src/forgejo.org/environment-to-ini
 RUN chmod 644 /go/src/forgejo.org/contrib/autocompletion/bash_autocomplete
 
-FROM code.forgejo.org/oci/alpine:3.22
+FROM data.forgejo.org/oci/alpine:3.23
+ARG RELEASE_VERSION
 LABEL maintainer="git@stackit.cloud" \
   org.opencontainers.image.authors="Stackit" \
   org.opencontainers.image.url="https://stackit.cloud" \
@@ -86,17 +87,19 @@ RUN addgroup \
   -G git \
   git
 
-RUN mkdir -p /var/lib/gitea /etc/gitea
-RUN chown git:git /var/lib/gitea /etc/gitea
+RUN mkdir -p /var/lib/gitea
+RUN chown git:git /var/lib/gitea
 
 COPY --from=build-env /tmp/local /
 RUN cd /usr/local/bin ; ln -s gitea forgejo
 COPY --from=build-env --chown=root:root /go/src/forgejo.org/gitea /app/gitea/gitea
 # >>> @@@ STACKIT CODE @@@
-# Copy the custom options/templates to the temp folder
+# Copy the custom options/templates/public to the temp folder
 COPY --from=build-env --chown=root:root /go/src/forgejo.org/custom/options/ /stackit-git/custom/options/
 COPY --from=build-env --chown=root:root /go/src/forgejo.org/custom/templates/ /stackit-git/custom/templates/
+COPY --from=build-env --chown=root:root /go/src/forgejo.org/custom/public/ /stackit-git/custom/public/
 # <<< @@@ STACKIT CODE @@@
+
 
 RUN ln -s /app/gitea/gitea /app/gitea/forgejo-cli
 COPY --from=build-env --chown=root:root /go/src/forgejo.org/environment-to-ini /usr/local/bin/environment-to-ini
@@ -109,13 +112,9 @@ ENV GITEA_CUSTOM=/var/lib/gitea/custom
 ENV GITEA_TEMP=/tmp/gitea
 ENV TMPDIR=/tmp/gitea
 
-# Legacy config file for backwards compatibility
-# TODO: remove on next major version release
-ENV GITEA_APP_INI_LEGACY=/etc/gitea/app.ini
-
 ENV GITEA_APP_INI=${GITEA_CUSTOM}/conf/app.ini
 ENV HOME="/var/lib/gitea/git"
-VOLUME ["/var/lib/gitea", "/etc/gitea"]
+VOLUME ["/var/lib/gitea"]
 WORKDIR /var/lib/gitea
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]

@@ -12,13 +12,13 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
-	forgejo_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	"forgejo.org/tests"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestActionVariablesModification(t *testing.T) {
+func TestActionsVariablesModification(t *testing.T) {
 	defer unittest.OverrideFixtures("tests/integration/fixtures/TestActionVariablesModification")()
 	defer tests.PrepareTestEnv(t)()
 
@@ -36,9 +36,7 @@ func TestActionVariablesModification(t *testing.T) {
 	adminURL := "/admin/actions/variables"
 
 	adminSess := loginUser(t, admin.Name)
-	adminCSRF := GetCSRF(t, adminSess, "/")
 	sess := loginUser(t, user.Name)
-	csrf := GetCSRF(t, sess, "/")
 
 	type errorJSON struct {
 		Error string `json:"errorMessage"`
@@ -49,42 +47,41 @@ func TestActionVariablesModification(t *testing.T) {
 		t.Helper()
 
 		sess := sess
-		csrf := csrf
 		if baseURL == adminURL {
 			sess = adminSess
-			csrf = adminCSRF
 		}
 
 		req := NewRequestWithValues(t, "POST", baseURL+fmt.Sprintf("/%d/edit", id), map[string]string{
-			"_csrf": csrf,
-			"name":  "glados_quote",
-			"data":  "I'm fine. Two plus two is...ten, in base four, I'm fine!",
+			"name": "glados_quote",
+			"data": "   \r\n\tI'm fine. Two plus two is...ten, in base four, I'm fine!   \r\n",
 		})
 		if fail {
 			resp := sess.MakeRequest(t, req, http.StatusBadRequest)
 			var error errorJSON
 			DecodeJSON(t, resp, &error)
-			assert.EqualValues(t, "Failed to find the variable.", error.Error)
+			assert.Equal(t, "Failed to find the variable.", error.Error)
 		} else {
 			sess.MakeRequest(t, req, http.StatusOK)
-			flashCookie := sess.GetCookie(forgejo_context.CookieNameFlash)
+			flashCookie := sess.GetCookie(app_context.CookieNameFlash)
 			assert.NotNil(t, flashCookie)
-			assert.EqualValues(t, "success%3DThe%2Bvariable%2Bhas%2Bbeen%2Bedited.", flashCookie.Value)
+			assert.Equal(t, "success%3DThe%2Bvariable%2Bhas%2Bbeen%2Bedited.", flashCookie.Value)
+
+			updatedVariable := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionVariable{ID: id})
+			assert.Equal(t, "GLADOS_QUOTE", updatedVariable.Name)
+			assert.Equal(t, "   \n\tI'm fine. Two plus two is...ten, in base four, I'm fine!   \n", updatedVariable.Data)
 		}
 
-		req = NewRequestWithValues(t, "POST", baseURL+fmt.Sprintf("/%d/delete", id), map[string]string{
-			"_csrf": csrf,
-		})
+		req = NewRequest(t, "POST", baseURL+fmt.Sprintf("/%d/delete", id))
 		if fail {
 			resp := sess.MakeRequest(t, req, http.StatusBadRequest)
 			var error errorJSON
 			DecodeJSON(t, resp, &error)
-			assert.EqualValues(t, "Failed to find the variable.", error.Error)
+			assert.Equal(t, "Failed to find the variable.", error.Error)
 		} else {
 			sess.MakeRequest(t, req, http.StatusOK)
-			flashCookie := sess.GetCookie(forgejo_context.CookieNameFlash)
+			flashCookie := sess.GetCookie(app_context.CookieNameFlash)
 			assert.NotNil(t, flashCookie)
-			assert.EqualValues(t, "success%3DThe%2Bvariable%2Bhas%2Bbeen%2Bremoved.", flashCookie.Value)
+			assert.Equal(t, "success%3DThe%2Bvariable%2Bhas%2Bbeen%2Bremoved.", flashCookie.Value)
 		}
 	}
 

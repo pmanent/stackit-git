@@ -17,8 +17,8 @@ import (
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/optional"
 
+	"code.forgejo.org/xorm/xorm"
 	"xorm.io/builder"
-	"xorm.io/xorm"
 )
 
 // IssuesOptions represents options of an issue.
@@ -48,7 +48,9 @@ type IssuesOptions struct { //nolint
 	UpdatedBeforeUnix  int64
 	// prioritize issues from this repo
 	PriorityRepoID int64
-	IsArchived     optional.Option[bool]
+	// if this issue index (not ID) exists and matches the filters, *and* priorityrepo sort is used, show it first
+	PriorityIssueIndex int64
+	IsArchived         optional.Option[bool]
 
 	// If combined with AllPublic, then private as well as public issues
 	// that matches the criteria will be returned, if AllPublic is false
@@ -60,12 +62,14 @@ type IssuesOptions struct { //nolint
 
 // applySorts sort an issues-related session based on the provided
 // sortType string
-func applySorts(sess *xorm.Session, sortType string, priorityRepoID int64) {
+func applySorts(sess *xorm.Session, sortType string, priorityRepoID, priorityIssueIndex int64) {
 	switch sortType {
 	case "oldest":
 		sess.Asc("issue.created_unix").Asc("issue.id")
 	case "recentupdate":
 		sess.Desc("issue.updated_unix").Desc("issue.created_unix").Desc("issue.id")
+	case "recentclose":
+		sess.Desc("issue.closed_unix").Desc("issue.created_unix").Desc("issue.id")
 	case "leastupdate":
 		sess.Asc("issue.updated_unix").Asc("issue.created_unix").Asc("issue.id")
 	case "mostcomment":
@@ -95,8 +99,11 @@ func applySorts(sess *xorm.Session, sortType string, priorityRepoID int64) {
 	case "priorityrepo":
 		sess.OrderBy("CASE "+
 			"WHEN issue.repo_id = ? THEN 1 "+
-			"ELSE 2 END ASC", priorityRepoID).
-			Desc("issue.created_unix").
+			"ELSE 2 END ASC", priorityRepoID)
+		if priorityIssueIndex != 0 {
+			sess.OrderBy("issue.index = ? DESC", priorityIssueIndex)
+		}
+		sess.Desc("issue.created_unix").
 			Desc("issue.id")
 	case "project-column-sorting":
 		sess.Asc("project_issue.sorting").Desc("issue.created_unix").Desc("issue.id")
@@ -219,8 +226,8 @@ func applyConditions(sess *xorm.Session, opts *IssuesOptions) {
 
 	applyRepoConditions(sess, opts)
 
-	if opts.IsClosed.Has() {
-		sess.And("issue.is_closed=?", opts.IsClosed.Value())
+	if has, value := opts.IsClosed.Get(); has {
+		sess.And("issue.is_closed=?", value)
 	}
 
 	if opts.AssigneeID > 0 {
@@ -262,18 +269,18 @@ func applyConditions(sess *xorm.Session, opts *IssuesOptions) {
 
 	applyProjectColumnCondition(sess, opts)
 
-	if opts.IsPull.Has() {
-		sess.And("issue.is_pull=?", opts.IsPull.Value())
+	if has, value := opts.IsPull.Get(); has {
+		sess.And("issue.is_pull=?", value)
 	}
 
-	if opts.IsArchived.Has() {
-		sess.And(builder.Eq{"repository.is_archived": opts.IsArchived.Value()})
+	if has, value := opts.IsArchived.Get(); has {
+		sess.And(builder.Eq{"repository.is_archived": value})
 	}
 
 	applyLabelsCondition(sess, opts)
 
 	if opts.User != nil {
-		cond := issuePullAccessibleRepoCond("issue.repo_id", opts.User.ID, opts.Org, opts.Team, opts.IsPull.Value())
+		cond := issuePullAccessibleRepoCond("issue.repo_id", opts.User.ID, opts.Org, opts.Team, opts.IsPull.ValueOrZeroValue())
 		// If AllPublic was set, then also consider all issues in public
 		// repositories in addition to the private repositories the user has access
 		// to.
@@ -456,7 +463,7 @@ func applySubscribedCondition(sess *xorm.Session, subscriberID int64) {
 				Select("repo_id").
 				From("watch").
 				Where(builder.And(builder.Eq{"user_id": subscriberID},
-					builder.In("mode", repo_model.WatchModeNormal, repo_model.WatchModeAuto))),
+					builder.Eq{"`watch`.watch_selection_issues": true})),
 			),
 		),
 	)
@@ -468,7 +475,7 @@ func Issues(ctx context.Context, opts *IssuesOptions) (IssueList, error) {
 		Join("INNER", "repository", "`issue`.repo_id = `repository`.id")
 	applyLimit(sess, opts)
 	applyConditions(sess, opts)
-	applySorts(sess, opts.SortType, opts.PriorityRepoID)
+	applySorts(sess, opts.SortType, opts.PriorityRepoID, opts.PriorityIssueIndex)
 
 	issues := IssueList{}
 	if err := sess.Find(&issues); err != nil {
@@ -492,7 +499,7 @@ func IssueIDs(ctx context.Context, opts *IssuesOptions, otherConds ...builder.Co
 	}
 
 	applyLimit(sess, opts)
-	applySorts(sess, opts.SortType, opts.PriorityRepoID)
+	applySorts(sess, opts.SortType, opts.PriorityRepoID, opts.PriorityIssueIndex)
 
 	var res []int64
 	total, err := sess.Select("`issue`.id").Table(&Issue{}).FindAndCount(&res)

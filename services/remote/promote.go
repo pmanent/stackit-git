@@ -53,7 +53,7 @@ func getUsersByLoginName(ctx context.Context, name string) ([]*user_model.User, 
 // The remote user has:
 //
 //	Type        UserTypeRemoteUser
-//	LogingType  Remote
+//	LoginType   Remote
 //	LoginName   set to the unique identifier of the originating authentication source
 //	LoginSource set to the Remote source that can be matched against an OAuth2 source
 //
@@ -87,7 +87,7 @@ func MaybePromoteRemoteUser(ctx context.Context, source *auth_model.Source, logi
 // >>> @@@ STACKIT CODE @@@
 // User Story 44186
 // Get if the user just exists
-func GetUsersByLoginName(ctx context.Context, name, calculated_login, login_name string) ([]*user_model.User, error) {
+func GetUsersByLoginName(ctx context.Context, name, calculatedLogin, loginName string) ([]*user_model.User, error) {
 	if len(name) == 0 {
 		return nil, user_model.ErrUserNotExist{Name: name}
 	}
@@ -98,13 +98,13 @@ func GetUsersByLoginName(ctx context.Context, name, calculated_login, login_name
 	// up until now the search was done as name = ?
 	// so if we had mickey@hotmail.com and mickey@google.com both with user name = mickey the search would return one of them randomly.
 	// now the search is (name = ? or name = ? ) and login_name = ?
-	// so if we receive as parameters name = mickey and login_name = mickey@hotmail.com  (the legacy format) then the legacy one will be able to login
-	// and if we receive as parameters calculated_login = mickey.xyzat and login_name = mickey@google.com  (the new format) then the new one will be able to login
+	// so if we receive as parameters name = mickey and loginName = mickey@hotmail.com  (the legacy format) then the legacy one will be able to login
+	// and if we receive as parameters calculatedLogin = mickey.xyzat and loginName = mickey@google.com  (the new format) then the new one will be able to login
 	// in any other case the local user doesn't exist and will be created with the new format
 
 	return users, db.GetEngine(ctx).
 		Table("user").
-		Where("(name = ? or name = ? ) and login_name = ?", name, calculated_login, login_name).
+		Where("(name = ? or name = ? ) and login_name = ?", name, calculatedLogin, loginName).
 		Find(&users)
 }
 

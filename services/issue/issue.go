@@ -1,11 +1,14 @@
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package issue
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	activities_model "forgejo.org/models/activities"
@@ -21,6 +24,7 @@ import (
 	"forgejo.org/modules/storage"
 	"forgejo.org/modules/timeutil"
 	notify_service "forgejo.org/services/notify"
+	"forgejo.org/services/stats"
 )
 
 // NewIssue creates new issue with labels for repository.
@@ -59,7 +63,6 @@ func NewIssue(ctx context.Context, repo *repo_model.Repository, issue *issues_mo
 // ChangeTitle changes the title of this issue, as the given user.
 func ChangeTitle(ctx context.Context, issue *issues_model.Issue, doer *user_model.User, title string) error {
 	oldTitle := issue.Title
-	issue.Title = title
 
 	if oldTitle == title {
 		return nil
@@ -73,21 +76,27 @@ func ChangeTitle(ctx context.Context, issue *issues_model.Issue, doer *user_mode
 		return user_model.ErrBlockedByUser
 	}
 
+	// If the issue was reported as abusive, a shadow copy should be created before first update.
+	if err := issues_model.IfNeededCreateShadowCopyForIssue(ctx, issue); err != nil {
+		return err
+	}
+
+	issue.Title = title
 	if err := issues_model.ChangeIssueTitle(ctx, issue, doer, oldTitle); err != nil {
 		return err
 	}
 
-	var reviewNotifers []*ReviewRequestNotifier
+	var reviewNotifiers []*ReviewRequestNotifier
 	if issue.IsPull && issues_model.HasWorkInProgressPrefix(oldTitle) && !issues_model.HasWorkInProgressPrefix(title) {
 		var err error
-		reviewNotifers, err = PullRequestCodeOwnersReview(ctx, issue, issue.PullRequest)
+		reviewNotifiers, err = PullRequestCodeOwnersReview(ctx, issue, issue.PullRequest)
 		if err != nil {
 			log.Error("PullRequestCodeOwnersReview: %v", err)
 		}
 	}
 
 	notify_service.IssueChangeTitle(ctx, doer, issue, oldTitle)
-	ReviewRequestNotify(ctx, issue, issue.Poster, reviewNotifers)
+	ReviewRequestNotify(ctx, issue, issue.Poster, reviewNotifiers)
 
 	return nil
 }
@@ -119,11 +128,8 @@ func UpdateAssignees(ctx context.Context, issue *issues_model.Issue, oneAssignee
 	if oneAssignee != "" {
 		// Prevent double adding assignees
 		var isDouble bool
-		for _, assignee := range multipleAssignees {
-			if assignee == oneAssignee {
-				isDouble = true
-				break
-			}
+		if slices.Contains(multipleAssignees, oneAssignee) {
+			isDouble = true
 		}
 
 		if !isDouble {
@@ -252,37 +258,10 @@ func deleteIssue(ctx context.Context, issue *issues_model.Issue) error {
 	defer committer.Close()
 
 	e := db.GetEngine(ctx)
-	if _, err := e.ID(issue.ID).NoAutoCondition().Delete(issue); err != nil {
+
+	// If the issue was reported as abusive, a shadow copy should be created before deletion.
+	if err := issues_model.IfNeededCreateShadowCopyForIssue(ctx, issue); err != nil {
 		return err
-	}
-
-	// update the total issue numbers
-	if err := repo_model.UpdateRepoIssueNumbers(ctx, issue.RepoID, issue.IsPull, false); err != nil {
-		return err
-	}
-	// if the issue is closed, update the closed issue numbers
-	if issue.IsClosed {
-		if err := repo_model.UpdateRepoIssueNumbers(ctx, issue.RepoID, issue.IsPull, true); err != nil {
-			return err
-		}
-	}
-
-	if err := issues_model.UpdateMilestoneCounters(ctx, issue.MilestoneID); err != nil {
-		return fmt.Errorf("error updating counters for milestone id %d: %w",
-			issue.MilestoneID, err)
-	}
-
-	if err := activities_model.DeleteIssueActions(ctx, issue.RepoID, issue.ID, issue.Index); err != nil {
-		return err
-	}
-
-	// find attachments related to this issue and remove them
-	if err := issue.LoadAttributes(ctx); err != nil {
-		return err
-	}
-
-	for i := range issue.Attachments {
-		system_model.RemoveStorageWithNotice(ctx, storage.Attachments, "Delete issue attachment", issue.Attachments[i].RelativePath())
 	}
 
 	// delete all database data still assigned to this issue
@@ -306,6 +285,36 @@ func deleteIssue(ctx context.Context, issue *issues_model.Issue) error {
 		&issues_model.Comment{DependentIssueID: issue.ID},
 	); err != nil {
 		return err
+	}
+
+	if _, err := e.ID(issue.ID).NoAutoCondition().Delete(issue); err != nil {
+		return err
+	}
+
+	// update the total issue numbers
+	if err := repo_model.UpdateRepoIssueNumbers(ctx, issue.RepoID, issue.IsPull, false); err != nil {
+		return err
+	}
+	// if the issue is closed, update the closed issue numbers
+	if issue.IsClosed {
+		if err := repo_model.UpdateRepoIssueNumbers(ctx, issue.RepoID, issue.IsPull, true); err != nil {
+			return err
+		}
+	}
+
+	stats.QueueRecalcMilestoneByID(ctx, issue.MilestoneID)
+
+	if err := activities_model.DeleteIssueActions(ctx, issue.RepoID, issue.ID, issue.Index); err != nil {
+		return err
+	}
+
+	// find attachments related to this issue and remove them
+	if err := issue.LoadAttributes(ctx); err != nil {
+		return err
+	}
+
+	for i := range issue.Attachments {
+		system_model.RemoveStorageWithNotice(ctx, storage.Attachments, "Delete issue attachment", issue.Attachments[i].RelativePath())
 	}
 
 	return committer.Commit()
@@ -333,13 +342,13 @@ func SetIssueUpdateDate(ctx context.Context, issue *issues_model.Issue, updated 
 		return err
 	}
 	if !perm.IsAdmin() && !perm.IsOwner() {
-		return fmt.Errorf("user needs to have admin or owner right")
+		return errors.New("user needs to have admin or repository owner right to set an update date")
 	}
 
 	// A simple guard against potential inconsistent calls
 	updatedUnix := timeutil.TimeStamp(updated.Unix())
 	if updatedUnix < issue.CreatedUnix || updatedUnix > timeutil.TimeStampNow() {
-		return fmt.Errorf("unallowed update date")
+		return errors.New("unallowed update date, because given date must be between issue creation date and now")
 	}
 
 	issue.UpdatedUnix = updatedUnix

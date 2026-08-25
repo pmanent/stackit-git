@@ -118,6 +118,11 @@ func uploadConanPackageV1(t *testing.T, baseURL, token, name, version, user, cha
 	assert.NotEmpty(t, uploadURL)
 
 	req = NewRequestWithBody(t, "PUT", uploadURL, strings.NewReader(contentConanfile)).
+		AddTokenAuth(token).
+		SetHeader("content-type", "multipart/form-data")
+	MakeRequest(t, req, http.StatusBadRequest)
+
+	req = NewRequestWithBody(t, "PUT", uploadURL, strings.NewReader(contentConanfile)).
 		AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusCreated)
 
@@ -328,7 +333,7 @@ func TestPackageConan(t *testing.T) {
 
 						assert.Equal(t, int64(len(contentConaninfo)), pb.Size)
 					} else {
-						assert.FailNow(t, "unknown file: %s", pf.Name)
+						assert.FailNow(t, "unknown file", "name: %s", pf.Name)
 					}
 				}
 			})
@@ -530,6 +535,45 @@ func TestPackageConan(t *testing.T) {
 				t.Helper()
 
 				token := getTokenForLoggedInUser(t, session, scope)
+
+				req := NewRequest(t, "GET", fmt.Sprintf("%s/v2/users/authenticate", url)).
+					AddTokenAuth(token)
+				resp := MakeRequest(t, req, http.StatusOK)
+
+				body := resp.Body.String()
+				assert.NotEmpty(t, body)
+
+				recipeURL := fmt.Sprintf("%s/v2/conans/%s/%s/%s/%s/revisions/%s", url, "TestScope", version1, "testing", channel1, revision1)
+
+				req = NewRequestWithBody(t, "PUT", fmt.Sprintf("%s/files/%s", recipeURL, conanfileName), strings.NewReader("Doesn't need to be valid")).
+					AddTokenAuth("Bearer " + body)
+				MakeRequest(t, req, expectedStatusCode)
+			}
+
+			t.Run("Read permission", func(t *testing.T) {
+				defer tests.PrintCurrentTest(t)()
+
+				testCase(t, auth_model.AccessTokenScopeReadPackage, http.StatusUnauthorized)
+			})
+
+			t.Run("Write permission", func(t *testing.T) {
+				defer tests.PrintCurrentTest(t)()
+
+				testCase(t, auth_model.AccessTokenScopeWritePackage, http.StatusCreated)
+			})
+		})
+
+		t.Run("Authorized Integration Authentication", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			testCase := func(t *testing.T, scope auth_model.AccessTokenScope, expectedStatusCode int) {
+				t.Helper()
+
+				ait := newAITester(t, func(ai *auth_model.AuthorizedIntegration) {
+					ai.Scope = scope
+				})
+				defer ait.close()
+				token := ait.signedJWT()
 
 				req := NewRequest(t, "GET", fmt.Sprintf("%s/v2/users/authenticate", url)).
 					AddTokenAuth(token)

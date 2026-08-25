@@ -174,8 +174,10 @@ func GetPackageDescriptor(ctx context.Context, pv *PackageVersion) (*PackageDesc
 		metadata = &debian.Metadata{}
 	case TypeGeneric:
 		// generic packages have no metadata
+		break
 	case TypeGo:
 		// go packages have no metadata
+		break
 	case TypeHelm:
 		metadata = &helm.Metadata{}
 	case TypeNuGet:
@@ -195,7 +197,7 @@ func GetPackageDescriptor(ctx context.Context, pv *PackageVersion) (*PackageDesc
 	case TypeRubyGems:
 		metadata = &rubygems.Metadata{}
 	case TypeSwift:
-		metadata = &swift.Metadata{}
+		metadata = &swift.Package{}
 	case TypeVagrant:
 		metadata = &vagrant.Metadata{}
 	default:

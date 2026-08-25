@@ -13,11 +13,11 @@ import (
 	user_service "forgejo.org/services/user"
 )
 
-// UpdateAvatarupdates the Avatar of an Organisation
+// UpdateAvatar updates an organization's avatar
 func UpdateAvatar(ctx *context.APIContext) {
 	// swagger:operation POST /orgs/{org}/avatar organization orgUpdateAvatar
 	// ---
-	// summary: Update Avatar
+	// summary: Update an organization's avatar
 	// produces:
 	// - application/json
 	// parameters:
@@ -43,7 +43,7 @@ func UpdateAvatar(ctx *context.APIContext) {
 		return
 	}
 
-	err = user_service.UploadAvatar(ctx, ctx.Org.Organization.AsUser(), content)
+	err = user_service.UploadAvatar(ctx, ctx.Org().Organization.AsUser(), content)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "UploadAvatar", err)
 		return
@@ -52,11 +52,11 @@ func UpdateAvatar(ctx *context.APIContext) {
 	ctx.Status(http.StatusNoContent)
 }
 
-// DeleteAvatar deletes the Avatar of an Organisation
+// DeleteAvatar deletes an organization's avatar
 func DeleteAvatar(ctx *context.APIContext) {
 	// swagger:operation DELETE /orgs/{org}/avatar organization orgDeleteAvatar
 	// ---
-	// summary: Delete Avatar
+	// summary: Delete an organization's avatar. It will be replaced by a default one
 	// produces:
 	// - application/json
 	// parameters:
@@ -70,7 +70,7 @@ func DeleteAvatar(ctx *context.APIContext) {
 	//     "$ref": "#/responses/empty"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-	err := user_service.DeleteAvatar(ctx, ctx.Org.Organization.AsUser())
+	err := user_service.DeleteAvatar(ctx, ctx.Org().Organization.AsUser())
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "DeleteAvatar", err)
 		return

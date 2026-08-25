@@ -72,7 +72,7 @@ func TestToMessage(t *testing.T) {
 	_, err := m1.ToMessage().WriteTo(buf)
 	require.NoError(t, err)
 	header, _ := extractMailHeaderAndContent(t, buf.String())
-	assert.EqualValues(t, map[string]string{
+	assert.Equal(t, map[string]string{
 		"Content-Type":             "multipart/alternative;",
 		"Date":                     "Mon, 01 Jan 0001 00:00:00 +0000",
 		"From":                     "\"Test Gitea\" <test@gitea.com>",
@@ -92,7 +92,7 @@ func TestToMessage(t *testing.T) {
 	_, err = m1.ToMessage().WriteTo(buf)
 	require.NoError(t, err)
 	header, _ = extractMailHeaderAndContent(t, buf.String())
-	assert.EqualValues(t, map[string]string{
+	assert.Equal(t, map[string]string{
 		"Content-Type":             "multipart/alternative;",
 		"Date":                     "Mon, 01 Jan 0001 00:00:00 +0000",
 		"From":                     "\"Test Gitea\" <test@gitea.com>",
@@ -114,9 +114,9 @@ func extractMailHeaderAndContent(t *testing.T, mail string) (map[string]string, 
 	}
 	content := strings.TrimSpace("boundary=" + parts[1])
 
-	hParts := strings.Split(parts[0], "\n")
+	hParts := strings.SplitSeq(parts[0], "\n")
 
-	for _, hPart := range hParts {
+	for hPart := range hParts {
 		parts := strings.SplitN(hPart, ":", 2)
 		hk := strings.TrimSpace(parts[0])
 		if hk != "" {

@@ -23,7 +23,7 @@ func GetQuota(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	shared.GetQuota(ctx, ctx.Doer.ID)
+	shared.GetQuota(ctx, ctx.Doer().ID)
 }
 
 // CheckQuota returns whether the authenticated user is over the subject quota
@@ -33,9 +33,17 @@ func CheckQuota(ctx *context.APIContext) {
 	// summary: Check if the authenticated user is over quota for a given subject
 	// produces:
 	// - application/json
+	// parameters:
+	// - name: subject
+	//   in: query
+	//   description: subject of the quota
+	//   type: string
+	//   required: true
 	// responses:
 	//   "200":
-	//     "$ref": "#/responses/boolean"
+	//     description: Returns true if the action is accepted.
+	//     schema:
+	//       type: boolean
 	//   "401":
 	//     "$ref": "#/responses/unauthorized"
 	//   "403":
@@ -43,7 +51,7 @@ func CheckQuota(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
-	shared.CheckQuota(ctx, ctx.Doer.ID)
+	shared.CheckQuota(ctx, ctx.Doer().ID)
 }
 
 // ListQuotaAttachments lists attachments affecting the authenticated user's quota
@@ -70,7 +78,7 @@ func ListQuotaAttachments(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	shared.ListQuotaAttachments(ctx, ctx.Doer.ID)
+	shared.ListQuotaAttachments(ctx, ctx.Doer().ID)
 }
 
 // ListQuotaPackages lists packages affecting the authenticated user's quota
@@ -97,7 +105,7 @@ func ListQuotaPackages(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	shared.ListQuotaPackages(ctx, ctx.Doer.ID)
+	shared.ListQuotaPackages(ctx, ctx.Doer().ID)
 }
 
 // ListQuotaArtifacts lists artifacts affecting the authenticated user's quota
@@ -124,5 +132,5 @@ func ListQuotaArtifacts(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	shared.ListQuotaArtifacts(ctx, ctx.Doer.ID)
+	shared.ListQuotaArtifacts(ctx, ctx.Doer().ID)
 }

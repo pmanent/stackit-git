@@ -30,6 +30,8 @@ import (
 	"forgejo.org/services/context/upload"
 	"forgejo.org/services/forms"
 	files_service "forgejo.org/services/repository/files"
+
+	"github.com/editorconfig/editorconfig-core-go/v2"
 )
 
 const (
@@ -101,9 +103,9 @@ func getParentTreeFields(treePath string) (treeNames, treePaths []string) {
 }
 
 // getSelectableEmailAddresses returns which emails can be used by the user as
-// email for a Git commiter.
+// email for a Git committer.
 func getSelectableEmailAddresses(ctx *context.Context) ([]*user_model.ActivatedEmailAddress, error) {
-	// Retrieve emails that the user could use for commiter identity.
+	// Retrieve emails that the user could use for committer identity.
 	commitEmails, err := user_model.GetActivatedEmailAddresses(ctx, ctx.Doer.ID)
 	if err != nil {
 		return nil, fmt.Errorf("GetActivatedEmailAddresses: %w", err)
@@ -189,7 +191,7 @@ func editFile(ctx *context.Context, isNewFile bool) {
 		buf = buf[:n]
 
 		// Only some file types are editable online as text.
-		if !typesniffer.DetectContentType(buf).IsRepresentableAsText() {
+		if !typesniffer.DetectContentType(buf, blob.Name()).IsRepresentableAsText() {
 			ctx.NotFound("typesniffer.IsRepresentableAsText", nil)
 			return
 		}
@@ -223,13 +225,22 @@ func editFile(ctx *context.Context, isNewFile bool) {
 	ctx.Data["last_commit"] = ctx.Repo.CommitID
 	ctx.Data["PreviewableExtensions"] = strings.Join(markup.PreviewableExtensions(), ",")
 	ctx.Data["LineWrapExtensions"] = strings.Join(setting.Repository.Editor.LineWrapExtensions, ",")
-	ctx.Data["EditorconfigJson"] = GetEditorConfig(ctx, treePath)
+	ctx.Data["EditorconfigJson"] = GetEditorConfigJSON(ctx, treePath)
 
 	ctx.HTML(http.StatusOK, tplEditFile)
 }
 
-// GetEditorConfig returns a editorconfig JSON string for given treePath or "null"
-func GetEditorConfig(ctx *context.Context, treePath string) string {
+// GetEditorConfig returns a editorconfig object for given treePath or nil
+func GetEditorConfig(ctx *context.Context, treePath string) (ec *editorconfig.Editorconfig) {
+	ec, _, err := ctx.Repo.GetEditorconfig()
+	if err == nil {
+		return ec
+	}
+	return nil
+}
+
+// GetEditorConfigJSON returns a editorconfig JSON string for given treePath or "null"
+func GetEditorConfigJSON(ctx *context.Context, treePath string) string {
 	ec, _, err := ctx.Repo.GetEditorconfig()
 	if err == nil {
 		def, err := ec.GetDefinitionForFilename(treePath)
@@ -274,7 +285,7 @@ func editFilePost(ctx *context.Context, form forms.EditRepoFileForm, isNewFile b
 	ctx.Data["last_commit"] = ctx.Repo.CommitID
 	ctx.Data["PreviewableExtensions"] = strings.Join(markup.PreviewableExtensions(), ",")
 	ctx.Data["LineWrapExtensions"] = strings.Join(setting.Repository.Editor.LineWrapExtensions, ",")
-	ctx.Data["EditorconfigJson"] = GetEditorConfig(ctx, form.TreePath)
+	ctx.Data["EditorconfigJson"] = GetEditorConfigJSON(ctx, form.TreePath)
 
 	if ctx.HasError() {
 		ctx.HTML(http.StatusOK, tplEditFile)
@@ -406,6 +417,7 @@ func editFilePost(ctx *context.Context, form forms.EditRepoFileForm, isNewFile b
 			}
 			ctx.RenderWithErr(flashError, tplEditFile, &form)
 		}
+		return
 	}
 
 	if ctx.Repo.Repository.IsEmpty {
@@ -458,6 +470,7 @@ func DiffPreviewPost(ctx *context.Context) {
 		return
 	}
 	ctx.Data["File"] = diff.Files[0]
+	ctx.Data["Editorconfig"] = GetEditorConfig(ctx, treePath)
 
 	ctx.HTML(http.StatusOK, tplEditDiffPreview)
 }
@@ -758,6 +771,7 @@ func UploadFilePost(ctx *context.Context) {
 		TreePath:     form.TreePath,
 		Message:      message,
 		Files:        form.Files,
+		FullPaths:    form.FullPaths,
 		Signoff:      form.Signoff,
 		Author:       gitIdentity,
 		Committer:    gitIdentity,
@@ -831,7 +845,7 @@ func cleanUploadFileName(name string) string {
 	// Rebase the filename
 	name = util.PathJoinRel(name)
 	// Git disallows any filenames to have a .git directory in them.
-	for _, part := range strings.Split(name, "/") {
+	for part := range strings.SplitSeq(name, "/") {
 		if strings.ToLower(part) == ".git" {
 			return ""
 		}

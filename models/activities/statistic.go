@@ -24,6 +24,7 @@ import (
 	"forgejo.org/services/stats"
 )
 
+// Statistic contains the database statistics
 type Statistic struct {
 	Counter struct {
 		User, Org, PublicKey,
@@ -31,10 +32,10 @@ type Statistic struct {
 		Issue, IssueClosed, IssueOpen,
 		Comment, RunJobsDurationThisMonth,
 		RunJobsAverageDurationThisMonth, RunJobsMaxDurationThisMonth,
-		RunJobsCountThisMonth, ApiCallsCount, ApiCallsAverageLatency,
-		ApiCallsMaxLatency, ApiCallsMinLatency, ApiCalls1xxStat,
-		ApiCalls2xxStat, ApiCalls3xxStat, ApiCalls4xxStat,
-		ApiCalls5xxStat, ApiCallsUnknownStat, Oauth, Follow,
+		RunJobsCountThisMonth, APICallsCount, APICallsAverageLatency,
+		APICallsMaxLatency, APICallsMinLatency, APICalls1xxStat,
+		APICalls2xxStat, APICalls3xxStat, APICalls4xxStat,
+		APICalls5xxStat, APICallsUnknownStat, Oauth, Follow,
 		Mirror, Release, AuthSource, Webhook,
 		Milestone, Label, HookTask,
 		Team, UpdateTask, Project,
@@ -98,16 +99,16 @@ func GetStatistic(ctx context.Context) (stats Statistic) {
 		_ = actions.GetRunJobsStatisticsThisMonth(ctx)
 
 	sts := st.GetStatisticsAndReset()
-	stats.Counter.ApiCallsCount = sts.Count
-	stats.Counter.ApiCallsAverageLatency = int64(sts.Avg)
-	stats.Counter.ApiCallsMaxLatency = int64(sts.Max)
-	stats.Counter.ApiCallsMinLatency = int64(sts.Min)
-	stats.Counter.ApiCalls1xxStat = sts.Status1xx
-	stats.Counter.ApiCalls2xxStat = sts.Status2xx
-	stats.Counter.ApiCalls3xxStat = sts.Status3xx
-	stats.Counter.ApiCalls4xxStat = sts.Status4xx
-	stats.Counter.ApiCalls5xxStat = sts.Status5xx
-	stats.Counter.ApiCallsUnknownStat = sts.StatusUnknown
+	stats.Counter.APICallsCount = sts.Count
+	stats.Counter.APICallsAverageLatency = int64(sts.Avg)
+	stats.Counter.APICallsMaxLatency = int64(sts.Max)
+	stats.Counter.APICallsMinLatency = int64(sts.Min)
+	stats.Counter.APICalls1xxStat = sts.Status1xx
+	stats.Counter.APICalls2xxStat = sts.Status2xx
+	stats.Counter.APICalls3xxStat = sts.Status3xx
+	stats.Counter.APICalls4xxStat = sts.Status4xx
+	stats.Counter.APICalls5xxStat = sts.Status5xx
+	stats.Counter.APICallsUnknownStat = sts.StatusUnknown
 	// >>> @@@ STACKIT CODE @@@
 
 	type IssueCount struct {

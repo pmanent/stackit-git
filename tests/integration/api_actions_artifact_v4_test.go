@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	actions_model "forgejo.org/models/actions"
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/storage"
 	"forgejo.org/routers/api/actions"
 	actions_service "forgejo.org/services/actions"
@@ -35,7 +37,14 @@ func toProtoJSON(m protoreflect.ProtoMessage) io.Reader {
 }
 
 func uploadArtifact(t *testing.T, body string) string {
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// acquire artifact upload url
@@ -59,7 +68,7 @@ func uploadArtifact(t *testing.T, body string) string {
 	req = NewRequestWithBody(t, "PUT", url, strings.NewReader(body))
 	MakeRequest(t, req, http.StatusCreated)
 
-	t.Logf("Create artifact confirm")
+	t.Log("Create artifact confirm")
 
 	sha := sha256.Sum256([]byte(body))
 
@@ -88,7 +97,14 @@ func TestActionsArtifactV4UploadSingleFile(t *testing.T) {
 func TestActionsArtifactV4UploadSingleFileWrongChecksum(t *testing.T) {
 	defer prepareTestEnvActionsArtifacts(t)()
 
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// acquire artifact upload url
@@ -113,7 +129,7 @@ func TestActionsArtifactV4UploadSingleFileWrongChecksum(t *testing.T) {
 	req = NewRequestWithBody(t, "PUT", url, strings.NewReader(body))
 	MakeRequest(t, req, http.StatusCreated)
 
-	t.Logf("Create artifact confirm")
+	t.Log("Create artifact confirm")
 
 	sha := sha256.Sum256([]byte(strings.Repeat("A", 1024)))
 
@@ -132,7 +148,14 @@ func TestActionsArtifactV4UploadSingleFileWrongChecksum(t *testing.T) {
 func TestActionsArtifactV4UploadSingleFileWithRetentionDays(t *testing.T) {
 	defer prepareTestEnvActionsArtifacts(t)()
 
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// acquire artifact upload url
@@ -158,7 +181,7 @@ func TestActionsArtifactV4UploadSingleFileWithRetentionDays(t *testing.T) {
 	req = NewRequestWithBody(t, "PUT", url, strings.NewReader(body))
 	MakeRequest(t, req, http.StatusCreated)
 
-	t.Logf("Create artifact confirm")
+	t.Log("Create artifact confirm")
 
 	sha := sha256.Sum256([]byte(body))
 
@@ -180,7 +203,14 @@ func TestActionsArtifactV4UploadSingleFileWithRetentionDays(t *testing.T) {
 func TestActionsArtifactV4UploadSingleFileWithPotentialHarmfulBlockID(t *testing.T) {
 	defer prepareTestEnvActionsArtifacts(t)()
 
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// acquire artifact upload url
@@ -221,7 +251,7 @@ func TestActionsArtifactV4UploadSingleFileWithPotentialHarmfulBlockID(t *testing
 	req = NewRequestWithBody(t, "PUT", blockListURL, bytes.NewReader(rawBlockList))
 	MakeRequest(t, req, http.StatusCreated)
 
-	t.Logf("Create artifact confirm")
+	t.Log("Create artifact confirm")
 
 	sha := sha256.Sum256([]byte(body))
 
@@ -243,7 +273,14 @@ func TestActionsArtifactV4UploadSingleFileWithPotentialHarmfulBlockID(t *testing
 func TestActionsArtifactV4UploadSingleFileWithChunksOutOfOrder(t *testing.T) {
 	defer prepareTestEnvActionsArtifacts(t)()
 
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// acquire artifact upload url
@@ -286,7 +323,7 @@ func TestActionsArtifactV4UploadSingleFileWithChunksOutOfOrder(t *testing.T) {
 	req = NewRequestWithBody(t, "PUT", blockListURL, bytes.NewReader(rawBlockList))
 	MakeRequest(t, req, http.StatusCreated)
 
-	t.Logf("Create artifact confirm")
+	t.Log("Create artifact confirm")
 
 	sha := sha256.Sum256([]byte(bodya + bodyb))
 
@@ -308,7 +345,14 @@ func TestActionsArtifactV4UploadSingleFileWithChunksOutOfOrder(t *testing.T) {
 func TestActionsArtifactV4DownloadSingle(t *testing.T) {
 	defer prepareTestEnvActionsArtifacts(t)()
 
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// acquire artifact upload url
@@ -339,19 +383,6 @@ func TestActionsArtifactV4DownloadSingle(t *testing.T) {
 	body := strings.Repeat("D", 1024)
 	assert.Equal(t, "bytes", resp.Header().Get("accept-ranges"))
 	assert.Equal(t, body, resp.Body.String())
-
-	// Download artifact via user-facing URL
-	req = NewRequest(t, "GET", "/user5/repo4/actions/runs/188/artifacts/artifact-v4-download")
-	resp = MakeRequest(t, req, http.StatusOK)
-	assert.Equal(t, "bytes", resp.Header().Get("accept-ranges"))
-	assert.Equal(t, body, resp.Body.String())
-
-	// Partial artifact download
-	req = NewRequest(t, "GET", "/user5/repo4/actions/runs/188/artifacts/artifact-v4-download").SetHeader("range", "bytes=0-99")
-	resp = MakeRequest(t, req, http.StatusPartialContent)
-	body = strings.Repeat("D", 100)
-	assert.Equal(t, "bytes 0-99/1024", resp.Header().Get("content-range"))
-	assert.Equal(t, body, resp.Body.String())
 }
 
 func TestActionsArtifactV4DownloadRange(t *testing.T) {
@@ -377,18 +408,19 @@ func TestActionsArtifactV4DownloadRange(t *testing.T) {
 	resp = MakeRequest(t, req, http.StatusPartialContent)
 	assert.Equal(t, "bytes 100-199/1024", resp.Header().Get("content-range"))
 	assert.Equal(t, bstr, resp.Body.String())
-
-	// Download (user-facing API)
-	req = NewRequest(t, "GET", "/user5/repo4/actions/runs/188/artifacts/artifact-v4-download").SetHeader("range", "bytes=100-199")
-	resp = MakeRequest(t, req, http.StatusPartialContent)
-	assert.Equal(t, "bytes 100-199/1024", resp.Header().Get("content-range"))
-	assert.Equal(t, bstr, resp.Body.String())
 }
 
 func TestActionsArtifactV4Delete(t *testing.T) {
 	defer prepareTestEnvActionsArtifacts(t)()
 
-	token, err := actions_service.CreateAuthorizationToken(48, 792, 193)
+	task := &actions_model.ActionTask{
+		ID: 48,
+		Job: &actions_model.ActionRunJob{
+			ID:    193,
+			RunID: 792,
+		},
+	}
+	token, err := actions_service.CreateAuthorizationToken(task, map[string]any{}, false, &repo_model.ActionsConfig{})
 	require.NoError(t, err)
 
 	// delete artifact by name

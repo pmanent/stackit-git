@@ -5,6 +5,8 @@ package org
 
 import (
 	"fmt"
+	gotemplate "html/template"
+	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/markup"
 	"forgejo.org/modules/markup/markdown"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
 	shared_user "forgejo.org/routers/web/shared/user"
@@ -99,6 +102,7 @@ func Home(ctx *context.Context) {
 		},
 		Keyword:            keyword,
 		OwnerID:            org.ID,
+		Collaborate:        optional.Some(false), // A organisation doesn't collaborate to any repository, avoid doing expensive SQL query.
 		OrderBy:            orderBy,
 		Private:            ctx.IsSigned,
 		Actor:              ctx.Doer,
@@ -144,20 +148,20 @@ func Home(ctx *context.Context) {
 	pager := context.NewPagination(int(count), setting.UI.User.RepoPagingNum, page, 5)
 	pager.SetDefaultParams(ctx)
 	pager.AddParamString("language", language)
-	if archived.Has() {
-		pager.AddParamString("archived", fmt.Sprint(archived.Value()))
+	if has, value := archived.Get(); has {
+		pager.AddParamString("archived", fmt.Sprint(value))
 	}
-	if fork.Has() {
-		pager.AddParamString("fork", fmt.Sprint(fork.Value()))
+	if has, value := fork.Get(); has {
+		pager.AddParamString("fork", fmt.Sprint(value))
 	}
-	if mirror.Has() {
-		pager.AddParamString("mirror", fmt.Sprint(mirror.Value()))
+	if has, value := mirror.Get(); has {
+		pager.AddParamString("mirror", fmt.Sprint(value))
 	}
-	if template.Has() {
-		pager.AddParamString("template", fmt.Sprint(template.Value()))
+	if has, value := template.Get(); has {
+		pager.AddParamString("template", fmt.Sprint(value))
 	}
-	if private.Has() {
-		pager.AddParamString("private", fmt.Sprint(private.Value()))
+	if has, value := private.Get(); has {
+		pager.AddParamString("private", fmt.Sprint(value))
 	}
 	ctx.Data["Page"] = pager
 
@@ -175,23 +179,35 @@ func prepareOrgProfileReadme(ctx *context.Context, profileGitRepo *git.Repositor
 		return
 	}
 
-	if bytes, err := profileReadme.GetBlobContent(setting.UI.MaxDisplayFileSize); err != nil {
-		log.Error("failed to GetBlobContent: %v", err)
+	if rc, _, err := profileReadme.NewTruncatedReader(setting.UI.MaxDisplayFileSize); err != nil {
+		log.Error("failed to NewTruncatedReader: %v", err)
 	} else {
-		if profileContent, err := markdown.RenderString(&markup.RenderContext{
-			Ctx:     ctx,
-			GitRepo: profileGitRepo,
-			Links: markup.Links{
-				// Pass repo link to markdown render for the full link of media elements.
-				// The profile of default branch would be shown.
-				Base:       profileDbRepo.Link(),
-				BranchPath: path.Join("branch", util.PathEscapeSegments(profileDbRepo.DefaultBranch)),
-			},
-			Metas: map[string]string{"mode": "document"},
-		}, bytes); err != nil {
-			log.Error("failed to RenderString: %v", err)
+		defer rc.Close()
+
+		if markupType := markup.Type(profileReadme.Name()); markupType != "" {
+			if profileContent, err := markdown.RenderReader(&markup.RenderContext{
+				Ctx:     ctx,
+				Type:    markupType,
+				GitRepo: profileGitRepo,
+				Links: markup.Links{
+					// Pass repo link to markdown render for the full link of media elements.
+					// The profile of default branch would be shown.
+					Base:       profileDbRepo.Link(),
+					BranchPath: path.Join("branch", util.PathEscapeSegments(profileDbRepo.DefaultBranch)),
+				},
+				Metas: map[string]string{"mode": "document"},
+			}, rc); err != nil {
+				log.Error("failed to RenderString: %v", err)
+			} else {
+				ctx.Data["ProfileReadme"] = profileContent
+			}
 		} else {
-			ctx.Data["ProfileReadme"] = profileContent
+			content, err := io.ReadAll(rc)
+			if err != nil {
+				log.Error("Read readme content failed: %v", err)
+			}
+			ctx.Data["ProfileReadme"] = gotemplate.HTMLEscapeString(util.UnsafeBytesToString(content))
+			ctx.Data["IsProfileReadmePlain"] = true
 		}
 	}
 }

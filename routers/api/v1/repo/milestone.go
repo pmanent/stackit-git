@@ -69,7 +69,7 @@ func ListMilestones(ctx *context.APIContext) {
 
 	milestones, total, err := db.FindAndCount[issues_model.Milestone](ctx, issues_model.FindMilestoneOptions{
 		ListOptions: utils.GetListOptions(ctx),
-		RepoID:      ctx.Repo.Repository.ID,
+		RepoID:      ctx.Repo().Repository.ID,
 		IsClosed:    isClosed,
 		Name:        ctx.FormString("name"),
 	})
@@ -108,7 +108,8 @@ func GetMilestone(ctx *context.APIContext) {
 	// - name: id
 	//   in: path
 	//   description: the milestone to get, identified by ID and if not available by name
-	//   type: string
+	//   type: integer
+	//   format: int64
 	//   required: true
 	// responses:
 	//   "200":
@@ -161,7 +162,7 @@ func CreateMilestone(ctx *context.APIContext) {
 	}
 
 	milestone := &issues_model.Milestone{
-		RepoID:       ctx.Repo.Repository.ID,
+		RepoID:       ctx.Repo().Repository.ID,
 		Name:         form.Title,
 		Content:      form.Description,
 		DeadlineUnix: timeutil.TimeStamp(form.Deadline.Unix()),
@@ -202,7 +203,8 @@ func EditMilestone(ctx *context.APIContext) {
 	// - name: id
 	//   in: path
 	//   description: the milestone to edit, identified by ID and if not available by name
-	//   type: string
+	//   type: integer
+	//   format: int64
 	//   required: true
 	// - name: body
 	//   in: body
@@ -260,7 +262,8 @@ func DeleteMilestone(ctx *context.APIContext) {
 	// - name: id
 	//   in: path
 	//   description: the milestone to delete, identified by ID and if not available by name
-	//   type: string
+	//   type: integer
+	//   format: int64
 	//   required: true
 	// responses:
 	//   "204":
@@ -273,7 +276,7 @@ func DeleteMilestone(ctx *context.APIContext) {
 		return
 	}
 
-	if err := issues_model.DeleteMilestoneByRepoID(ctx, ctx.Repo.Repository.ID, m.ID); err != nil {
+	if err := issues_model.DeleteMilestoneByRepoID(ctx, ctx.Repo().Repository.ID, m.ID); err != nil {
 		ctx.Error(http.StatusInternalServerError, "DeleteMilestoneByRepoID", err)
 		return
 	}
@@ -286,7 +289,7 @@ func getMilestoneByIDOrName(ctx *context.APIContext) *issues_model.Milestone {
 	mileID, _ := strconv.ParseInt(mile, 0, 64)
 
 	if mileID != 0 {
-		milestone, err := issues_model.GetMilestoneByRepoID(ctx, ctx.Repo.Repository.ID, mileID)
+		milestone, err := issues_model.GetMilestoneByRepoID(ctx, ctx.Repo().Repository.ID, mileID)
 		if err == nil {
 			return milestone
 		} else if !issues_model.IsErrMilestoneNotExist(err) {
@@ -295,7 +298,7 @@ func getMilestoneByIDOrName(ctx *context.APIContext) *issues_model.Milestone {
 		}
 	}
 
-	milestone, err := issues_model.GetMilestoneByRepoIDANDName(ctx, ctx.Repo.Repository.ID, mile)
+	milestone, err := issues_model.GetMilestoneByRepoIDANDName(ctx, ctx.Repo().Repository.ID, mile)
 	if err != nil {
 		if issues_model.IsErrMilestoneNotExist(err) {
 			ctx.NotFound()

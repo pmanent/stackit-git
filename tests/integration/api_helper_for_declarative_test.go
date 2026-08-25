@@ -99,13 +99,7 @@ func doAPIEditRepository(ctx APITestContext, editRepoOption *api.EditRepoOption,
 
 func doAPIAddCollaborator(ctx APITestContext, username string, mode perm.AccessMode) func(*testing.T) {
 	return func(t *testing.T) {
-		permission := "read"
-
-		if mode == perm.AccessModeAdmin {
-			permission = "admin"
-		} else if mode > perm.AccessModeRead {
-			permission = "write"
-		}
+		permission := mode.String()
 		addCollaboratorOption := &api.AddCollaboratorOption{
 			Permission: &permission,
 		}
@@ -273,7 +267,7 @@ func doAPIMergePullRequestForm(t *testing.T, ctx APITestContext, owner, repo str
 	var req *RequestWrapper
 	var resp *httptest.ResponseRecorder
 
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		req = NewRequestWithJSON(t, http.MethodPost, urlStr, merge).AddTokenAuth(ctx.Token)
 
 		resp = ctx.Session.MakeRequest(t, req, NoExpectedStatus)
@@ -295,7 +289,7 @@ func doAPIMergePullRequestForm(t *testing.T, ctx APITestContext, owner, repo str
 		expected = http.StatusOK
 	}
 
-	if !assert.EqualValues(t, expected, resp.Code,
+	if !assert.Equal(t, expected, resp.Code,
 		"Request: %s %s", req.Method, req.URL.String()) {
 		logUnexpectedResponse(t, resp)
 	}

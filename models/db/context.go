@@ -6,9 +6,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"slices"
 
+	"code.forgejo.org/xorm/xorm"
 	"xorm.io/builder"
-	"xorm.io/xorm"
 )
 
 // DefaultContext is the default context to run xorm queries in
@@ -29,8 +32,9 @@ var (
 // Context represents a db context
 type Context struct {
 	context.Context
-	e           Engine
-	transaction bool
+	e                Engine
+	transaction      bool
+	afterCommitHooks []func()
 }
 
 func newContext(ctx context.Context, e Engine, transaction bool) *Context {
@@ -74,7 +78,7 @@ func GetEngine(ctx context.Context) Engine {
 	if e := getEngine(ctx); e != nil {
 		return e
 	}
-	return x.Context(ctx)
+	return DefaultContext.(Engined).Engine().Context(ctx)
 }
 
 // getEngine will get a db Engine from this context or return nil
@@ -99,11 +103,19 @@ type Committer interface {
 // It can be closed early, but can't be committed early, it is useful for reusing a transaction.
 type halfCommitter struct {
 	committer Committer
+	parentCtx context.Context
+	txCtx     *Context
 	committed bool
 }
 
 func (c *halfCommitter) Commit() error {
 	c.committed = true
+
+	// Pass hooks installed into txCtx up to parentCtx
+	for _, hook := range c.txCtx.afterCommitHooks {
+		AfterTx(c.parentCtx, hook)
+	}
+
 	// should do nothing, and the parent committer will commit later
 	return nil
 }
@@ -116,6 +128,27 @@ func (c *halfCommitter) Close() error {
 
 	// it's "rollback and close", let the parent committer rollback right now
 	return c.committer.Close()
+}
+
+// Wraps an xorm.Session with execution of AfterTx hooks
+type hookCommitter struct {
+	sess  *xorm.Session
+	txCtx *Context
+}
+
+func (c *hookCommitter) Commit() error {
+	err := c.sess.Commit()
+	if err != nil {
+		return err
+	}
+	for _, hook := range c.txCtx.afterCommitHooks {
+		hook()
+	}
+	return nil
+}
+
+func (c *hookCommitter) Close() error {
+	return c.sess.Close()
 }
 
 // TxContext represents a transaction Context,
@@ -132,7 +165,8 @@ func (c *halfCommitter) Close() error {
 //	  d. It doesn't mean rollback is forbidden, but always do it only when there is an error, and you do want to rollback.
 func TxContext(parentCtx context.Context) (*Context, Committer, error) {
 	if sess, ok := inTransaction(parentCtx); ok {
-		return newContext(parentCtx, sess, true), &halfCommitter{committer: sess}, nil
+		txCtx := newContext(parentCtx, sess, true)
+		return txCtx, &halfCommitter{committer: sess, parentCtx: parentCtx, txCtx: txCtx}, nil
 	}
 
 	sess := x.NewSession()
@@ -141,17 +175,23 @@ func TxContext(parentCtx context.Context) (*Context, Committer, error) {
 		return nil, nil, err
 	}
 
-	return newContext(DefaultContext, sess, true), sess, nil
+	txCtx := newContext(parentCtx, sess, true)
+	return txCtx, &hookCommitter{sess, txCtx}, nil
 }
 
 // WithTx represents executing database operations on a transaction, if the transaction exist,
 // this function will reuse it otherwise will create a new one and close it when finished.
 func WithTx(parentCtx context.Context, f func(ctx context.Context) error) error {
 	if sess, ok := inTransaction(parentCtx); ok {
-		err := f(newContext(parentCtx, sess, true))
+		txCtx := newContext(parentCtx, sess, true)
+		err := f(txCtx)
 		if err != nil {
 			// rollback immediately, in case the caller ignores returned error and tries to commit the transaction.
 			_ = sess.Close()
+		}
+		// Pass hooks installed into txCtx up to parentCtx
+		for _, hook := range txCtx.afterCommitHooks {
+			AfterTx(parentCtx, hook)
 		}
 		return err
 	}
@@ -165,11 +205,33 @@ func txWithNoCheck(parentCtx context.Context, f func(ctx context.Context) error)
 		return err
 	}
 
-	if err := f(newContext(parentCtx, sess, true)); err != nil {
+	txCtx := newContext(parentCtx, sess, true)
+	if err := f(txCtx); err != nil {
 		return err
 	}
 
-	return sess.Commit()
+	if err := sess.Commit(); err != nil {
+		return err
+	}
+
+	for _, hook := range txCtx.afterCommitHooks {
+		hook()
+	}
+
+	return nil
+}
+
+// AfterTx registers a function to be called after the current transaction commits. If not in a transaction, the
+// function is called immediately. The hook will only be called if the transaction commits successfully; if the
+// transaction rolls back, the hook is discarded.
+func AfterTx(ctx context.Context, hook func()) {
+	dbCtx, ok := ctx.(*Context)
+	if !ok || !dbCtx.transaction {
+		// Not in a db transaction context, run immediately
+		hook()
+		return
+	}
+	dbCtx.afterCommitHooks = append(dbCtx.afterCommitHooks, hook)
 }
 
 // Insert inserts records into database
@@ -207,6 +269,91 @@ func GetByID[T any](ctx context.Context, id int64) (object *T, exist bool, err e
 		return nil, false, nil
 	}
 	return &bean, true, nil
+}
+
+// Retrieves multiple objects with database queries similar to an xorm `.In(idField, idList)`. idField must be a unique
+// field on the database table, as a map[id]obj is returned and the usage of a non-unique field would result in objects
+// being overwritten in the map.
+//
+// The length of the IN list is constrained to DefaultMaxInSize for each database query, resulting in multiple database
+// queries if the length of the idList exceeds that setting; this constraint prevents exceeding bind parameter
+// limitations or query length limitations in the database engine.
+func GetByIDs[Bean any, Id comparable](ctx context.Context, idField string, idList []Id, bean *Bean) (map[Id]*Bean, error) {
+	retval := make(map[Id]*Bean, len(idList))
+	if len(idList) == 0 {
+		return retval, nil
+	}
+
+	table, err := TableInfo(bean)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch table info for bean %v: %w", bean, err)
+	}
+
+	var structFieldName string
+	for _, c := range table.Columns() {
+		if c.Name == idField {
+			structFieldName = c.FieldName
+			break
+		}
+	}
+	if structFieldName == "" {
+		return nil, fmt.Errorf("unable to identify struct field for id field %s", idField)
+	}
+
+	for idChunk := range slices.Chunk(idList, DefaultMaxInSize) {
+		beans := make([]*Bean, 0, len(idChunk))
+		if err := GetEngine(ctx).In(idField, idChunk).Find(&beans); err != nil {
+			return nil, err
+		}
+		for _, bean := range beans {
+			retval[extractFieldValue(bean, structFieldName).(Id)] = bean
+		}
+	}
+
+	return retval, nil
+}
+
+// Retrieves multiple objects with database queries similar to an xorm `.In(field, valueList)`. Similar to GetByIDs,
+// except that a map[Id][]*Bean is returned as the field value is not assumed to be a unique value -- if there are
+// multiple rows in the table for each value, all of them are returned.
+//
+// The length of the IN list is constrained to DefaultMaxInSize for each database query, resulting in multiple database
+// queries if the length of the idList exceeds that setting; this constraint prevents exceeding bind parameter
+// limitations or query length limitations in the database engine.
+func GetByFieldIn[Bean any, Id comparable](ctx context.Context, field string, valueList []Id, bean *Bean) (map[Id][]*Bean, error) {
+	retval := make(map[Id][]*Bean, len(valueList))
+	if len(valueList) == 0 {
+		return retval, nil
+	}
+
+	table, err := TableInfo(bean)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch table info for bean %v: %w", bean, err)
+	}
+
+	var structFieldName string
+	for _, c := range table.Columns() {
+		if c.Name == field {
+			structFieldName = c.FieldName
+			break
+		}
+	}
+	if structFieldName == "" {
+		return nil, fmt.Errorf("unable to identify struct field for field %s", field)
+	}
+
+	for idChunk := range slices.Chunk(valueList, DefaultMaxInSize) {
+		beans := make([]*Bean, 0, len(idChunk))
+		if err := GetEngine(ctx).In(field, idChunk).Find(&beans); err != nil {
+			return nil, err
+		}
+		for _, bean := range beans {
+			fieldValue := extractFieldValue(bean, structFieldName).(Id)
+			retval[fieldValue] = append(retval[fieldValue], bean)
+		}
+	}
+
+	return retval, nil
 }
 
 func Exist[T any](ctx context.Context, cond builder.Cond) (bool, error) {
@@ -298,6 +445,31 @@ func TruncateBeans(ctx context.Context, beans ...any) (err error) {
 	return nil
 }
 
+// TruncateBeansCascade deletes all given beans. Beans MUST NOT contain delete conditions, as tables related by foreign
+// keys will also be truncated.
+func TruncateBeansCascade(ctx context.Context, beans ...any) (err error) {
+	// Expand the list of beans to any other table with a foreign key reference to the beans
+	cascadeTables, err := extendBeansForCascade(beans)
+	if err != nil {
+		return err
+	}
+
+	// Sort the beans in inverse foreign key delete order
+	cascadeSorted, err := sortBeans(cascadeTables, foreignKeySortDelete)
+	if err != nil {
+		return err
+	}
+
+	// Execute the truncate
+	e := GetEngine(ctx)
+	for i := range cascadeSorted {
+		if _, err = e.Truncate(cascadeSorted[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CountByBean counts the number of database records according non-empty fields of the bean as conditions.
 func CountByBean(ctx context.Context, bean any) (int64, error) {
 	return GetEngine(ctx).Count(bean)
@@ -331,4 +503,69 @@ func inTransaction(ctx context.Context) (*xorm.Session, bool) {
 	default:
 		return nil, false
 	}
+}
+
+type RetryConfig struct {
+	ErrorIs      []error
+	AttemptCount int
+}
+
+var ErrNestedRetryTxFailure = errors.New("(nested)")
+
+type nestedRetryTxState int
+
+var nestedRetryTx nestedRetryTxState
+
+// Execute the given function in a transaction. RetryConfig will retry the function on an error, if it matches the
+// ErrorIs parameter, up to the total of AttemptCount number of tries. RetryTx cannot be invoked when already within a
+// transaction and will return an error immediately.
+//
+// ErrNestedRetryTxFailure is an error type that will occur when RetryTx is nested within each other, and indicates that
+// an inner RetryTx encountered an error that matched its error list.
+func RetryTx(ctx context.Context, config RetryConfig, f func(ctx context.Context) error) error {
+	matchError := func(err error) bool {
+		for _, possibleError := range config.ErrorIs {
+			if errors.Is(err, possibleError) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Accept `ErrNestedRetryTxFailure` as error to retry on, means that a nested
+	// RetryTx indicated to retry the whole transaction.
+	config.ErrorIs = append(config.ErrorIs, ErrNestedRetryTxFailure)
+
+	withinRetryTx, present := ctx.Value(nestedRetryTx).(bool)
+	if present && withinRetryTx {
+		// If a caller already started `RetryTx`, then we assume we don't have to actually perform retries here -- we
+		// can attempt the requested function once, and if an error is returned that matches the configured error list,
+		// we'll return that error + ErrNestedRetryTxFailure wrapping.
+		err := f(ctx)
+		if err == nil {
+			return nil
+		} else if matchError(err) {
+			return fmt.Errorf("nested RetryTx; internal Tx failed with error that won't be retried: %w %w", err, ErrNestedRetryTxFailure)
+		}
+		return err
+	} else if InTransaction(ctx) {
+		return errors.New("unsupported operation: attempted to use RetryTx while already within a transaction")
+	} else if config.AttemptCount == 0 {
+		return errors.New("unsupported operation: attempted to use RetryTx with 0 attempts")
+	}
+
+	innerCtx := context.WithValue(ctx, nestedRetryTx, true)
+	var lastError error
+	for range config.AttemptCount {
+		err := WithTx(innerCtx, f)
+		if err == nil {
+			return nil
+		} else if !matchError(err) {
+			return err
+		}
+
+		lastError = err
+	}
+
+	return fmt.Errorf("retry tx failed after %d attempts; last error: %w", config.AttemptCount, lastError)
 }

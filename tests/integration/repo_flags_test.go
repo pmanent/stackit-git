@@ -135,7 +135,7 @@ func TestRepositoryFlagsAPI(t *testing.T) {
 		assert.Empty(t, flags)
 
 		// Replacing all tags works, twice in a row
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			req = NewRequestWithJSON(t, "PUT", fmt.Sprintf(baseURLFmtStr, ""), &api.ReplaceFlagsOption{
 				Flags: []string{"flag-1", "flag-2", "flag-3"},
 			}).AddTokenAuth(token)
@@ -160,7 +160,7 @@ func TestRepositoryFlagsAPI(t *testing.T) {
 		MakeRequest(t, req, http.StatusNotFound)
 
 		// We can add the same flag twice
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			req = NewRequestf(t, "PUT", baseURLFmtStr, "/brand-new-flag").AddTokenAuth(token)
 			MakeRequest(t, req, http.StatusNoContent)
 		}
@@ -170,7 +170,7 @@ func TestRepositoryFlagsAPI(t *testing.T) {
 		MakeRequest(t, req, http.StatusNoContent)
 
 		// We can delete a flag, twice
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			req = NewRequestf(t, "DELETE", baseURLFmtStr, "/flag-3").AddTokenAuth(token)
 			MakeRequest(t, req, http.StatusNoContent)
 		}
@@ -361,9 +361,7 @@ func TestRepositoryFlagsUI(t *testing.T) {
 			flagged := flaggedRepo.IsFlagged(db.DefaultContext)
 			assert.True(t, flagged)
 
-			req := NewRequestWithValues(t, "POST", flaggedRepoManageURL, map[string]string{
-				"_csrf": GetCSRF(t, session, flaggedRepoManageURL),
-			})
+			req := NewRequest(t, "POST", flaggedRepoManageURL)
 			session.MakeRequest(t, req, http.StatusSeeOther)
 
 			flagged = flaggedRepo.IsFlagged(db.DefaultContext)
@@ -380,7 +378,6 @@ func TestRepositoryFlagsUI(t *testing.T) {
 			assert.False(t, flagged)
 
 			req := NewRequestWithValues(t, "POST", unflaggedRepoManageURL, map[string]string{
-				"_csrf": GetCSRF(t, session, unflaggedRepoManageURL),
 				"flags": "test-flag",
 			})
 			session.MakeRequest(t, req, http.StatusSeeOther)

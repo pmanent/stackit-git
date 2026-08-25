@@ -4,7 +4,6 @@
 package repo
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
@@ -30,6 +29,7 @@ import (
 	"forgejo.org/services/convert"
 	"forgejo.org/services/forms"
 	"forgejo.org/services/migrations"
+	migrations_allowlist "forgejo.org/services/migrations/allowlist"
 	notify_service "forgejo.org/services/notify"
 	repo_service "forgejo.org/services/repository"
 )
@@ -72,7 +72,7 @@ func Migrate(ctx *context.APIContext) {
 	} else if form.RepoOwnerID != 0 {
 		repoOwner, err = user_model.GetUserByID(ctx, form.RepoOwnerID)
 	} else {
-		repoOwner = ctx.Doer
+		repoOwner = ctx.Doer()
 	}
 	if err != nil {
 		if user_model.IsErrUserNotExist(err) {
@@ -92,15 +92,15 @@ func Migrate(ctx *context.APIContext) {
 		return
 	}
 
-	if !ctx.Doer.IsAdmin {
-		if !repoOwner.IsOrganization() && ctx.Doer.ID != repoOwner.ID {
+	if !ctx.IsUserSiteAdmin() {
+		if !repoOwner.IsOrganization() && ctx.Doer().ID != repoOwner.ID {
 			ctx.Error(http.StatusForbidden, "", "Given user is not an organization.")
 			return
 		}
 
 		if repoOwner.IsOrganization() {
 			// Check ownership of organization.
-			isOwner, err := organization.OrgFromUser(repoOwner).IsOwnedBy(ctx, ctx.Doer.ID)
+			isOwner, err := organization.OrgFromUser(repoOwner).IsOwnedBy(ctx, ctx.Doer().ID)
 			if err != nil {
 				ctx.Error(http.StatusInternalServerError, "IsOwnedBy", err)
 				return
@@ -113,7 +113,7 @@ func Migrate(ctx *context.APIContext) {
 
 	remoteAddr, err := forms.ParseRemoteAddr(form.CloneAddr, form.AuthUsername, form.AuthPassword)
 	if err == nil {
-		err = migrations.IsMigrateURLAllowed(remoteAddr, ctx.Doer)
+		err = migrations_allowlist.IsMigrateURLAllowed(remoteAddr, ctx.Doer())
 	}
 	if err != nil {
 		handleRemoteAddrError(ctx, err)
@@ -123,12 +123,12 @@ func Migrate(ctx *context.APIContext) {
 	gitServiceType := convert.ToGitServiceType(form.Service)
 
 	if form.Mirror && setting.Mirror.DisableNewPull {
-		ctx.Error(http.StatusForbidden, "MirrorsGlobalDisabled", fmt.Errorf("the site administrator has disabled the creation of new pull mirrors"))
+		ctx.Error(http.StatusForbidden, "MirrorsGlobalDisabled", errors.New("the site administrator has disabled the creation of new pull mirrors"))
 		return
 	}
 
 	if setting.Repository.DisableMigrations {
-		ctx.Error(http.StatusForbidden, "MigrationsGlobalDisabled", fmt.Errorf("the site administrator has disabled migrations"))
+		ctx.Error(http.StatusForbidden, "MigrationsGlobalDisabled", errors.New("the site administrator has disabled migrations"))
 		return
 	}
 
@@ -140,7 +140,7 @@ func Migrate(ctx *context.APIContext) {
 			ctx.Error(http.StatusInternalServerError, "", ctx.Tr("repo.migrate.invalid_lfs_endpoint"))
 			return
 		}
-		err = migrations.IsMigrateURLAllowed(ep.String(), ctx.Doer)
+		err = migrations_allowlist.IsMigrateURLAllowed(ep.String(), ctx.Doer())
 		if err != nil {
 			handleRemoteAddrError(ctx, err)
 			return
@@ -177,7 +177,7 @@ func Migrate(ctx *context.APIContext) {
 		opts.Releases = false
 	}
 
-	repo, err := repo_service.CreateRepositoryDirectly(ctx, ctx.Doer, repoOwner, repo_service.CreateRepoOptions{
+	repo, err := repo_service.CreateRepositoryDirectly(ctx, ctx.Doer(), repoOwner, repo_service.CreateRepoOptions{
 		Name:           opts.RepoName,
 		Description:    opts.Description,
 		OriginalURL:    form.CloneAddr,
@@ -195,25 +195,24 @@ func Migrate(ctx *context.APIContext) {
 
 	defer func() {
 		if e := recover(); e != nil {
-			var buf bytes.Buffer
-			fmt.Fprintf(&buf, "Handler crashed with error: %v", log.Stack(2))
-
-			err = errors.New(buf.String())
+			log.Error("PANIC recovered: %v\nStacktrace: %s", e, log.Stack(2))
+			err = fmt.Errorf("PANIC recover with error %v", e)
+			ctx.Error(http.StatusInternalServerError, "Recovered PANIC with error", err)
 		}
 
 		if err == nil {
-			notify_service.MigrateRepository(ctx, ctx.Doer, repoOwner, repo)
+			notify_service.MigrateRepository(ctx, ctx.Doer(), repoOwner, repo)
 			return
 		}
 
 		if repo != nil {
-			if errDelete := repo_service.DeleteRepositoryDirectly(ctx, ctx.Doer, repo.ID); errDelete != nil {
+			if errDelete := repo_service.DeleteRepositoryDirectly(ctx, repo.ID, repo_service.DeleteRepositoryOpts{}); errDelete != nil {
 				log.Error("DeleteRepository: %v", errDelete)
 			}
 		}
 	}()
 
-	if repo, err = migrations.MigrateRepository(graceful.GetManager().HammerContext(), ctx.Doer, repoOwner.Name, opts, nil); err != nil {
+	if repo, err = migrations.MigrateRepository(graceful.GetManager().HammerContext(), ctx.Doer(), repoOwner.Name, opts, nil); err != nil {
 		handleMigrateError(ctx, repoOwner, err)
 		return
 	}

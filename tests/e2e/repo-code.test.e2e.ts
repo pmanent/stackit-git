@@ -1,11 +1,19 @@
+// Copyright 2024 The Forgejo Authors. All rights reserved.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // @watch start
-// web_src/js/features/repo-code.js
-// web_src/css/repo.css
 // services/gitdiff/**
+// templates/repo/view_file.tmpl
+// web_src/css/repo.css
+// web_src/css/repo/file-view.css
+// web_src/css/modules/tippy.css
+// web_src/js/features/repo-code.js
+// web_src/js/features/repo-unicode-escape.js
 // @watch end
 
 import {expect, type Page} from '@playwright/test';
-import {save_visual, test} from './utils_e2e.ts';
+import {test} from './utils_e2e.ts';
+import {screenshot} from './shared/screenshots.ts';
 import {accessibilityCheck} from './shared/accessibility.ts';
 
 async function assertSelectedLines(page: Page, nums: string[]) {
@@ -16,7 +24,7 @@ async function assertSelectedLines(page: Page, nums: string[]) {
       .toStrictEqual(nums);
 
     // the first line selected has an action button
-    if (nums.length > 0) await expect(page.locator(`#L${nums[0]} .code-line-button`)).toBeVisible();
+    if (nums.length > 0) await expect(page.locator(`.lines-num:has(#L${nums[0]}) .code-line-button`)).toBeVisible();
   };
 
   await pageAssertions();
@@ -49,7 +57,7 @@ test('Line Range Selection', async ({page}) => {
   // out-of-bounds end line
   await page.goto(`${filePath}#L1-L100`);
   await assertSelectedLines(page, ['1', '2', '3']);
-  await save_visual(page);
+  await screenshot(page);
 });
 
 test('Readable diff', async ({page}, workerInfo) => {
@@ -69,14 +77,14 @@ test('Readable diff', async ({page}, workerInfo) => {
     await page.getByText(`Patch: ${thisDiff.id}`).click();
     if (thisDiff.removed) {
       await expect(page.getByText(thisDiff.removed, {exact: true})).toHaveClass(/removed-code/);
-      await expect(page.getByText(thisDiff.removed, {exact: true})).toHaveCSS('background-color', 'rgb(252, 165, 165)');
+      await expect(page.getByText(thisDiff.removed, {exact: true})).toHaveCSS('background-color', 'rgb(120, 48, 48)');
     }
     if (thisDiff.added) {
       await expect(page.getByText(thisDiff.added, {exact: true})).toHaveClass(/added-code/);
-      await expect(page.getByText(thisDiff.added, {exact: true})).toHaveCSS('background-color', 'rgb(134, 239, 172)');
+      await expect(page.getByText(thisDiff.added, {exact: true})).toHaveCSS('background-color', 'rgb(37, 92, 57)');
     }
   }
-  await save_visual(page);
+  await screenshot(page);
 });
 
 test.describe('As authenticated user', () => {
@@ -89,13 +97,73 @@ test.describe('As authenticated user', () => {
     await expect(page.getByRole('link', {name: '@user2'})).toHaveCSS('background-color', /(.*)/);
     await expect(page.getByRole('link', {name: '@user1'})).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await accessibilityCheck({page}, ['.commit-header'], [], []);
-    await save_visual(page);
+    await screenshot(page);
     // check second commit
     await page.goto('/user2/mentions-highlighted/commits/branch/main');
     await page.locator('tbody').getByRole('link', {name: 'Another commit which mentions'}).click();
     await expect(page.getByRole('link', {name: '@user2'})).toHaveCSS('background-color', /(.*)/);
     await expect(page.getByRole('link', {name: '@user1'})).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await accessibilityCheck({page}, ['.commit-header'], [], []);
-    await save_visual(page);
+    await screenshot(page);
   });
+});
+
+test('Unicode escape highlight', async ({page}) => {
+  const unselectedBg = 'rgba(0, 0, 0, 0)';
+  const selectedBg = 'rgba(4, 84, 98, 0.2)';
+
+  const response = await page.goto('/user2/unicode-escaping/src/branch/main/a-file');
+  expect(response?.status()).toBe(200);
+
+  await expect(page.locator('.unicode-escape-prompt')).toBeVisible();
+  expect(await page.locator('.lines-num').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(unselectedBg);
+  expect(await page.locator('.lines-escape').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(unselectedBg);
+  expect(await page.locator('.lines-code').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(unselectedBg);
+
+  await page.locator('#L1').click();
+  expect(await page.locator('.lines-num').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(selectedBg);
+  expect(await page.locator('.lines-escape').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(selectedBg);
+  expect(await page.locator('.lines-code').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(selectedBg);
+
+  await page.locator('.code-line-button').click();
+  await expect(page.locator('.tippy-box .view_git_blame[href$="/a-file#L1"]')).toBeVisible();
+  await expect(page.locator('.tippy-box .copy-line-permalink[data-url$="/a-file#L1"]')).toBeVisible();
+});
+
+test('File folding', async ({page}) => {
+  const filePath = '/user2/repo1/commit/65f1bf27bc3bf70f64657658635e66094edbcb4d';
+
+  const response = await page.goto(filePath);
+  expect(response?.status()).toBe(200);
+
+  const foldFileButton = page.locator('.fold-file');
+  const diffFileBody = page.locator('.diff-file-body');
+  await foldFileButton.click();
+  await expect(diffFileBody).toBeHidden();
+  await foldFileButton.click();
+  await expect(diffFileBody).toBeVisible();
+});
+
+test('Copy line permalink', async ({page}) => {
+  const response = await page.goto('/user2/repo1/src/branch/master/README.md?display=source#L1');
+  expect(response?.status()).toBe(200);
+
+  await expect(async () => {
+    await page.locator('.code-line-button').click();
+    // eslint-disable-next-line playwright/no-force-option
+    await page.locator('.tippy-box .copy-line-permalink').click({force: true});
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboardText).toContain('README.md?display=source#L1');
+  }).toPass();
+});
+
+test('Line menu styles', async ({page}) => {
+  const response = await page.goto('/user2/repo1/src/branch/master/README.md?display=source#L1');
+  expect(response?.status()).toBe(200);
+
+  await page.locator('.code-line-button').click();
+  const button = page.locator('.tippy-box .ref-in-new-issue');
+
+  await expect(button).toHaveCSS('display', 'flex');
+  await expect(button).toHaveCSS('padding', '9px 18px');
 });

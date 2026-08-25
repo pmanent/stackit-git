@@ -1,0 +1,8 @@
+div[role="main"].repository.new.repo fieldset legend {
+  /* stylelint-disable-next-line scale-unlimited/declaration-strict-value */
+  font-weight: 700;
+}
+div[role="main"].repository.new.repo fieldset label {
+  /* stylelint-disable-next-line scale-unlimited/declaration-strict-value */
+  font-weight: 500;
+}

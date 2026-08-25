@@ -1,4 +1,5 @@
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package repository
@@ -68,12 +69,16 @@ func CreateRepositoryByExample(ctx context.Context, doer, u *user_model.User, re
 
 	// insert units for repo
 	defaultUnits := unit.DefaultRepoUnits
-	if isFork {
+	switch {
+	case isFork:
 		defaultUnits = unit.DefaultForkRepoUnits
+	case repo.IsMirror:
+		defaultUnits = unit.DefaultMirrorRepoUnits
 	}
 	units := make([]repo_model.RepoUnit, 0, len(defaultUnits))
 	for _, tp := range defaultUnits {
-		if tp == unit.TypeIssues {
+		switch tp {
+		case unit.TypeIssues:
 			units = append(units, repo_model.RepoUnit{
 				RepoID: repo.ID,
 				Type:   tp,
@@ -83,7 +88,7 @@ func CreateRepositoryByExample(ctx context.Context, doer, u *user_model.User, re
 					EnableDependencies:               setting.Service.DefaultEnableDependencies,
 				},
 			})
-		} else if tp == unit.TypePullRequests {
+		case unit.TypePullRequests:
 			units = append(units, repo_model.RepoUnit{
 				RepoID: repo.ID,
 				Type:   tp,
@@ -94,7 +99,7 @@ func CreateRepositoryByExample(ctx context.Context, doer, u *user_model.User, re
 					AllowRebaseUpdate:  true,
 				},
 			})
-		} else {
+		default:
 			units = append(units, repo_model.RepoUnit{
 				RepoID: repo.ID,
 				Type:   tp,
@@ -148,7 +153,7 @@ func CreateRepositoryByExample(ctx context.Context, doer, u *user_model.User, re
 	}
 
 	if setting.Service.AutoWatchNewRepos {
-		if err = repo_model.WatchRepo(ctx, doer.ID, repo.ID, true); err != nil {
+		if err = repo_model.WatchIfAutoWatchNewRepos(ctx, doer.ID, repo.ID); err != nil {
 			return fmt.Errorf("WatchRepo: %w", err)
 		}
 	}
@@ -239,6 +244,11 @@ func UpdateRepository(ctx context.Context, repo *repo_model.Repository, visibili
 	repo.LowerName = strings.ToLower(repo.Name)
 
 	e := db.GetEngine(ctx)
+
+	// If the repository was reported as abusive, a shadow copy should be created before first update.
+	if err := repo_model.IfNeededCreateShadowCopyForRepository(ctx, repo, true); err != nil {
+		return err
+	}
 
 	if _, err = e.ID(repo.ID).AllCols().Update(repo); err != nil {
 		return fmt.Errorf("update: %w", err)

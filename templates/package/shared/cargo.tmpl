@@ -1,31 +1,25 @@
-<!-- DO NOT EDIT. Changes made to this file will not be picked up by forgejo. -->
-<!-- Instead, edit its "custom" counterpart that lives in: -->
-<!-- /custom/templates/package/shared/cargo.tmpl -->
-
 <h4 class="ui top attached header">
 	{{ctx.Locale.Tr "packages.owner.settings.cargo.title"}}
 </h4>
 <div class="ui attached segment">
 	<div class="ui form">
+		<div class="field">
+			<label>{{ctx.Locale.Tr "packages.registry.documentation" "Cargo" "https://forgejo.org/docs/latest/user/packages/cargo/"}}</label>
+		</div>
 		{{if .CargoIndexExists}}
+		<form class="field" action="{{.Link}}/cargo/rebuild" method="post">
+			<button class="ui primary button">{{ctx.Locale.Tr "packages.owner.settings.cargo.rebuild"}}</button>
+		</form>
 		<div class="field">
 			<label>{{ctx.Locale.Tr "packages.owner.settings.cargo.rebuild.description"}}</label>
 		</div>
-		<form class="field" action="{{.Link}}/cargo/rebuild" method="post">
-			{{.CsrfTokenHtml}}
-			<button class="ui primary button">{{ctx.Locale.Tr "packages.owner.settings.cargo.rebuild"}}</button>
-		</form>
 		{{else}}
+		<form class="field" action="{{.Link}}/cargo/initialize" method="post">
+			<button class="ui primary button">{{ctx.Locale.Tr "packages.owner.settings.cargo.initialize"}}</button>
+		</form>
 		<div class="field">
 			<label>{{ctx.Locale.Tr "packages.owner.settings.cargo.initialize.description"}}</label>
 		</div>
-		<form class="field" action="{{.Link}}/cargo/initialize" method="post">
-			{{.CsrfTokenHtml}}
-			<button class="ui primary button">{{ctx.Locale.Tr "packages.owner.settings.cargo.initialize"}}</button>
-		</form>
 		{{end}}
-		<div class="field">
-			<label>{{ctx.Locale.Tr "packages.registry.documentation" "Cargo" "https://forgejo.org/docs/latest/user/packages/cargo/"}} {{svg "octicon-link-external" 16}}</label>
-		</div>
 	</div>
 </div>

@@ -15,6 +15,7 @@ import (
 	"forgejo.org/models/packages"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/test"
 	"forgejo.org/tests"
 
 	"github.com/stretchr/testify/assert"
@@ -61,6 +62,11 @@ func TestPackageGo(t *testing.T) {
 		})
 
 		req = NewRequestWithBody(t, "PUT", url+"/upload", bytes.NewReader(content)).
+			AddBasicAuth(user.Name).
+			SetHeader("content-type", "multipart/form-data")
+		MakeRequest(t, req, http.StatusBadRequest)
+
+		req = NewRequestWithBody(t, "PUT", url+"/upload", bytes.NewReader(content)).
 			AddBasicAuth(user.Name)
 		MakeRequest(t, req, http.StatusCreated)
 
@@ -88,11 +94,11 @@ func TestPackageGo(t *testing.T) {
 			AddBasicAuth(user.Name)
 		MakeRequest(t, req, http.StatusConflict)
 
-		time.Sleep(time.Second)
-
 		content = createArchive(map[string][]byte{
 			packageName + "@" + packageVersion2 + "/go.mod": []byte(goModContent),
 		})
+
+		test.SleepTillNextSecond()
 
 		req = NewRequestWithBody(t, "PUT", url+"/upload", bytes.NewReader(content)).
 			AddBasicAuth(user.Name)

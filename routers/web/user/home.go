@@ -16,9 +16,9 @@ import (
 	activities_model "forgejo.org/models/activities"
 	asymkey_model "forgejo.org/models/asymkey"
 	"forgejo.org/models/db"
-	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/models/organization"
+	project_model "forgejo.org/models/project"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
@@ -120,7 +120,6 @@ func Dashboard(ctx *context.Context) {
 		Actor:           ctx.Doer,
 		IncludePrivate:  true,
 		OnlyPerformedBy: false,
-		IncludeDeleted:  false,
 		Date:            ctx.FormString("date"),
 		ListOptions: db.ListOptions{
 			Page:     page,
@@ -193,7 +192,7 @@ func Milestones(ctx *context.Context) {
 			reposQuery = reposQuery[1 : len(reposQuery)-1]
 			// for each ID (delimiter ",") add to int to repoIDs
 
-			for _, rID := range strings.Split(reposQuery, ",") {
+			for rID := range strings.SplitSeq(reposQuery, ",") {
 				// Ensure nonempty string entries
 				if rID != "" && rID != "0" {
 					rIDint64, err := strconv.ParseInt(rID, 10, 64)
@@ -513,8 +512,6 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 	}
 
 	switch filterMode {
-	case issues_model.FilterModeAll:
-	case issues_model.FilterModeYourRepositories:
 	case issues_model.FilterModeAssign:
 		opts.AssigneeID = ctx.Doer.ID
 	case issues_model.FilterModeCreate:
@@ -536,24 +533,59 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 	opts.IsClosed = optional.Some(isShowClosed)
 
 	// Make sure page number is at least 1. Will be posted to ctx.Data.
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 	opts.Paginator = &db.ListOptions{
 		Page:     page,
 		PageSize: setting.UI.IssuePagingNum,
 	}
 
+	// Projects
+	//
+	// We do not consider listing projects for the individual repos.
+	// Instead, we only support listing the projects under the scope of an individual/organisation.
+	// However, this limitation does not affect filtering with a project ID.
+	{
+		projOpts := project_model.SearchOptions{
+			ListOptions: db.ListOptionsAll,
+			OwnerID:     ctxUser.ID,
+			IsClosed:    optional.None[bool](),
+			Type:        project_model.TypeIndividual,
+		}
+		if org != nil {
+			projOpts.OwnerID = org.ID
+			projOpts.Type = project_model.TypeOrganization
+		}
+
+		projects, err := db.Find[project_model.Project](ctx, projOpts)
+		if err != nil {
+			ctx.ServerError("GetProjects", err)
+			return
+		}
+
+		if projectID := ctx.FormInt64("project"); projectID != 0 {
+			opts.ProjectID = projectID
+			ctx.Data["ProjectID"] = projectID
+		}
+
+		ctx.Data["Projects"] = projects
+	}
+
 	// Get IDs for labels (a filter option for issues/pulls).
 	// Required for IssuesOptions.
 	selectedLabels := ctx.FormString("labels")
-	if len(selectedLabels) > 0 && selectedLabels != "0" {
+	if len(selectedLabels) > 0 {
 		var err error
 		opts.LabelIDs, err = base.StringsToInt64s(strings.Split(selectedLabels, ","))
 		if err != nil {
 			ctx.Flash.Error(ctx.Tr("invalid_data", selectedLabels), true)
 		}
+		if slices.Contains(opts.LabelIDs, 0) {
+			opts.LabelIDs = []int64{0}
+			ctx.Data["NoLabel"] = true
+		}
+	}
+	if len(opts.LabelIDs) == 0 {
+		ctx.Data["AllLabels"] = true
 	}
 
 	if org != nil {
@@ -594,7 +626,7 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 	// USING FINAL STATE OF opts FOR A QUERY.
 	var issues issues_model.IssueList
 	{
-		issueIDs, _, err := issue_indexer.SearchIssues(ctx, issue_indexer.ToSearchOptions(keyword, opts))
+		issueIDs, _, err := issue_indexer.SearchIssues(ctx, issue_indexer.ToSearchOptions(ctx, keyword, opts))
 		if err != nil {
 			ctx.ServerError("issueIDsFromSearch", err)
 			return
@@ -611,20 +643,18 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 		ctx.ServerError("GetIssuesLastCommitStatus", err)
 		return
 	}
-	if !ctx.Repo.CanRead(unit.TypeActions) {
-		for key := range commitStatuses {
-			git_model.CommitStatusesHideActionsURL(ctx, commitStatuses[key])
-		}
-	}
 
 	// -------------------------------
 	// Fill stats to post to ctx.Data.
 	// -------------------------------
-	issueStats, err := getUserIssueStats(ctx, ctxUser, filterMode, issue_indexer.ToSearchOptions(keyword, opts))
+	searchOpts := issue_indexer.ToSearchOptions(ctx, keyword, opts)
+	issueStats, err := getUserIssueStats(ctx, ctxUser, filterMode, searchOpts)
 	if err != nil {
 		ctx.ServerError("getUserIssueStats", err)
 		return
 	}
+	isShowClosed = searchOpts.IsClosed.ValueOrDefault(isShowClosed)
+	sortType = searchOpts.SortBy.ToIssueSort()
 
 	// Will be posted to ctx.Data.
 	var shownIssues int
@@ -655,9 +685,10 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 			return 0
 		}
 		reviewTyp := issues_model.ReviewTypeApprove
-		if typ == "reject" {
+		switch typ {
+		case "reject":
 			reviewTyp = issues_model.ReviewTypeReject
-		} else if typ == "waiting" {
+		case "waiting":
 			reviewTyp = issues_model.ReviewTypeRequest
 		}
 		for _, count := range counts {
@@ -676,10 +707,16 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 	ctx.Data["SelectLabels"] = selectedLabels
 	ctx.Data["PageIsOrgIssues"] = org != nil
 
+	state := "open"
 	if isShowClosed {
-		ctx.Data["State"] = "closed"
-	} else {
-		ctx.Data["State"] = "open"
+		state = "closed"
+	}
+	ctx.Data["State"] = state
+
+	ctx.SetFormString("state", state)
+	if has, value := searchOpts.AssigneeID.Get(); has {
+		id := strconv.FormatInt(value, 10)
+		ctx.SetFormString("assignee", id)
 	}
 
 	pager := context.NewPagination(shownIssues, setting.UI.IssuePagingNum, page, 5)
@@ -690,6 +727,7 @@ func buildIssueOverview(ctx *context.Context, unitType unit.Type) {
 	pager.AddParam(ctx, "labels", "SelectLabels")
 	pager.AddParam(ctx, "milestone", "MilestoneID")
 	pager.AddParam(ctx, "assignee", "AssigneeID")
+	pager.AddParam(ctx, "project", "ProjectID")
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, tplIssues)
@@ -707,9 +745,17 @@ func ShowSSHKeys(ctx *context.Context) {
 
 	var buf bytes.Buffer
 	for i := range keys {
+		if keys[i].Type == asymkey_model.KeyTypePrincipal {
+			continue // Don't display SSH principals, only public keys
+		}
 		buf.WriteString(keys[i].OmitEmail())
 		buf.WriteString("\n")
 	}
+
+	if buf.Len() == 0 {
+		buf.WriteString("# Note: This user hasn't uploaded any SSH keys.\n")
+	}
+
 	ctx.PlainTextBytes(http.StatusOK, buf.Bytes())
 }
 
@@ -838,7 +884,7 @@ func getUserIssueStats(ctx *context.Context, ctxUser *user_model.User, filterMod
 		openClosedOpts := opts.Copy()
 		switch filterMode {
 		case issues_model.FilterModeAll:
-			// no-op
+			break
 		case issues_model.FilterModeYourRepositories:
 			openClosedOpts.AllPublic = false
 		case issues_model.FilterModeAssign:

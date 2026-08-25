@@ -61,12 +61,25 @@ func sessionHandler(session ssh.Session) {
 
 	command := session.RawCommand()
 
-	log.Trace("SSH: Payload: %v", command)
+	logger.Trace("SSH: Payload: %v", command)
 
 	args := []string{"--config=" + setting.CustomConf, "serv", "key-" + keyID}
-	log.Trace("SSH: Arguments: %v", args)
+	logger.Trace("SSH: Arguments: %v", args)
 
-	ctx, cancel := context.WithCancel(session.Context())
+	// Previously we would use `session.Context()` here, which would cause the context to cancel when the SSH session is
+	// closed, which causes the `forgejo` subprocess to be cancelled when the session is closed.  This behaviour was a
+	// deviation from OpenSSH, which allows subprocesses to continue past the SSH session and relies on the subprocess's
+	// stdin being closed and stdout being unwritable (EPIPE) to indicate that the subprocess should finish.  As an
+	// effect of that, `forgejo serv` subprocesses would be killed, and their `git` subprocesses would be killed (due to
+	// `SetupCancellableCommand`), and `git`'s subprocess post-receive hooks would be killed, all resulting in a desync
+	// between the on-disk repository and Forgejo's knowledge about the repository branches.
+	//
+	// Instead of that, we try to mirror OpenSSH's behaviour -- create a context that won't automatically kill the
+	// subprocesses, and rely on the stdin/stdout pipes to signal to subprocesses their cancellation.  We still
+	// terminate those processes if Forgejo's graceful shutdown hits the hammer timeout -- during a graceful shutdown
+	// the SSH server still stop accepting new connections, and these connections just need to finish before the hammer
+	// timeout, or, be terminated at that timeout.
+	ctx, cancel := context.WithCancel(graceful.GetManager().HammerContext())
 	defer cancel()
 
 	gitProtocol := ""
@@ -87,39 +100,39 @@ func sessionHandler(session ssh.Session) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Error("SSH: StdoutPipe: %v", err)
+		logger.Error("SSH: StdoutPipe: %v", err)
 		return
 	}
 	defer stdout.Close()
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		log.Error("SSH: StderrPipe: %v", err)
+		logger.Error("SSH: StderrPipe: %v", err)
 		return
 	}
 	defer stderr.Close()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		log.Error("SSH: StdinPipe: %v", err)
+		logger.Error("SSH: StdinPipe: %v", err)
 		return
 	}
 	defer stdin.Close()
 
-	process.SetSysProcAttribute(cmd)
+	process.SetupCancellableCommand(cmd)
 
 	wg := &sync.WaitGroup{}
 	wg.Add(2)
 
 	if err = cmd.Start(); err != nil {
-		log.Error("SSH: Start: %v", err)
+		logger.Error("SSH: Start: %v", err)
 		return
 	}
 
 	go func() {
 		defer stdin.Close()
 		if _, err := io.Copy(stdin, session); err != nil {
-			log.Error("Failed to write session to stdin. %s", err)
+			logger.Error("Failed to write session to stdin. %s", err)
 		}
 	}()
 
@@ -127,7 +140,7 @@ func sessionHandler(session ssh.Session) {
 		defer wg.Done()
 		defer stdout.Close()
 		if _, err := io.Copy(session, stdout); err != nil {
-			log.Error("Failed to write stdout to session. %s", err)
+			logger.Error("Failed to write stdout to session. %s", err)
 		}
 	}()
 
@@ -135,7 +148,7 @@ func sessionHandler(session ssh.Session) {
 		defer wg.Done()
 		defer stderr.Close()
 		if _, err := io.Copy(session.Stderr(), stderr); err != nil {
-			log.Error("Failed to write stderr to session. %s", err)
+			logger.Error("Failed to write stderr to session. %s", err)
 		}
 	}()
 
@@ -149,41 +162,41 @@ func sessionHandler(session ssh.Session) {
 		// Cannot use errors.Is here because ExitError doesn't implement Is
 		// Thus errors.Is will do equality test NOT type comparison
 		if _, ok := err.(*exec.ExitError); !ok {
-			log.Error("SSH: Wait: %v", err)
+			logger.Error("SSH: Wait: %v", err)
 		}
 	}
 
 	if err := session.Exit(getExitStatusFromError(err)); err != nil && !errors.Is(err, io.EOF) {
-		log.Error("Session failed to exit. %s", err)
+		logger.Error("Session failed to exit. %s", err)
 	}
 }
 
 func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
-	if log.IsDebug() { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
-		log.Debug("Handle Public Key: Fingerprint: %s from %s", gossh.FingerprintSHA256(key), ctx.RemoteAddr())
+	if logger.LevelEnabled(log.DEBUG) { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
+		logger.Debug("Handle Public Key: Fingerprint: %s from %s", gossh.FingerprintSHA256(key), ctx.RemoteAddr())
 	}
 
 	if ctx.User() != setting.SSH.BuiltinServerUser {
-		log.Warn("Invalid SSH username %s - must use %s for all git operations via ssh", ctx.User(), setting.SSH.BuiltinServerUser)
-		log.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
+		logger.Warn("Invalid SSH username %s - must use %s for all git operations via ssh", ctx.User(), setting.SSH.BuiltinServerUser)
+		logger.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
 		return false
 	}
 
 	// check if we have a certificate
 	if cert, ok := key.(*gossh.Certificate); ok {
-		if log.IsDebug() { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
-			log.Debug("Handle Certificate: %s Fingerprint: %s is a certificate", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
+		if logger.LevelEnabled(log.DEBUG) { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
+			logger.Debug("Handle Certificate: %s Fingerprint: %s is a certificate", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
 		}
 
 		if len(setting.SSH.TrustedUserCAKeys) == 0 {
-			log.Warn("Certificate Rejected: No trusted certificate authorities for this server")
-			log.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
+			logger.Warn("Certificate Rejected: No trusted certificate authorities for this server")
+			logger.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
 			return false
 		}
 
 		if cert.CertType != gossh.UserCert {
-			log.Warn("Certificate Rejected: Not a user certificate")
-			log.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
+			logger.Warn("Certificate Rejected: Not a user certificate")
+			logger.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
 			return false
 		}
 
@@ -193,10 +206,10 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 			pkey, err := asymkey_model.SearchPublicKeyByContentExact(ctx, principal)
 			if err != nil {
 				if asymkey_model.IsErrKeyNotExist(err) {
-					log.Debug("Principal Rejected: %s Unknown Principal: %s", ctx.RemoteAddr(), principal)
+					logger.Debug("Principal Rejected: %s Unknown Principal: %s", ctx.RemoteAddr(), principal)
 					continue principalLoop
 				}
-				log.Error("SearchPublicKeyByContentExact: %v", err)
+				logger.Error("SearchPublicKeyByContentExact: %v", err)
 				return false
 			}
 
@@ -215,8 +228,8 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 
 			// check the CA of the cert
 			if !c.IsUserAuthority(cert.SignatureKey) {
-				if log.IsDebug() {
-					log.Debug("Principal Rejected: %s Untrusted Authority Signature Fingerprint %s for Principal: %s", ctx.RemoteAddr(), gossh.FingerprintSHA256(cert.SignatureKey), principal)
+				if logger.LevelEnabled(log.DEBUG) {
+					logger.Debug("Principal Rejected: %s Untrusted Authority Signature Fingerprint %s for Principal: %s", ctx.RemoteAddr(), gossh.FingerprintSHA256(cert.SignatureKey), principal)
 				}
 				continue principalLoop
 			}
@@ -224,14 +237,14 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 			// validate the cert for this principal
 			if err := c.CheckCert(principal, cert); err != nil {
 				// User is presenting an invalid certificate - STOP any further processing
-				log.Error("Invalid Certificate KeyID %s with Signature Fingerprint %s presented for Principal: %s from %s", cert.KeyId, gossh.FingerprintSHA256(cert.SignatureKey), principal, ctx.RemoteAddr())
-				log.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
+				logger.Error("Invalid Certificate KeyID %s with Signature Fingerprint %s presented for Principal: %s from %s", cert.KeyId, gossh.FingerprintSHA256(cert.SignatureKey), principal, ctx.RemoteAddr())
+				logger.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
 
 				return false
 			}
 
-			if log.IsDebug() { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
-				log.Debug("Successfully authenticated: %s Certificate Fingerprint: %s Principal: %s", ctx.RemoteAddr(), gossh.FingerprintSHA256(key), principal)
+			if logger.LevelEnabled(log.DEBUG) { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
+				logger.Debug("Successfully authenticated: %s Certificate Fingerprint: %s Principal: %s", ctx.RemoteAddr(), gossh.FingerprintSHA256(key), principal)
 			}
 			if ctx.Permissions().Extensions == nil {
 				ctx.Permissions().Extensions = map[string]string{}
@@ -241,28 +254,28 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 			return true
 		}
 
-		log.Warn("From %s Fingerprint: %s is a certificate, but no valid principals found", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
-		log.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
+		logger.Warn("From %s Fingerprint: %s is a certificate, but no valid principals found", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
+		logger.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
 		return false
 	}
 
-	if log.IsDebug() { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
-		log.Debug("Handle Public Key: %s Fingerprint: %s is not a certificate", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
+	if logger.LevelEnabled(log.DEBUG) { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
+		logger.Debug("Handle Public Key: %s Fingerprint: %s is not a certificate", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
 	}
 
 	pkey, err := asymkey_model.SearchPublicKeyByContent(ctx, strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
 	if err != nil {
 		if asymkey_model.IsErrKeyNotExist(err) {
-			log.Warn("Unknown public key: %s from %s", gossh.FingerprintSHA256(key), ctx.RemoteAddr())
-			log.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
+			logger.Warn("Unknown public key: %s from %s", gossh.FingerprintSHA256(key), ctx.RemoteAddr())
+			logger.Warn("Failed authentication attempt from %s", ctx.RemoteAddr())
 			return false
 		}
-		log.Error("SearchPublicKeyByContent: %v", err)
+		logger.Error("SearchPublicKeyByContent: %v", err)
 		return false
 	}
 
-	if log.IsDebug() { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
-		log.Debug("Successfully authenticated: %s Public Key Fingerprint: %s", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
+	if logger.LevelEnabled(log.DEBUG) { // <- FingerprintSHA256 is kinda expensive so only calculate it if necessary
+		logger.Debug("Successfully authenticated: %s Public Key Fingerprint: %s", ctx.RemoteAddr(), gossh.FingerprintSHA256(key))
 	}
 	if ctx.Permissions().Extensions == nil {
 		ctx.Permissions().Extensions = map[string]string{}
@@ -276,9 +289,9 @@ func publicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 // -  this mainly exists to give a nice function name in logging
 func sshConnectionFailed(conn net.Conn, err error) {
 	// Log the underlying error with a specific message
-	log.Debug("Failed connection from %s with error: %v", conn.RemoteAddr(), err)
+	logger.Warn("Failed connection from %s with error: %v", conn.RemoteAddr(), err)
 	// Log with the standard failed authentication from message for simpler fail2ban configuration
-	log.Debug("Failed authentication attempt from %s", conn.RemoteAddr())
+	logger.Warn("Failed authentication attempt from %s", conn.RemoteAddr())
 }
 
 // Listen starts a SSH server listens on given port.
@@ -317,22 +330,22 @@ func Listen(host string, port int, ciphers, keyExchanges, macs []string) {
 		filePath := filepath.Dir(setting.SSH.ServerHostKeys[0])
 
 		if err := os.MkdirAll(filePath, os.ModePerm); err != nil {
-			log.Error("Failed to create dir %s: %v", filePath, err)
+			logger.Error("Failed to create dir %s: %v", filePath, err)
 		}
 
 		err := GenKeyPair(setting.SSH.ServerHostKeys[0])
 		if err != nil {
 			log.Fatal("Failed to generate private key: %v", err)
 		}
-		log.Trace("New private key is generated: %s", setting.SSH.ServerHostKeys[0])
+		logger.Trace("New private key is generated: %s", setting.SSH.ServerHostKeys[0])
 		keys = append(keys, setting.SSH.ServerHostKeys[0])
 	}
 
 	for _, key := range keys {
-		log.Info("Adding SSH host key: %s", key)
+		logger.Info("Adding SSH host key: %s", key)
 		err := srv.SetOption(ssh.HostKeyFile(key))
 		if err != nil {
-			log.Error("Failed to set Host Key. %s", err)
+			logger.Error("Failed to set Host Key. %s", err)
 		}
 	}
 
@@ -359,7 +372,7 @@ func GenKeyPair(keyPath string) error {
 	}
 	defer func() {
 		if err = f.Close(); err != nil {
-			log.Error("Close: %v", err)
+			logger.Error("Close: %v", err)
 		}
 	}()
 
@@ -380,7 +393,7 @@ func GenKeyPair(keyPath string) error {
 	}
 	defer func() {
 		if err = p.Close(); err != nil {
-			log.Error("Close: %v", err)
+			logger.Error("Close: %v", err)
 		}
 	}()
 	_, err = p.Write(public)

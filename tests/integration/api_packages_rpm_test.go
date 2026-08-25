@@ -24,8 +24,8 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/tests"
 
+	"code.forgejo.org/forgejo/go-rpmutils"
 	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/sassoftware/go-rpmutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -123,6 +123,11 @@ gpgkey=%sapi/packages/%s/rpm/repository.key`,
 
 				req := NewRequestWithBody(t, "PUT", url, bytes.NewReader(content))
 				MakeRequest(t, req, http.StatusUnauthorized)
+
+				req = NewRequestWithBody(t, "PUT", url, bytes.NewReader(content)).
+					AddBasicAuth(user.Name).
+					SetHeader("content-type", "multipart/form-data")
+				MakeRequest(t, req, http.StatusBadRequest)
 
 				req = NewRequestWithBody(t, "PUT", url, bytes.NewReader(content)).
 					AddBasicAuth(user.Name)
@@ -317,7 +322,7 @@ gpgkey=%sapi/packages/%s/rpm/repository.key`,
 					var result Metadata
 					decodeGzipXML(t, resp, &result)
 
-					assert.EqualValues(t, 1, result.PackageCount)
+					assert.Equal(t, 1, result.PackageCount)
 					assert.Len(t, result.Packages, 1)
 					p := result.Packages[0]
 					assert.Equal(t, "rpm", p.Type)
@@ -366,7 +371,7 @@ gpgkey=%sapi/packages/%s/rpm/repository.key`,
 					var result Filelists
 					decodeGzipXML(t, resp, &result)
 
-					assert.EqualValues(t, 1, result.PackageCount)
+					assert.Equal(t, 1, result.PackageCount)
 					assert.Len(t, result.Packages, 1)
 					p := result.Packages[0]
 					assert.NotEmpty(t, p.Pkgid)
@@ -403,7 +408,7 @@ gpgkey=%sapi/packages/%s/rpm/repository.key`,
 					var result Other
 					decodeGzipXML(t, resp, &result)
 
-					assert.EqualValues(t, 1, result.PackageCount)
+					assert.Equal(t, 1, result.PackageCount)
 					assert.Len(t, result.Packages, 1)
 					p := result.Packages[0]
 					assert.NotEmpty(t, p.Pkgid)

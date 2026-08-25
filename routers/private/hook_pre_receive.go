@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"forgejo.org/models"
 	asymkey_model "forgejo.org/models/asymkey"
@@ -23,24 +24,18 @@ import (
 	"forgejo.org/modules/private"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/web"
-	gitea_context "forgejo.org/services/context"
+	app_context "forgejo.org/services/context"
 	pull_service "forgejo.org/services/pull"
 )
 
 type preReceiveContext struct {
-	*gitea_context.PrivateContext
+	*app_context.PrivateContext
 
 	// loadedPusher indicates that where the following information are loaded
 	loadedPusher        bool
 	user                *user_model.User // it's the org user if a DeployKey is used
 	userPerm            access_model.Permission
 	deployKeyAccessMode perm_model.AccessMode
-
-	canCreatePullRequest        bool
-	checkedCanCreatePullRequest bool
-
-	canWriteCode        bool
-	checkedCanWriteCode bool
 
 	protectedTags    []*git_model.ProtectedTag
 	gotProtectedTags bool
@@ -50,30 +45,63 @@ type preReceiveContext struct {
 	opts *private.HookOptions
 
 	isOverQuota bool
-
-	branchName string
 }
 
-// CanWriteCode returns true if pusher can write code
-func (ctx *preReceiveContext) CanWriteCode() bool {
-	if !ctx.checkedCanWriteCode {
-		if !ctx.loadPusherAndPermission() {
-			return false
-		}
-		ctx.canWriteCode = issues_model.CanMaintainerWriteToBranch(ctx, ctx.userPerm, ctx.branchName, ctx.user) || ctx.deployKeyAccessMode >= perm_model.AccessModeWrite
-		ctx.checkedCanWriteCode = true
+// canWriteCodeToBranch returns true if pusher can write code to the specified branch name on the ctx repository.
+// Permitted if the user has write access to the code unit of the repository, or if there is a PR that allows maintainer
+// edit, or if a write deploy key is in-use.
+func (ctx *preReceiveContext) canWriteCodeToBranch(branchName string) bool {
+	if !ctx.loadPusherAndPermission() {
+		return false
 	}
-	return ctx.canWriteCode
+	return issues_model.CanMaintainerWriteToBranch(ctx, ctx.userPerm, branchName, ctx.user) || ctx.deployKeyAccessMode >= perm_model.AccessModeWrite
 }
 
-// AssertCanWriteCode returns true if pusher can write code
-func (ctx *preReceiveContext) AssertCanWriteCode() bool {
-	if !ctx.CanWriteCode() {
+// assertCanWriteCodeToBranch verifies that the pusher can write code to the specified branch name on the ctx
+// repository.  If the user cannot write, an error response is written to the HTTP context.
+func (ctx *preReceiveContext) assertCanWriteCodeToBranch(branchName string) bool {
+	if !ctx.canWriteCodeToBranch(branchName) {
 		if ctx.Written() {
 			return false
 		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "User '%s' is not allowed to push to branch '%s' in '%s/%s'.", ctx.user.Name, branchName, ctx.Repo.Repository.OwnerName, ctx.Repo.Repository.Name)
+
+		if ctx.CanCreatePullRequest() {
+			fmt.Fprintf(&sb, "\nIf you instead wanted to create a pull request to the branch '%s', please use:", branchName)
+			fmt.Fprintf(&sb, "\ngit push origin HEAD:refs/for/%s/choose-a-descriptor", branchName)
+			sb.WriteString("\nYou might want to replace 'origin' with the name of your Git remote if it is different from origin. You can freely choose the descriptor to set it to a topic.")
+			sb.WriteString("\nYou can learn about creating pull requests with AGit in the docs: https://forgejo.org/docs/latest/user/agit-support/")
+		}
 		ctx.JSON(http.StatusForbidden, private.Response{
-			UserMsg: "User permission denied for writing.",
+			UserMsg: sb.String(),
+		})
+		return false
+	}
+	return true
+}
+
+// canWriteCodeToBranch returns true if pusher can write code to the ctx repository.  Use [canWriteCodeToBranch] instead
+// if the write is to a named branch.  Permitted if the user has write access to the code unit, or if a write deploy key
+// is in-use.
+func (ctx *preReceiveContext) canWriteCode() bool {
+	if !ctx.loadPusherAndPermission() {
+		return false
+	}
+	return ctx.userPerm.CanWrite(unit.TypeCode) || ctx.deployKeyAccessMode >= perm_model.AccessModeWrite
+}
+
+// assertCanWriteCode verifies that the pusher can write code to the repository.  Use [assertCanWriteCodeToBranch]
+// instead if the write is to a named branch.  If the user cannot write, an error response is written to the HTTP
+// context.
+func (ctx *preReceiveContext) assertCanWriteCode() bool {
+	if !ctx.canWriteCode() {
+		if ctx.Written() {
+			return false
+		}
+		msg := fmt.Sprintf("User '%s' is not allowed to push to repository '%s/%s'.", ctx.user.Name, ctx.Repo.Repository.OwnerName, ctx.Repo.Repository.Name)
+		ctx.JSON(http.StatusForbidden, private.Response{
+			UserMsg: msg,
 		})
 		return false
 	}
@@ -82,14 +110,10 @@ func (ctx *preReceiveContext) AssertCanWriteCode() bool {
 
 // CanCreatePullRequest returns true if pusher can create pull requests
 func (ctx *preReceiveContext) CanCreatePullRequest() bool {
-	if !ctx.checkedCanCreatePullRequest {
-		if !ctx.loadPusherAndPermission() {
-			return false
-		}
-		ctx.canCreatePullRequest = ctx.userPerm.CanRead(unit.TypePullRequests)
-		ctx.checkedCanCreatePullRequest = true
+	if !ctx.loadPusherAndPermission() {
+		return false
 	}
-	return ctx.canCreatePullRequest
+	return ctx.userPerm.CanRead(unit.TypePullRequests)
 }
 
 // AssertCreatePullRequest returns true if can create pull requests
@@ -155,7 +179,7 @@ func (ctx *preReceiveContext) checkQuota() error {
 		return nil
 	}
 
-	ok, err := quota_model.EvaluateForUser(ctx, ctx.PrivateContext.Repo.Repository.OwnerID, quota_model.LimitSubjectSizeReposAll)
+	ok, err := quota_model.EvaluateForUser(ctx, ctx.Repo.Repository.OwnerID, quota_model.LimitSubjectSizeReposAll)
 	if err != nil {
 		log.Error("quota_model.EvaluateForUser: %v", err)
 		ctx.JSON(http.StatusInternalServerError, private.Response{
@@ -175,7 +199,7 @@ func (ctx *preReceiveContext) quotaExceeded() {
 }
 
 // HookPreReceive checks whether a individual commit is acceptable
-func HookPreReceive(ctx *gitea_context.PrivateContext) {
+func HookPreReceive(ctx *app_context.PrivateContext) {
 	opts := web.GetForm(ctx).(*private.HookOptions)
 
 	ourCtx := &preReceiveContext{
@@ -205,14 +229,14 @@ func HookPreReceive(ctx *gitea_context.PrivateContext) {
 			preReceiveBranch(ourCtx, oldCommitID, newCommitID, refFullName)
 		case refFullName.IsTag():
 			preReceiveTag(ourCtx, oldCommitID, newCommitID, refFullName)
-		case git.SupportProcReceive && refFullName.IsFor():
+		case refFullName.IsFor():
 			preReceiveFor(ourCtx, oldCommitID, newCommitID, refFullName)
 		default:
 			if ourCtx.isOverQuota {
 				ourCtx.quotaExceeded()
 				return
 			}
-			ourCtx.AssertCanWriteCode()
+			ourCtx.assertCanWriteCode()
 		}
 		if ctx.Written() {
 			return
@@ -224,9 +248,7 @@ func HookPreReceive(ctx *gitea_context.PrivateContext) {
 
 func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, refFullName git.RefName) {
 	branchName := refFullName.BranchName()
-	ctx.branchName = branchName
-
-	if !ctx.AssertCanWriteCode() {
+	if !ctx.assertCanWriteCodeToBranch(branchName) {
 		return
 	}
 
@@ -466,7 +488,7 @@ func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, r
 }
 
 func preReceiveTag(ctx *preReceiveContext, oldCommitID, newCommitID string, refFullName git.RefName) { //nolint:unparam
-	if !ctx.AssertCanWriteCode() {
+	if !ctx.assertCanWriteCode() {
 		return
 	}
 
@@ -531,10 +553,7 @@ func preReceiveFor(ctx *preReceiveContext, oldCommitID, newCommitID string, refF
 
 	baseBranchName := refFullName.ForBranchName()
 
-	baseBranchExist := false
-	if ctx.Repo.GitRepo.IsBranchExist(baseBranchName) {
-		baseBranchExist = true
-	}
+	baseBranchExist := ctx.Repo.GitRepo.IsBranchExist(baseBranchName)
 
 	if !baseBranchExist {
 		for p, v := range baseBranchName {

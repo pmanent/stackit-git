@@ -17,6 +17,7 @@ import (
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/log"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
@@ -186,7 +187,12 @@ func (org *Organization) CanCreateRepo() bool {
 	return org.AsUser().CanCreateRepo()
 }
 
-// FindOrgMembersOpts represensts find org members conditions
+// IsGhost returns if the organization is a ghost
+func (org *Organization) IsGhost() bool {
+	return org.AsUser().IsGhost()
+}
+
+// FindOrgMembersOpts represents find org members conditions
 type FindOrgMembersOpts struct {
 	db.ListOptions
 	Doer         *user_model.User
@@ -195,7 +201,7 @@ type FindOrgMembersOpts struct {
 }
 
 func (opts FindOrgMembersOpts) PublicOnly() bool {
-	return opts.Doer == nil || !(opts.IsDoerMember || opts.Doer.IsAdmin)
+	return opts.Doer == nil || (!opts.IsDoerMember && !opts.Doer.IsAdmin)
 }
 
 // CountOrgMembers counts the organization's members
@@ -289,12 +295,8 @@ func CreateOrganization(ctx context.Context, org *Organization, owner *user_mode
 	}
 
 	org.LowerName = strings.ToLower(org.Name)
-	if org.Rands, err = user_model.GetUserSalt(); err != nil {
-		return err
-	}
-	if org.Salt, err = user_model.GetUserSalt(); err != nil {
-		return err
-	}
+	org.Rands = user_model.GetUserSalt()
+	org.Salt = user_model.GetUserSalt()
 	org.UseCustomAvatar = true
 	org.MaxRepoCreation = -1
 	org.NumTeams = 1
@@ -395,6 +397,14 @@ func DeleteOrganization(ctx context.Context, org *Organization) error {
 		return fmt.Errorf("%s is a user not an organization", org.Name)
 	}
 
+	// Decrease following count of users that follow the organisation.
+	followerIDs, err := db.FindIDs(ctx, "follow", "follow.user_id", builder.Eq{"follow.follow_id": org.ID})
+	if err != nil {
+		return fmt.Errorf("get all followers: %w", err)
+	} else if err = db.DecrByIDs(ctx, followerIDs, "num_following", new(user_model.User)); err != nil {
+		return fmt.Errorf("decrease user num_following: %w", err)
+	}
+
 	if err := db.DeleteBeans(ctx,
 		&Team{OrgID: org.ID},
 		&OrgUser{OrgID: org.ID},
@@ -403,7 +413,9 @@ func DeleteOrganization(ctx context.Context, org *Organization) error {
 		&TeamInvite{OrgID: org.ID},
 		&secret_model.Secret{OwnerID: org.ID},
 		&actions_model.ActionRunner{OwnerID: org.ID},
-		&actions_model.ActionRunnerToken{OwnerID: org.ID},
+		&actions_model.ActionRunnerToken{OwnerID: optional.Some(org.ID)},
+		&user_model.BlockedUser{UserID: org.ID},
+		&user_model.Follow{FollowID: org.ID},
 	); err != nil {
 		return fmt.Errorf("DeleteBeans: %w", err)
 	}
@@ -478,7 +490,7 @@ func GetOrgUsersByOrgID(ctx context.Context, opts *FindOrgMembersOpts) ([]*OrgUs
 		sess.And("is_public = ?", true)
 	}
 
-	if opts.ListOptions.PageSize > 0 {
+	if opts.PageSize > 0 {
 		sess = db.SetSessionPagination(sess, opts)
 
 		ous := make([]*OrgUser, 0, opts.PageSize)
@@ -509,6 +521,13 @@ func ChangeOrgUserStatus(ctx context.Context, orgID, uid int64, public bool) err
 
 // AddOrgUser adds new user to given organization.
 func AddOrgUser(ctx context.Context, orgID, uid int64) error {
+	eligible, err := IsAnEligibleTeamMemberByID(ctx, uid)
+	if err != nil {
+		return err
+	} else if !eligible {
+		return user_model.ErrUserWrongType{UID: uid}
+	}
+
 	isAlreadyMember, err := IsOrganizationMember(ctx, orgID, uid)
 	if err != nil || isAlreadyMember {
 		return err

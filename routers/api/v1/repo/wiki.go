@@ -5,6 +5,7 @@ package repo
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -78,7 +79,7 @@ func NewWikiPage(ctx *context.APIContext) {
 	}
 	form.ContentBase64 = string(content)
 
-	if err := wiki_service.AddWikiPage(ctx, ctx.Doer, ctx.Repo.Repository, wikiName, form.ContentBase64, form.Message); err != nil {
+	if err := wiki_service.AddWikiPage(ctx, ctx.Doer(), ctx.Repo().Repository, wikiName, form.ContentBase64, form.Message); err != nil {
 		if repo_model.IsErrWikiReservedName(err) {
 			ctx.Error(http.StatusBadRequest, "IsErrWikiReservedName", err)
 		} else if repo_model.IsErrWikiAlreadyExist(err) {
@@ -92,7 +93,7 @@ func NewWikiPage(ctx *context.APIContext) {
 	wikiPage := getWikiPage(ctx, wikiName)
 
 	if !ctx.Written() {
-		notify_service.NewWikiPage(ctx, ctx.Doer, ctx.Repo.Repository, string(wikiName), form.Message)
+		notify_service.NewWikiPage(ctx, ctx.Doer(), ctx.Repo().Repository, string(wikiName), form.Message)
 		ctx.JSON(http.StatusCreated, wikiPage)
 	}
 }
@@ -158,7 +159,7 @@ func EditWikiPage(ctx *context.APIContext) {
 	}
 	form.ContentBase64 = string(content)
 
-	if err := wiki_service.EditWikiPage(ctx, ctx.Doer, ctx.Repo.Repository, oldWikiName, newWikiName, form.ContentBase64, form.Message); err != nil {
+	if err := wiki_service.EditWikiPage(ctx, ctx.Doer(), ctx.Repo().Repository, oldWikiName, newWikiName, form.ContentBase64, form.Message); err != nil {
 		ctx.Error(http.StatusInternalServerError, "EditWikiPage", err)
 		return
 	}
@@ -166,7 +167,7 @@ func EditWikiPage(ctx *context.APIContext) {
 	wikiPage := getWikiPage(ctx, newWikiName)
 
 	if !ctx.Written() {
-		notify_service.EditWikiPage(ctx, ctx.Doer, ctx.Repo.Repository, string(newWikiName), form.Message)
+		notify_service.EditWikiPage(ctx, ctx.Doer(), ctx.Repo().Repository, string(newWikiName), form.Message)
 		ctx.JSON(http.StatusOK, wikiPage)
 	}
 }
@@ -197,7 +198,7 @@ func getWikiPage(ctx *context.APIContext, wikiName wiki_service.WebPath) *api.Wi
 	}
 
 	// get commit count - wiki revisions
-	commitsCount, _ := wikiRepo.FileCommitsCount(ctx.Repo.Repository.GetWikiBranchName(), pageFilename)
+	commitsCount, _ := wikiRepo.FileCommitsCount(ctx.Repo().Repository.GetWikiBranchName(), pageFilename)
 
 	// Get last change information.
 	lastCommit, err := wikiRepo.GetCommitByPath(pageFilename)
@@ -207,7 +208,7 @@ func getWikiPage(ctx *context.APIContext, wikiName wiki_service.WebPath) *api.Wi
 	}
 
 	return &api.WikiPage{
-		WikiPageMetaData: wiki_service.ToWikiPageMetaData(wikiName, lastCommit, ctx.Repo.Repository),
+		WikiPageMetaData: wiki_service.ToWikiPageMetaData(wikiName, lastCommit, ctx.Repo().Repository),
 		ContentBase64:    content,
 		CommitCount:      commitsCount,
 		Sidebar:          sidebarContent,
@@ -248,7 +249,7 @@ func DeleteWikiPage(ctx *context.APIContext) {
 
 	wikiName := wiki_service.WebPathFromRequest(ctx.PathParamRaw(":pageName"))
 
-	if err := wiki_service.DeleteWikiPage(ctx, ctx.Doer, ctx.Repo.Repository, wikiName); err != nil {
+	if err := wiki_service.DeleteWikiPage(ctx, ctx.Doer(), ctx.Repo().Repository, wikiName); err != nil {
 		if err.Error() == "file does not exist" {
 			ctx.NotFound(err)
 			return
@@ -257,7 +258,7 @@ func DeleteWikiPage(ctx *context.APIContext) {
 		return
 	}
 
-	notify_service.DeleteWikiPage(ctx, ctx.Doer, ctx.Repo.Repository, string(wikiName))
+	notify_service.DeleteWikiPage(ctx, ctx.Doer(), ctx.Repo().Repository, string(wikiName))
 
 	ctx.Status(http.StatusNoContent)
 }
@@ -302,10 +303,7 @@ func ListWikiPages(ctx *context.APIContext) {
 		return
 	}
 
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 	limit := ctx.FormInt("limit")
 	if limit <= 1 {
 		limit = setting.API.DefaultPagingNum
@@ -337,7 +335,7 @@ func ListWikiPages(ctx *context.APIContext) {
 			ctx.Error(http.StatusInternalServerError, "WikiFilenameToName", err)
 			return
 		}
-		pages = append(pages, wiki_service.ToWikiPageMetaData(wikiName, c, ctx.Repo.Repository))
+		pages = append(pages, wiki_service.ToWikiPageMetaData(wikiName, c, ctx.Repo().Repository))
 	}
 
 	ctx.SetTotalCountHeader(int64(len(entries)))
@@ -436,17 +434,14 @@ func ListPageRevisions(ctx *context.APIContext) {
 	}
 
 	// get commit count - wiki revisions
-	commitsCount, _ := wikiRepo.FileCommitsCount(ctx.Repo.Repository.GetWikiBranchName(), pageFilename)
+	commitsCount, _ := wikiRepo.FileCommitsCount(ctx.Repo().Repository.GetWikiBranchName(), pageFilename)
 
-	page := ctx.FormInt("page")
-	if page <= 1 {
-		page = 1
-	}
+	page := max(ctx.FormInt("page"), 1)
 
 	// get Commit Count
 	commitsHistory, err := wikiRepo.CommitsByFileAndRange(
 		git.CommitsByFileAndRangeOptions{
-			Revision: ctx.Repo.Repository.GetWikiBranchName(),
+			Revision: ctx.Repo().Repository.GetWikiBranchName(),
 			File:     pageFilename,
 			Page:     page,
 		})
@@ -462,7 +457,7 @@ func ListPageRevisions(ctx *context.APIContext) {
 // findEntryForFile finds the tree entry for a target filepath.
 func findEntryForFile(commit *git.Commit, target string) (*git.TreeEntry, error) {
 	entry, err := commit.GetTreeEntryByPath(target)
-	if err != nil {
+	if err != nil && !git.IsErrNotExist(err) {
 		return nil, err
 	}
 	if entry != nil {
@@ -480,7 +475,7 @@ func findEntryForFile(commit *git.Commit, target string) (*git.TreeEntry, error)
 // findWikiRepoCommit opens the wiki repo and returns the latest commit, writing to context on error.
 // The caller is responsible for closing the returned repo again
 func findWikiRepoCommit(ctx *context.APIContext) (*git.Repository, *git.Commit) {
-	wikiRepo, err := gitrepo.OpenWikiRepository(ctx, ctx.Repo.Repository)
+	wikiRepo, err := gitrepo.OpenWikiRepository(ctx, ctx.Repo().Repository)
 	if err != nil {
 		if git.IsErrNotExist(err) || err.Error() == "no such file or directory" {
 			ctx.NotFound(err)
@@ -490,7 +485,7 @@ func findWikiRepoCommit(ctx *context.APIContext) (*git.Repository, *git.Commit) 
 		return nil, nil
 	}
 
-	commit, err := wikiRepo.GetBranchCommit(ctx.Repo.Repository.GetWikiBranchName())
+	commit, err := wikiRepo.GetBranchCommit(ctx.Repo().Repository.GetWikiBranchName())
 	if err != nil {
 		if git.IsErrNotExist(err) {
 			ctx.NotFound(err)
@@ -506,12 +501,9 @@ func findWikiRepoCommit(ctx *context.APIContext) (*git.Repository, *git.Commit) 
 // given tree entry, encoded with base64. Writes to ctx if an error occurs.
 func wikiContentsByEntry(ctx *context.APIContext, entry *git.TreeEntry) string {
 	blob := entry.Blob()
-	if blob.Size() > setting.API.DefaultMaxBlobSize {
-		return ""
-	}
-	content, err := blob.GetBlobContentBase64()
-	if err != nil {
-		ctx.Error(http.StatusInternalServerError, "GetBlobContentBase64", err)
+	content, err := blob.GetContentBase64(setting.API.DefaultMaxBlobSize)
+	if err != nil && !errors.As(err, &git.BlobTooLargeError{}) {
+		ctx.Error(http.StatusInternalServerError, "GetContentBase64", err)
 		return ""
 	}
 	return content
@@ -532,5 +524,8 @@ func wikiContentsByName(ctx *context.APIContext, commit *git.Commit, wikiName wi
 		}
 		return "", ""
 	}
-	return wikiContentsByEntry(ctx, entry), gitFilename
+	// Return the name of the file the entry was found in rather than
+	// gitFilename. findEntryForFile falls back to unescaped names and
+	// callers use the returned name to look up commits
+	return wikiContentsByEntry(ctx, entry), entry.Name()
 }

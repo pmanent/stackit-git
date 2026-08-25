@@ -16,11 +16,11 @@ import (
 
 const cacheKeyNodeInfoUsage = "API_NodeInfoUsage"
 
-// NodeInfo returns the NodeInfo for the Forgejo instance to allow for federation
+// NodeInfo returns the NodeInfo for the STACKIT Git instance to allow for federation
 func NodeInfo(ctx *context.APIContext) {
 	// swagger:operation GET /nodeinfo miscellaneous getNodeInfo
 	// ---
-	// summary: Returns the nodeinfo of the Forgejo application
+	// summary: Returns the nodeinfo of the STACKIT Git application
 	// produces:
 	// - application/json
 	// responses:
@@ -30,7 +30,7 @@ func NodeInfo(ctx *context.APIContext) {
 	nodeInfoUsage := structs.NodeInfoUsage{}
 	if setting.Federation.ShareUserStatistics {
 		var cached bool
-		nodeInfoUsage, cached = ctx.Cache.Get(cacheKeyNodeInfoUsage).(structs.NodeInfoUsage)
+		nodeInfoUsage, cached = ctx.Cache().Get(cacheKeyNodeInfoUsage).(structs.NodeInfoUsage)
 
 		if !cached {
 			usersTotal := int(user_model.CountUsers(ctx, nil))
@@ -53,7 +53,7 @@ func NodeInfo(ctx *context.APIContext) {
 				LocalComments: int(allComments),
 			}
 
-			if err := ctx.Cache.Put(cacheKeyNodeInfoUsage, nodeInfoUsage, 180); err != nil {
+			if err := ctx.Cache().Put(cacheKeyNodeInfoUsage, nodeInfoUsage, 180); err != nil {
 				ctx.InternalServerError(err)
 				return
 			}

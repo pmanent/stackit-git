@@ -6,17 +6,22 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
+	"maps"
 	"net"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/cache"
+	"forgejo.org/modules/container"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/markup"
@@ -142,21 +147,12 @@ type Repository struct {
 	NumWatches          int
 	NumStars            int
 	NumForks            int
-	NumIssues           int
-	NumClosedIssues     int
-	NumOpenIssues       int `xorm:"-"`
-	NumPulls            int
-	NumClosedPulls      int
-	NumOpenPulls        int `xorm:"-"`
 	NumMilestones       int `xorm:"NOT NULL DEFAULT 0"`
 	NumClosedMilestones int `xorm:"NOT NULL DEFAULT 0"`
 	NumOpenMilestones   int `xorm:"-"`
 	NumProjects         int `xorm:"NOT NULL DEFAULT 0"`
 	NumClosedProjects   int `xorm:"NOT NULL DEFAULT 0"`
 	NumOpenProjects     int `xorm:"-"`
-	NumActionRuns       int `xorm:"NOT NULL DEFAULT 0"`
-	NumClosedActionRuns int `xorm:"NOT NULL DEFAULT 0"`
-	NumOpenActionRuns   int `xorm:"-"`
 
 	IsPrivate  bool `xorm:"INDEX"`
 	IsEmpty    bool `xorm:"INDEX"`
@@ -182,7 +178,7 @@ type Repository struct {
 	StatsIndexerStatus              *RepoIndexerStatus `xorm:"-"`
 	IsFsckEnabled                   bool               `xorm:"NOT NULL DEFAULT true"`
 	CloseIssuesViaCommitInAnyBranch bool               `xorm:"NOT NULL DEFAULT false"`
-	Topics                          []string           `xorm:"TEXT JSON"`
+	Topics                          []string           `xorm:"TEXT JSON NOT NULL"`
 	ObjectFormatName                string             `xorm:"VARCHAR(6) NOT NULL DEFAULT 'sha1'"`
 
 	TrustModel TrustModelType
@@ -193,6 +189,13 @@ type Repository struct {
 	CreatedUnix  timeutil.TimeStamp `xorm:"INDEX created"`
 	UpdatedUnix  timeutil.TimeStamp `xorm:"INDEX updated"`
 	ArchivedUnix timeutil.TimeStamp `xorm:"DEFAULT 0"`
+}
+
+// BeforeInsert will be invoked by XORM before updating a record
+func (repo *Repository) BeforeInsert() {
+	if repo.Topics == nil {
+		repo.Topics = []string{}
+	}
 }
 
 func init() {
@@ -286,11 +289,30 @@ func (repo *Repository) MarkAsBrokenEmpty() {
 
 // AfterLoad is invoked from XORM after setting the values of all fields of this object.
 func (repo *Repository) AfterLoad() {
-	repo.NumOpenIssues = repo.NumIssues - repo.NumClosedIssues
-	repo.NumOpenPulls = repo.NumPulls - repo.NumClosedPulls
 	repo.NumOpenMilestones = repo.NumMilestones - repo.NumClosedMilestones
 	repo.NumOpenProjects = repo.NumProjects - repo.NumClosedProjects
-	repo.NumOpenActionRuns = repo.NumActionRuns - repo.NumClosedActionRuns
+}
+
+// LoadLanguage loads the primary language of the repository, if one exists.
+// If one doesn't exists `nil` is still returned.
+func (repo *Repository) LoadLanguage(ctx context.Context) error {
+	if repo.PrimaryLanguage != nil {
+		return nil
+	}
+
+	var stat LanguageStat
+	has, err := db.GetEngine(ctx).
+		Where("`repo_id` = ? AND `is_primary` = ? AND `language` != ?", repo.ID, true, "other").
+		Get(&stat)
+	if err != nil {
+		return fmt.Errorf("unable to find the primary languages: %w", err)
+	}
+	if has {
+		stat.LoadAttributes()
+		repo.PrimaryLanguage = &stat
+	}
+
+	return nil
 }
 
 // LoadAttributes loads attributes of the repository.
@@ -300,20 +322,11 @@ func (repo *Repository) LoadAttributes(ctx context.Context) error {
 		return fmt.Errorf("load owner: %w", err)
 	}
 
-	// Load primary language
-	stats := make(LanguageStatList, 0, 1)
-	if err := db.GetEngine(ctx).
-		Where("`repo_id` = ? AND `is_primary` = ? AND `language` != ?", repo.ID, true, "other").
-		Find(&stats); err != nil {
-		return fmt.Errorf("find primary languages: %w", err)
+	// Load the primary language.
+	if err := repo.LoadLanguage(ctx); err != nil {
+		return fmt.Errorf("load language: %w", err)
 	}
-	stats.LoadAttributes()
-	for _, st := range stats {
-		if st.RepoID == repo.ID {
-			repo.PrimaryLanguage = st
-			break
-		}
-	}
+
 	return nil
 }
 
@@ -364,7 +377,7 @@ func (repo *Repository) GetCommitsCountCacheKey(contextName string, isRef bool) 
 
 	// @@@ >>> STACKIT Code
 	// Add the instanceid to the key value to get rid of concurrent access problems in a common cache
-	return fmt.Sprintf("commits-count-%d-%s-%s-%s", repo.ID, prefix, contextName, setting.StackitGit.InstanceId)
+	return fmt.Sprintf("commits-count-%d-%s-%s-%s", repo.ID, prefix, contextName, setting.StackitGit.InstanceID)
 	// @@@ <<< STACKIT Code
 }
 
@@ -406,27 +419,28 @@ func (repo *Repository) MustGetUnit(ctx context.Context, tp unit.Type) *RepoUnit
 		return ru
 	}
 
-	if tp == unit.TypeExternalWiki {
+	switch tp {
+	case unit.TypeExternalWiki:
 		return &RepoUnit{
 			Type:   tp,
 			Config: new(ExternalWikiConfig),
 		}
-	} else if tp == unit.TypeExternalTracker {
+	case unit.TypeExternalTracker:
 		return &RepoUnit{
 			Type:   tp,
 			Config: new(ExternalTrackerConfig),
 		}
-	} else if tp == unit.TypePullRequests {
+	case unit.TypePullRequests:
 		return &RepoUnit{
 			Type:   tp,
 			Config: new(PullRequestsConfig),
 		}
-	} else if tp == unit.TypeIssues {
+	case unit.TypeIssues:
 		return &RepoUnit{
 			Type:   tp,
 			Config: new(IssuesConfig),
 		}
-	} else if tp == unit.TypeActions {
+	case unit.TypeActions:
 		return &RepoUnit{
 			Type:   tp,
 			Config: new(ActionsConfig),
@@ -547,9 +561,7 @@ func (repo *Repository) ComposeMetas(ctx context.Context) map[string]string {
 func (repo *Repository) ComposeDocumentMetas(ctx context.Context) map[string]string {
 	if len(repo.DocumentRenderingMetas) == 0 {
 		metas := map[string]string{}
-		for k, v := range repo.ComposeMetas(ctx) {
-			metas[k] = v
-		}
+		maps.Copy(metas, repo.ComposeMetas(ctx))
 		metas["mode"] = "document"
 		repo.DocumentRenderingMetas = metas
 	}
@@ -790,8 +802,8 @@ func GetRepositoryByName(ctx context.Context, ownerID int64, name string) (*Repo
 
 // getRepositoryURLPathSegments returns segments (owner, reponame) extracted from a url
 func getRepositoryURLPathSegments(repoURL string) []string {
-	if strings.HasPrefix(repoURL, setting.AppURL) {
-		return strings.Split(strings.TrimPrefix(repoURL, setting.AppURL), "/")
+	if after, ok := strings.CutPrefix(repoURL, setting.AppURL); ok {
+		return strings.Split(after, "/")
 	}
 
 	sshURLVariants := [4]string{
@@ -802,8 +814,8 @@ func getRepositoryURLPathSegments(repoURL string) []string {
 	}
 
 	for _, sshURL := range sshURLVariants {
-		if strings.HasPrefix(repoURL, sshURL) {
-			return strings.Split(strings.TrimPrefix(repoURL, sshURL), "/")
+		if after, ok := strings.CutPrefix(repoURL, sshURL); ok {
+			return strings.Split(after, "/")
 		}
 	}
 
@@ -823,7 +835,7 @@ func GetRepositoryByURL(ctx context.Context, repoURL string) (*Repository, error
 	pathSegments := getRepositoryURLPathSegments(repoURL)
 
 	if len(pathSegments) != 2 {
-		return nil, fmt.Errorf("unknown or malformed repository URL")
+		return nil, errors.New("unknown or malformed repository URL")
 	}
 
 	ownerName := pathSegments[0]
@@ -898,11 +910,12 @@ type CountRepositoryOptions struct {
 func CountRepositories(ctx context.Context, opts CountRepositoryOptions) (int64, error) {
 	sess := db.GetEngine(ctx).Where("id > 0")
 
+	// nosemgrep: forgejo-logic-suspicious-OwnerID-check (repositories cannot be owned by system users)
 	if opts.OwnerID > 0 {
 		sess.And("owner_id = ?", opts.OwnerID)
 	}
-	if opts.Private.Has() {
-		sess.And("is_private=?", opts.Private.Value())
+	if has, value := opts.Private.Get(); has {
+		sess.And("is_private=?", value)
 	}
 
 	count, err := sess.Count(new(Repository))
@@ -910,32 +923,6 @@ func CountRepositories(ctx context.Context, opts CountRepositoryOptions) (int64,
 		return 0, fmt.Errorf("countRepositories: %w", err)
 	}
 	return count, nil
-}
-
-// UpdateRepoIssueNumbers updates one of a repositories amount of (open|closed) (issues|PRs) with the current count
-func UpdateRepoIssueNumbers(ctx context.Context, repoID int64, isPull, isClosed bool) error {
-	field := "num_"
-	if isClosed {
-		field += "closed_"
-	}
-	if isPull {
-		field += "pulls"
-	} else {
-		field += "issues"
-	}
-
-	subQuery := builder.Select("count(*)").
-		From("issue").Where(builder.Eq{
-		"repo_id": repoID,
-		"is_pull": isPull,
-	}.And(builder.If(isClosed, builder.Eq{"is_closed": isClosed})))
-
-	// builder.Update(cond) will generate SQL like UPDATE ... SET cond
-	query := builder.Update(builder.Eq{field: subQuery}).
-		From("repository").
-		Where(builder.Eq{"id": repoID})
-	_, err := db.Exec(ctx, query)
-	return err
 }
 
 // CountNullArchivedRepository counts the number of repositories with is_archived is null
@@ -956,4 +943,132 @@ func UpdateRepositoryOwnerName(ctx context.Context, oldUserName, newUserName str
 		return fmt.Errorf("change repo owner name: %w", err)
 	}
 	return nil
+}
+
+type repoCacheKeyBase string
+
+const (
+	countIssues       = repoCacheKeyBase("CountIssues")
+	countIssuesClosed = repoCacheKeyBase("CountIssuesClosed")
+	countPulls        = repoCacheKeyBase("CountPulls")
+	countPullsClosed  = repoCacheKeyBase("CountPullsClosed")
+)
+
+func repoCacheKey(cacheKeyBase repoCacheKeyBase, repoID int64) string {
+	return fmt.Sprintf("Repo:%s:%d", cacheKeyBase, repoID)
+}
+
+func (repo *Repository) cacheIssueCount(ctx context.Context, cacheKeyBase repoCacheKeyBase, cond builder.Cond) int {
+	num, err := cache.GetInt(repoCacheKey(cacheKeyBase, repo.ID), func() (int, error) {
+		cond = builder.Eq{"repo_id": repo.ID}.And(cond)
+		count, err := db.GetEngine(ctx).Table("issue").Where(cond).Count() // can't use &issues.Issue{}; cyclical import
+		if err != nil {
+			return 0, fmt.Errorf("query error: %v", err)
+		}
+		return int(count), nil
+	})
+	if err != nil {
+		log.Error("failed to retrieve NumIssues: %v", err)
+		return 0
+	}
+	return num
+}
+
+func (repo *Repository) NumIssues(ctx context.Context) int {
+	return repo.cacheIssueCount(ctx, countIssues, builder.Eq{"is_pull": false})
+}
+
+func (repo *Repository) NumClosedIssues(ctx context.Context) int {
+	return repo.cacheIssueCount(ctx, countIssuesClosed, builder.Eq{"is_pull": false, "is_closed": true})
+}
+
+func (repo *Repository) NumOpenIssues(ctx context.Context) int {
+	return repo.NumIssues(ctx) - repo.NumClosedIssues(ctx)
+}
+
+func (repo *Repository) NumPulls(ctx context.Context) int {
+	return repo.cacheIssueCount(ctx, countPulls, builder.Eq{"is_pull": true})
+}
+
+func (repo *Repository) NumClosedPulls(ctx context.Context) int {
+	return repo.cacheIssueCount(ctx, countPullsClosed, builder.Eq{"is_pull": true, "is_closed": true})
+}
+
+func (repo *Repository) NumOpenPulls(ctx context.Context) int {
+	return repo.NumPulls(ctx) - repo.NumClosedPulls(ctx)
+}
+
+// UpdateRepoIssueNumbers triggers a recalculation of the number of (open|closed) (issues|PRs) on a repo.  It
+// invalidates a cache which will cause this value to be calculated when accessed.
+func UpdateRepoIssueNumbers(ctx context.Context, repoID int64, isPull, isClosed bool) error {
+	var cacheKeyBase repoCacheKeyBase
+	if isPull {
+		if isClosed {
+			cacheKeyBase = countPullsClosed
+		} else {
+			cacheKeyBase = countPulls
+		}
+	} else {
+		if isClosed {
+			cacheKeyBase = countIssuesClosed
+		} else {
+			cacheKeyBase = countIssues
+		}
+	}
+	db.AfterTx(ctx, func() {
+		cache.Remove(repoCacheKey(cacheKeyBase, repoID))
+	})
+	return nil
+}
+
+// Bulk load of all the repo_model.Repository objects for the repository resources that can be accessed by the given
+// access tokens.  Any access tokens which are not repository-specific tokens will not be present in the map.  An
+// optional filter function can be used to remove repositories (based upon a user visibility check, for example) before
+// the map is constructed -- return `true` for repos to include.
+func BulkGetRepositoriesForAccessTokens(ctx context.Context, tokens []*auth_model.AccessToken, filter func(*Repository) (bool, error)) (map[int64][]*Repository, error) {
+	// Load all the AccessTokenResourceRepo for the tokens that we're returning:
+	allRepoIDs := container.Set[int64]{}
+	repoResourcesByTokenID, err := auth_model.GetRepositoriesAccessibleWithTokens(ctx, tokens)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch repositories for tokens: %w", err)
+	}
+
+	// Load all the Repository models that are referenced by the AccessTokenResourceRepo's:
+	for _, repoResources := range repoResourcesByTokenID {
+		for _, repoResource := range repoResources {
+			allRepoIDs.Add(repoResource.RepoID)
+		}
+	}
+	reposByID, err := GetRepositoriesMapByIDs(ctx, allRepoIDs.Slice())
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch repositories: %w", err)
+	}
+
+	if filter != nil {
+		// Rebuild reposByID, filtering it with the provided filter function.  It's more efficient to do this here,
+		// rather than returning the data and allowing the caller to filter it, because this guarantees one invocation
+		// per repository.  `reposByTokenID` could have the same repository referenced by multiple access tokens.
+		tmp := reposByID
+		reposByID = make(map[int64]*Repository, len(tmp))
+		for id, repo := range tmp {
+			if ok, err := filter(repo); err != nil {
+				return nil, fmt.Errorf("error filtering repo %d: %w", repo.ID, err)
+			} else if ok {
+				reposByID[id] = repo
+			}
+		}
+	}
+
+	// Prepare a lookup map to access the repositories by token ID:
+	reposByTokenID := make(map[int64][]*Repository)
+	for tokenID, repoResources := range repoResourcesByTokenID {
+		for _, repoResource := range repoResources {
+			repo, ok := reposByID[repoResource.RepoID]
+			if ok {
+				reposByTokenID[tokenID] = append(reposByTokenID[tokenID], repo)
+			}
+		}
+	}
+
+	return reposByTokenID, nil
 }

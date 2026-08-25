@@ -5,11 +5,14 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +26,7 @@ import (
 
 	"code.forgejo.org/go-chi/session"
 	"github.com/mholt/archives"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func addObject(archiveJobs chan archives.ArchiveAsyncJob, object fs.File, customName string, verbose bool) error {
@@ -81,14 +84,16 @@ func (o outputType) Join() string {
 }
 
 func (o *outputType) Set(value string) error {
-	for _, enum := range o.Enum {
-		if enum == value {
-			o.selected = value
-			return nil
-		}
+	if slices.Contains(o.Enum, value) {
+		o.selected = value
+		return nil
 	}
 
 	return fmt.Errorf("allowed values are %s", o.Join())
+}
+
+func (o *outputType) Get() any {
+	return o.String()
 }
 
 func (o outputType) String() string {
@@ -107,7 +112,10 @@ func getArchiverByType(outType string) (archives.ArchiverAsync, error) {
 	var archiver archives.ArchiverAsync
 	switch outType {
 	case "zip":
-		archiver = archives.Zip{}
+		archiver = archives.Zip{
+			Compression:          8,
+			SelectiveCompression: false,
+		}
 	case "tar":
 		archiver = archives.Tar{}
 	case "tar.sz":
@@ -152,80 +160,82 @@ func getArchiverByType(outType string) (archives.ArchiverAsync, error) {
 }
 
 // CmdDump represents the available dump sub-command.
-var CmdDump = &cli.Command{
-	Name:  "dump",
-	Usage: "Dump Forgejo files and database",
-	Description: `Dump compresses all related files and database into zip file.
+func cmdDump() *cli.Command {
+	return &cli.Command{
+		Name:  "dump",
+		Usage: "Dump Forgejo files and database",
+		Description: `Dump compresses all related files and database into zip file.
 It can be used for backup and capture Forgejo server image to send to maintainer`,
-	Action: runDump,
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:    "file",
-			Aliases: []string{"f"},
-			Value:   fmt.Sprintf("forgejo-dump-%d.zip", time.Now().Unix()),
-			Usage:   "Name of the dump file which will be created. Supply '-' for stdout. See type for available types.",
+		Before: noDanglingArgs,
+		Action: runDump,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "file",
+				Aliases: []string{"f"},
+				Value:   fmt.Sprintf("forgejo-dump-%d.zip", time.Now().Unix()),
+				Usage:   "Name of the dump file which will be created. Supply '-' for stdout. See type for available types.",
+			},
+			&cli.BoolFlag{
+				Name:    "verbose",
+				Aliases: []string{"V"},
+				Usage:   "Show process details",
+			},
+			&cli.BoolFlag{
+				Name:    "quiet",
+				Aliases: []string{"q"},
+				Usage:   "Only display warnings and errors",
+			},
+			&cli.StringFlag{
+				Name:    "tempdir",
+				Aliases: []string{"t"},
+				Usage:   "Temporary dir path",
+			},
+			&cli.StringFlag{
+				Name:    "database",
+				Aliases: []string{"d"},
+				Usage:   "Specify the database SQL syntax: sqlite3, mysql, postgres",
+			},
+			&cli.BoolFlag{
+				Name:    "skip-repository",
+				Aliases: []string{"R"},
+				Usage:   "Skip repositories",
+			},
+			&cli.BoolFlag{
+				Name:    "skip-log",
+				Aliases: []string{"L"},
+				Usage:   "Skip logs",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-custom-dir",
+				Usage: "Skip custom directory",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-lfs-data",
+				Usage: "Skip LFS data",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-attachment-data",
+				Usage: "Skip attachment data",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-package-data",
+				Usage: "Skip package data",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-index",
+				Usage: "Skip bleve index data",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-repo-archives",
+				Usage: "Skip repository archives",
+			},
+			&cli.GenericFlag{
+				Name:  "type",
+				Value: outputTypeEnum,
+				Usage: fmt.Sprintf("Dump output format: %s", outputTypeEnum.Join()),
+			},
 		},
-		&cli.BoolFlag{
-			Name:    "verbose",
-			Aliases: []string{"V"},
-			Usage:   "Show process details",
-		},
-		&cli.BoolFlag{
-			Name:    "quiet",
-			Aliases: []string{"q"},
-			Usage:   "Only display warnings and errors",
-		},
-		&cli.StringFlag{
-			Name:    "tempdir",
-			Aliases: []string{"t"},
-			Value:   os.TempDir(),
-			Usage:   "Temporary dir path",
-		},
-		&cli.StringFlag{
-			Name:    "database",
-			Aliases: []string{"d"},
-			Usage:   "Specify the database SQL syntax: sqlite3, mysql, postgres",
-		},
-		&cli.BoolFlag{
-			Name:    "skip-repository",
-			Aliases: []string{"R"},
-			Usage:   "Skip repositories",
-		},
-		&cli.BoolFlag{
-			Name:    "skip-log",
-			Aliases: []string{"L"},
-			Usage:   "Skip logs",
-		},
-		&cli.BoolFlag{
-			Name:  "skip-custom-dir",
-			Usage: "Skip custom directory",
-		},
-		&cli.BoolFlag{
-			Name:  "skip-lfs-data",
-			Usage: "Skip LFS data",
-		},
-		&cli.BoolFlag{
-			Name:  "skip-attachment-data",
-			Usage: "Skip attachment data",
-		},
-		&cli.BoolFlag{
-			Name:  "skip-package-data",
-			Usage: "Skip package data",
-		},
-		&cli.BoolFlag{
-			Name:  "skip-index",
-			Usage: "Skip bleve index data",
-		},
-		&cli.BoolFlag{
-			Name:  "skip-repo-archives",
-			Usage: "Skip repository archives",
-		},
-		&cli.GenericFlag{
-			Name:  "type",
-			Value: outputTypeEnum,
-			Usage: fmt.Sprintf("Dump output format: %s", outputTypeEnum.Join()),
-		},
-	},
+	}
 }
 
 func fatal(format string, args ...any) {
@@ -233,7 +243,7 @@ func fatal(format string, args ...any) {
 	log.Fatal(format, args...)
 }
 
-func runDump(ctx *cli.Context) error {
+func runDump(stdCtx context.Context, ctx *cli.Command) error {
 	var file *os.File
 	fileName := ctx.String("file")
 	outType := ctx.String("type")
@@ -242,8 +252,8 @@ func runDump(ctx *cli.Context) error {
 		setupConsoleLogger(log.FATAL, log.CanColorStderr, os.Stderr)
 	} else {
 		for _, suffix := range outputTypeEnum.Enum {
-			if strings.HasSuffix(fileName, "."+suffix) {
-				fileName = strings.TrimSuffix(fileName, "."+suffix)
+			if before, ok := strings.CutSuffix(fileName, "."+suffix); ok {
+				fileName = before
 				break
 			}
 		}
@@ -269,16 +279,16 @@ func runDump(ctx *cli.Context) error {
 
 	if !setting.InstallLock {
 		log.Error("Is '%s' really the right config path?\n", setting.CustomConf)
-		return fmt.Errorf("forgejo is not initialized")
+		return errors.New("forgejo is not initialized")
 	}
 	setting.LoadSettings() // cannot access session settings otherwise
 
 	verbose := ctx.Bool("verbose")
 	if verbose && ctx.Bool("quiet") {
-		return fmt.Errorf("--quiet and --verbose cannot both be set")
+		return errors.New("--quiet and --verbose cannot both be set")
 	}
 
-	stdCtx, cancel := installSignals()
+	stdCtx, cancel := installSignals(stdCtx)
 	defer cancel()
 
 	err := db.InitEngine(stdCtx)
@@ -322,14 +332,12 @@ func runDump(ctx *cli.Context) error {
 	go dumpDatabase(ctx, archiveJobs, &wg, verbose)
 
 	if len(setting.CustomConf) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			log.Info("Adding custom configuration file from %s", setting.CustomConf)
 			if err := addFile(archiveJobs, "app.ini", setting.CustomConf, verbose); err != nil {
 				fatal("Failed to include specified app.ini: %v", err)
 			}
-		}()
+		})
 	}
 
 	if ctx.IsSet("skip-custom-dir") && ctx.Bool("skip-custom-dir") {
@@ -353,15 +361,13 @@ func runDump(ctx *cli.Context) error {
 	if ctx.IsSet("skip-attachment-data") && ctx.Bool("skip-attachment-data") {
 		log.Info("Skipping attachment data")
 	} else {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := storage.Attachments.IterateObjects("", func(objPath string, object storage.Object) error {
 				return addObject(archiveJobs, object, path.Join("data", "attachments", objPath), verbose)
 			}); err != nil {
 				fatal("Failed to dump attachments: %v", err)
 			}
-		}()
+		})
 	}
 
 	if ctx.IsSet("skip-package-data") && ctx.Bool("skip-package-data") {
@@ -369,15 +375,13 @@ func runDump(ctx *cli.Context) error {
 	} else if !setting.Packages.Enabled {
 		log.Info("Package registry not enabled - skipping")
 	} else {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := storage.Packages.IterateObjects("", func(objPath string, object storage.Object) error {
 				return addObject(archiveJobs, object, path.Join("data", "packages", objPath), verbose)
 			}); err != nil {
 				fatal("Failed to dump packages: %v", err)
 			}
-		}()
+		})
 	}
 
 	// Doesn't check if LogRootPath exists before processing --skip-log intentionally,
@@ -391,13 +395,11 @@ func runDump(ctx *cli.Context) error {
 			log.Error("Failed to check if %s exists: %v", setting.Log.RootPath, err)
 		}
 		if isExist {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				if err := addRecursiveExclude(archiveJobs, "log", setting.Log.RootPath, []string{absFileName}, verbose); err != nil {
 					fatal("Failed to include log: %v", err)
 				}
-			}()
+			})
 		}
 	}
 
@@ -427,7 +429,7 @@ func runDump(ctx *cli.Context) error {
 	return nil
 }
 
-func dumpData(ctx *cli.Context, archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, absFileName string, verbose bool) {
+func dumpData(ctx *cli.Command, archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, absFileName string, verbose bool) {
 	defer wg.Done()
 
 	var excludes []string
@@ -478,7 +480,7 @@ func dumpCustom(archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, a
 	}
 }
 
-func dumpDatabase(ctx *cli.Context, archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, verbose bool) {
+func dumpDatabase(ctx *cli.Command, archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, verbose bool) {
 	defer wg.Done()
 
 	var err error
@@ -527,7 +529,7 @@ func dumpDatabase(ctx *cli.Context, archiveJobs chan archives.ArchiveAsyncJob, w
 	}
 }
 
-func dumpRepos(ctx *cli.Context, archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, absFileName string, verbose bool) {
+func dumpRepos(ctx *cli.Command, archiveJobs chan archives.ArchiveAsyncJob, wg *sync.WaitGroup, absFileName string, verbose bool) {
 	defer wg.Done()
 
 	if err := addRecursiveExclude(archiveJobs, "repos", setting.RepoRootPath, []string{absFileName}, verbose); err != nil {

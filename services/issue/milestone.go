@@ -5,12 +5,14 @@ package issue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
 	user_model "forgejo.org/models/user"
 	notify_service "forgejo.org/services/notify"
+	"forgejo.org/services/stats"
 )
 
 func updateMilestoneCounters(ctx context.Context, issue *issues_model.Issue, id int64) error {
@@ -24,17 +26,10 @@ func updateMilestoneCounters(ctx context.Context, issue *issues_model.Issue, id 
 		if err != nil {
 			return fmt.Errorf("GetMilestoneByRepoID: %w", err)
 		}
-		updatedUnix := milestone.UpdatedUnix
-		if issue.UpdatedUnix > updatedUnix {
-			updatedUnix = issue.UpdatedUnix
-		}
-		if err := issues_model.UpdateMilestoneCountersWithDate(ctx, id, updatedUnix); err != nil {
-			return err
-		}
+		updatedUnix := max(issue.UpdatedUnix, milestone.UpdatedUnix)
+		stats.QueueRecalcMilestoneByIDWithDate(ctx, id, updatedUnix)
 	} else {
-		if err := issues_model.UpdateMilestoneCounters(ctx, id); err != nil {
-			return err
-		}
+		stats.QueueRecalcMilestoneByID(ctx, id)
 	}
 	return nil
 }
@@ -47,7 +42,7 @@ func changeMilestoneAssign(ctx context.Context, doer *user_model.User, issue *is
 			return fmt.Errorf("HasMilestoneByRepoID: %w", err)
 		}
 		if !has {
-			return fmt.Errorf("HasMilestoneByRepoID: issue doesn't exist")
+			return errors.New("HasMilestoneByRepoID: issue doesn't exist")
 		}
 	}
 

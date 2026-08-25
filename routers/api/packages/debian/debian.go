@@ -29,6 +29,38 @@ func apiError(ctx *context.Context, status int, obj any) {
 	})
 }
 
+func CheckRepositoryFileExistence(ctx *context.Context) {
+	pv, err := debian_service.GetOrCreateRepositoryVersion(ctx, ctx.Package.Owner.ID)
+	if err != nil {
+		apiError(ctx, http.StatusInternalServerError, err)
+		return
+	}
+
+	key := ctx.Params("distribution")
+
+	component := ctx.Params("component")
+	architecture := strings.TrimPrefix(ctx.Params("architecture"), "binary-")
+	if component != "" && architecture != "" {
+		key += "|" + component + "|" + architecture
+	}
+
+	pf, err := packages_model.GetFileForVersionByName(ctx, pv.ID, ctx.Params("filename"), key)
+	if err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			ctx.Status(http.StatusNotFound)
+		} else {
+			apiError(ctx, http.StatusInternalServerError, err)
+		}
+		return
+	}
+
+	ctx.SetServeHeaders(&context.ServeHeaderOptions{
+		Filename:     pf.Name,
+		LastModified: pf.CreatedUnix.AsLocalTime(),
+	})
+	ctx.Status(http.StatusOK)
+}
+
 func GetRepositoryKey(ctx *context.Context) {
 	_, pub, err := debian_service.GetOrCreateKeyPair(ctx, ctx.Package.Owner.ID)
 	if err != nil {
@@ -129,7 +161,11 @@ func UploadPackageFile(ctx *context.Context) {
 
 	upload, needToClose, err := ctx.UploadStream()
 	if err != nil {
-		apiError(ctx, http.StatusInternalServerError, err)
+		if context.IsFormError(err) {
+			apiError(ctx, http.StatusBadRequest, err)
+		} else {
+			apiError(ctx, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	if needToClose {
@@ -298,11 +334,13 @@ func DeletePackageFile(ctx *context.Context) {
 
 	if pd != nil {
 		notify_service.PackageDelete(ctx, ctx.Doer, pd)
-	}
-
-	if err := debian_service.BuildSpecificRepositoryFiles(ctx, ctx.Package.Owner.ID, distribution, component, architecture); err != nil {
-		apiError(ctx, http.StatusInternalServerError, err)
-		return
+	} else {
+		// If the entire package version wasn't deleted and some other distribution/cmoponent/architecture remains for
+		// this package, we need to explicitly rebuild this part of the package index.
+		if err := debian_service.BuildSpecificRepositoryFiles(ctx, ctx.Package.Owner.ID, distribution, component, architecture); err != nil {
+			apiError(ctx, http.StatusInternalServerError, err)
+			return
+		}
 	}
 
 	ctx.Status(http.StatusNoContent)

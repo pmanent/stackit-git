@@ -85,7 +85,6 @@ func (srv *Server) ListenAndServe(serve ServeFunction, useProxyProtocol bool) er
 		listener = &proxyprotocol.Listener{
 			Listener:           listener,
 			ProxyHeaderTimeout: setting.ProxyProtocolHeaderTimeout,
-			AcceptUnknown:      setting.ProxyProtocolAcceptUnknown,
 		}
 	}
 	srv.listener = listener
@@ -118,7 +117,6 @@ func (srv *Server) ListenAndServeTLSConfig(tlsConfig *tls.Config, serve ServeFun
 		listener = &proxyprotocol.Listener{
 			Listener:           listener,
 			ProxyHeaderTimeout: setting.ProxyProtocolHeaderTimeout,
-			AcceptUnknown:      setting.ProxyProtocolAcceptUnknown,
 		}
 	}
 
@@ -130,7 +128,6 @@ func (srv *Server) ListenAndServeTLSConfig(tlsConfig *tls.Config, serve ServeFun
 		listener = &proxyprotocol.Listener{
 			Listener:           listener,
 			ProxyHeaderTimeout: setting.ProxyProtocolHeaderTimeout,
-			AcceptUnknown:      setting.ProxyProtocolAcceptUnknown,
 		}
 	}
 
@@ -260,7 +257,7 @@ func (w *wrappedConn) Write(p []byte) (n int, err error) {
 		if minDeadline.After(w.deadline) {
 			w.deadline = minDeadline
 		}
-		_ = w.Conn.SetWriteDeadline(w.deadline)
+		_ = w.SetWriteDeadline(w.deadline)
 	}
 	return w.Conn.Write(p)
 }

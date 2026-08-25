@@ -1,6 +1,6 @@
 // @ts-check
 import {expect} from '@playwright/test';
-import {test, login_user, load_logged_in_context} from './utils_e2e.js';
+import {test, login_user, load_logged_in_context} from './utils_e2e.ts';
 
 test.beforeAll(async ({browser}, workerInfo) => {
   await login_user(browser, workerInfo, 'user2');
@@ -73,7 +73,7 @@ test('Readable diff', async ({page}, workerInfo) => {
     }
     if (thisDiff.added) {
       await expect(page.getByText(thisDiff.added, {exact: true})).toHaveClass(/added-code/);
-      await expect(page.getByText(thisDiff.added, {exact: true})).toHaveCSS('background-color', 'rgb(134, 239, 172)');
+      await expect(page.getByText(thisDiff.added, {exact: true})).toHaveCSS('background-color', 'rgb(37, 92, 57)');
     }
   }
 });

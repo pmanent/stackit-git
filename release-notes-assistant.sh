@@ -40,7 +40,7 @@ function test_main() {
   test "$(categorize)" = 'BB Breaking bug fixes'
 
   test_payload_labels $label_worth $label_breaking
-  test "$(categorize)" = 'ZB Breaking changes without a feature or bug label'
+  test "$(categorize)" = 'BC Breaking changes without a feature or bug label'
 
   test_payload_labels $label_worth $label_ui $label_feature
   test "$(categorize)" = 'CA User Interface features'
@@ -64,7 +64,7 @@ function test_main() {
   test "$(categorize)" = 'ZE Other changes without a feature or bug label'
 
   test_payload_labels
-  test "$(categorize)" = 'ZF Included for completeness but not worth a release note'
+  test "$(categorize)" = 'ZF Included for completeness but not user-facing (chores, etc.)'
 
   test_payload_draft "fix(security)!: breaking security bug fix"
   test "$(categorize)" = 'AA Breaking security bug fixes'
@@ -117,11 +117,12 @@ function categorize() {
 
   #
   # If there was no release-notes/N.md file and it is not
-  # worth a release note, just forget about it.
+  # directly user-facing, we include it in a separate section
+  # for completeness.
   #
   if test -z "$(jq --raw-output .Draft <$payload)"; then
     if ! $worth; then
-      echo -n ZF Included for completeness but not worth a release note
+      echo -n ZF Included for completeness but not user-facing \(chores, etc.\)
       exit 0
     fi
   fi
@@ -231,7 +232,7 @@ function categorize() {
     elif $is_bug; then
       echo -n BB Breaking bug fixes
     else
-      echo -n ZB Breaking changes without a feature or bug label
+      echo -n BC Breaking changes without a feature or bug label
     fi
   elif $is_ui; then
     if $is_feature; then

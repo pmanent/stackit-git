@@ -7,24 +7,26 @@ package unittest
 import (
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"forgejo.org/models/db"
 	"forgejo.org/modules/auth/password/hash"
+	"forgejo.org/modules/container"
 	"forgejo.org/modules/setting"
 
-	"xorm.io/xorm"
-	"xorm.io/xorm/schemas"
+	"code.forgejo.org/xorm/xorm"
+	"code.forgejo.org/xorm/xorm/schemas"
 )
 
 var fixturesLoader *loader
 
 // GetXORMEngine gets the XORM engine
-func GetXORMEngine(engine ...*xorm.Engine) (x *xorm.Engine) {
+func GetXORMEngine(engine ...*xorm.Engine) (x *xorm.Engine, err error) {
 	if len(engine) == 1 {
-		return engine[0]
+		return engine[0], nil
 	}
-	return db.DefaultContext.(*db.Context).Engine().(*xorm.Engine)
+	return db.GetMasterEngine(db.DefaultContext.(*db.Context).Engine())
 }
 
 func OverrideFixtures(dir string) func() {
@@ -44,9 +46,15 @@ func OverrideFixtures(dir string) func() {
 	}
 }
 
+var allTableNames = sync.OnceValue(db.GetTableNames)
+
 // InitFixtures initialize test fixtures for a test database
 func InitFixtures(opts FixturesOptions, engine ...*xorm.Engine) (err error) {
-	e := GetXORMEngine(engine...)
+	e, err := GetXORMEngine(engine...)
+	if err != nil {
+		return err
+	}
+
 	fixturePaths := []string{}
 	if opts.Dir != "" {
 		fixturePaths = append(fixturePaths, opts.Dir)
@@ -71,7 +79,17 @@ func InitFixtures(opts FixturesOptions, engine ...*xorm.Engine) (err error) {
 		panic("Unsupported RDBMS for test")
 	}
 
-	fixturesLoader, err = newFixtureLoader(e.DB().DB, dialect, fixturePaths)
+	var allTables container.Set[string]
+	if opts.OnlyAffectModels == nil {
+		allTables = allTableNames().Clone()
+	} else {
+		allTables = make(container.Set[string])
+		for _, bean := range opts.OnlyAffectModels {
+			allTables.Add(e.TableName(bean))
+		}
+	}
+
+	fixturesLoader, err = newFixtureLoader(e.DB().DB, dialect, fixturePaths, allTables)
 	if err != nil {
 		return err
 	}
@@ -86,10 +104,12 @@ func InitFixtures(opts FixturesOptions, engine ...*xorm.Engine) (err error) {
 
 // LoadFixtures load fixtures for a test database
 func LoadFixtures(engine ...*xorm.Engine) error {
-	e := GetXORMEngine(engine...)
-	var err error
+	e, err := GetXORMEngine(engine...)
+	if err != nil {
+		return err
+	}
 	// (doubt) database transaction conflicts could occur and result in ROLLBACK? just try for a few times.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err = fixturesLoader.Load(); err == nil {
 			break
 		}

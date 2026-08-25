@@ -5,8 +5,6 @@ package actions
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -20,22 +18,23 @@ import (
 
 // ActionSchedule represents a schedule of a workflow file
 type ActionSchedule struct {
-	ID            int64
-	Title         string
-	Specs         []string
-	RepoID        int64                  `xorm:"index"`
-	Repo          *repo_model.Repository `xorm:"-"`
-	OwnerID       int64                  `xorm:"index"`
-	WorkflowID    string
-	TriggerUserID int64
-	TriggerUser   *user_model.User `xorm:"-"`
-	Ref           string
-	CommitSHA     string
-	Event         webhook_module.HookEventType
-	EventPayload  string `xorm:"LONGTEXT"`
-	Content       []byte
-	Created       timeutil.TimeStamp `xorm:"created"`
-	Updated       timeutil.TimeStamp `xorm:"updated"`
+	ID                int64
+	Title             string
+	Specs             []*ActionScheduleSpec  `xorm:"-"`
+	RepoID            int64                  `xorm:"index"`
+	Repo              *repo_model.Repository `xorm:"-"`
+	OwnerID           int64                  `xorm:"index"`
+	WorkflowID        string
+	WorkflowDirectory string `xorm:"NOT NULL DEFAULT '.forgejo/workflows'"`
+	TriggerUserID     int64
+	TriggerUser       *user_model.User `xorm:"-"`
+	Ref               string
+	CommitSHA         string
+	Event             webhook_module.HookEventType
+	EventPayload      string `xorm:"LONGTEXT"`
+	Content           []byte
+	Created           timeutil.TimeStamp `xorm:"created"`
+	Updated           timeutil.TimeStamp `xorm:"updated"`
 }
 
 func init() {
@@ -73,25 +72,12 @@ func CreateScheduleTask(ctx context.Context, rows []*ActionSchedule) error {
 			return err
 		}
 
-		// Loop through each schedule spec and create a new spec row
-		now := time.Now()
-
 		for _, spec := range row.Specs {
-			specRow := &ActionScheduleSpec{
-				RepoID:     row.RepoID,
-				ScheduleID: row.ID,
-				Spec:       spec,
-			}
-			// Parse the spec and check for errors
-			schedule, err := specRow.Parse()
-			if err != nil {
-				continue // skip to the next spec if there's an error
-			}
-
-			specRow.Next = timeutil.TimeStamp(schedule.Next(now).Unix())
+			spec.ScheduleID = row.ID
+			spec.RepoID = row.RepoID
 
 			// Insert the new schedule spec row
-			if err = db.Insert(ctx, specRow); err != nil {
+			if err = db.Insert(ctx, spec); err != nil {
 				return err
 			}
 		}
@@ -119,27 +105,6 @@ func DeleteScheduleTaskByRepo(ctx context.Context, id int64) error {
 	return committer.Commit()
 }
 
-func CleanRepoScheduleTasks(ctx context.Context, repo *repo_model.Repository, cancelPreviousJobs bool) error {
-	// If actions disabled when there is schedule task, this will remove the outdated schedule tasks
-	// There is no other place we can do this because the app.ini will be changed manually
-	if err := DeleteScheduleTaskByRepo(ctx, repo.ID); err != nil {
-		return fmt.Errorf("DeleteCronTaskByRepo: %v", err)
-	}
-	if cancelPreviousJobs {
-		// cancel running cron jobs of this repository and delete old schedules
-		if err := CancelPreviousJobs(
-			ctx,
-			repo.ID,
-			repo.DefaultBranch,
-			"",
-			webhook_module.HookEventSchedule,
-		); err != nil {
-			return fmt.Errorf("CancelPreviousJobs: %v", err)
-		}
-	}
-	return nil
-}
-
 type FindScheduleOptions struct {
 	db.ListOptions
 	RepoID  int64
@@ -151,7 +116,7 @@ func (opts FindScheduleOptions) ToConds() builder.Cond {
 	if opts.RepoID > 0 {
 		cond = cond.And(builder.Eq{"repo_id": opts.RepoID})
 	}
-	if opts.OwnerID > 0 {
+	if opts.OwnerID != 0 {
 		cond = cond.And(builder.Eq{"owner_id": opts.OwnerID})
 	}
 

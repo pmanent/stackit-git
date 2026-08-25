@@ -5,7 +5,6 @@ package e2e
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -23,6 +22,7 @@ import (
 	"forgejo.org/modules/json"
 	modules_session "forgejo.org/modules/session"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/util"
 	"forgejo.org/tests"
 
 	"code.forgejo.org/go-chi/session"
@@ -83,9 +83,7 @@ func createSessions(t testing.TB) {
 	browsers := []string{
 		"chromium",
 		"firefox",
-		"webkit",
 		"Mobile Chrome",
-		"Mobile Safari",
 	}
 	scopes := []string{
 		"shared",
@@ -93,11 +91,14 @@ func createSessions(t testing.TB) {
 	users := []string{
 		"user1",
 		"user2",
+		"user11",
 		"user12",
+		"user18",
+		"user29",
 		"user40",
 	}
 
-	authState := filepath.Join(filepath.Dir(setting.AppPath), "tests", "e2e", ".auth")
+	authState := filepath.Join(setting.AppWorkPath, "tests", "e2e", ".auth")
 	err := os.RemoveAll(authState)
 	require.NoError(t, err)
 
@@ -153,11 +154,7 @@ func stateHelper(t testing.TB) func(stateFile string, user *user_model.User) {
 	require.NoError(t, err)
 
 	return func(stateFile string, user *user_model.User) {
-		buf := make([]byte, opt.IDLength/2)
-		_, err = rand.Read(buf)
-		require.NoError(t, err)
-
-		sessionID := hex.EncodeToString(buf)
+		sessionID := hex.EncodeToString(util.CryptoRandomBytes(int64(opt.IDLength) / 2))
 
 		s, err := vsp.Read(sessionID)
 		require.NoError(t, err)

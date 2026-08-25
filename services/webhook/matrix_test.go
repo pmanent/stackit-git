@@ -159,24 +159,24 @@ func TestMatrixPayload(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pl)
 
-		assert.Equal(t, "[test/repo] New wiki page '[index](http://localhost:3000/test/repo/wiki/index)' (Wiki change comment) by user1", pl.Body)
-		assert.Equal(t, `[test/repo] New wiki page '<a href="http://localhost:3000/test/repo/wiki/index">index</a>' (Wiki change comment) by user1`, pl.FormattedBody)
+		assert.Equal(t, "[test/repo] New wiki page \"[index](http://localhost:3000/test/repo/wiki/index)\" (Wiki change comment) by user1", pl.Body)
+		assert.Equal(t, `[test/repo] New wiki page "<a href="http://localhost:3000/test/repo/wiki/index">index</a>" (Wiki change comment) by user1`, pl.FormattedBody)
 
 		p.Action = api.HookWikiEdited
 		pl, err = mc.Wiki(p)
 		require.NoError(t, err)
 		require.NotNil(t, pl)
 
-		assert.Equal(t, "[test/repo] Wiki page '[index](http://localhost:3000/test/repo/wiki/index)' edited (Wiki change comment) by user1", pl.Body)
-		assert.Equal(t, `[test/repo] Wiki page '<a href="http://localhost:3000/test/repo/wiki/index">index</a>' edited (Wiki change comment) by user1`, pl.FormattedBody)
+		assert.Equal(t, "[test/repo] Wiki page \"[index](http://localhost:3000/test/repo/wiki/index)\" edited (Wiki change comment) by user1", pl.Body)
+		assert.Equal(t, `[test/repo] Wiki page "<a href="http://localhost:3000/test/repo/wiki/index">index</a>" edited (Wiki change comment) by user1`, pl.FormattedBody)
 
 		p.Action = api.HookWikiDeleted
 		pl, err = mc.Wiki(p)
 		require.NoError(t, err)
 		require.NotNil(t, pl)
 
-		assert.Equal(t, "[test/repo] Wiki page '[index](http://localhost:3000/test/repo/wiki/index)' deleted by user1", pl.Body)
-		assert.Equal(t, `[test/repo] Wiki page '<a href="http://localhost:3000/test/repo/wiki/index">index</a>' deleted by user1`, pl.FormattedBody)
+		assert.Equal(t, "[test/repo] Wiki page \"[index](http://localhost:3000/test/repo/wiki/index)\" deleted by user1", pl.Body)
+		assert.Equal(t, `[test/repo] Wiki page "<a href="http://localhost:3000/test/repo/wiki/index">index</a>" deleted by user1`, pl.FormattedBody)
 	})
 
 	t.Run("Release", func(t *testing.T) {
@@ -216,39 +216,16 @@ func TestMatrixJSONPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "PUT", req.Method)
-	assert.Equal(t, "/_matrix/client/v3/rooms/ROOM_ID/send/m.room.message/86aaa4d69df5aa487cb0148af4ae7e546933057b", req.URL.Path)
+	// >>> @@@ STACKIT CODE @@@
+	// The Matrix transaction id is sha256(PayloadContent). STACKIT adds
+	// EmailNotificationsPreference to api.User, which appears twice in this
+	// payload (Pusher and Sender), so the digest differs from upstream's
+	// "Le5CqY5h6_wPgbUm8YkjQV1tML1yIs_VhIyk8RjQox4".
+	assert.Equal(t, "/_matrix/client/v3/rooms/ROOM_ID/send/m.room.message/_0rYEhQmzWiHjtVSRXci8id_O4vYkloJ31QR972nN84", req.URL.Path)
+	// <<< @@@ STACKIT CODE @@@
 	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
 	var body MatrixPayload
 	err = json.NewDecoder(req.Body).Decode(&body)
 	require.NoError(t, err)
 	assert.Equal(t, "[test/repo] user1 pushed 2 commits to test:\n[2020558](http://localhost:3000/test/repo/commit/2020558fe2e34debb818a514715839cabd25e778): commit message - user1\n[2020558](http://localhost:3000/test/repo/commit/2020558fe2e34debb818a514715839cabd25e778): commit message - user1", body.Body)
-}
-
-func Test_getTxnID(t *testing.T) {
-	type args struct {
-		payload []byte
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr bool
-	}{
-		{
-			name:    "dummy payload",
-			args:    args{payload: []byte("Hello World")},
-			want:    "0a4d55a8d778e5022fab701977c5d840bbc486d0",
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := getMatrixTxnID(tt.args.payload)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("getMatrixTxnID() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }

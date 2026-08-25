@@ -4,9 +4,11 @@
 package template
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,17 +33,17 @@ func Validate(template *api.IssueTemplate) error {
 
 func validateMetadata(template *api.IssueTemplate) error {
 	if strings.TrimSpace(template.Name) == "" {
-		return fmt.Errorf("'name' is required")
+		return errors.New("'name' is required")
 	}
 	if strings.TrimSpace(template.About) == "" {
-		return fmt.Errorf("'about' is required")
+		return errors.New("'about' is required")
 	}
 	return nil
 }
 
 func validateYaml(template *api.IssueTemplate) error {
 	if len(template.Fields) == 0 {
-		return fmt.Errorf("'body' is required")
+		return errors.New("'body' is required")
 	}
 	ids := make(container.Set[string])
 	for idx, field := range template.Fields {
@@ -191,7 +193,7 @@ func validateOptions(field *api.IssueFormField, idx int) error {
 				}
 				for _, visibleType := range visibilityList {
 					visibleType, ok := visibleType.(string)
-					if !ok || !(visibleType == "form" || visibleType == "content") {
+					if !ok || (visibleType != "form" && visibleType != "content") {
 						return position.Errorf("'visible' list can only contain strings of 'form' and 'content'")
 					}
 				}
@@ -446,12 +448,7 @@ func (o *valuedOption) IsChecked() bool {
 	case api.IssueFormFieldTypeDropdown:
 		checks := strings.Split(o.field.Get(fmt.Sprintf("form-field-%s", o.field.ID)), ",")
 		idx := strconv.Itoa(o.index)
-		for _, v := range checks {
-			if v == idx {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(checks, idx)
 	case api.IssueFormFieldTypeCheckboxes:
 		return o.field.Get(fmt.Sprintf("form-field-%s-%d", o.field.ID, o.index)) == "on"
 	}

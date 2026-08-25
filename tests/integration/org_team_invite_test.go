@@ -42,9 +42,7 @@ func TestOrgTeamEmailInvite(t *testing.T) {
 	session := loginUser(t, "user1")
 
 	teamURL := fmt.Sprintf("/org/%s/teams/%s", org.Name, team.Name)
-	csrf := GetCSRF(t, session, teamURL)
 	req := NewRequestWithValues(t, "POST", teamURL+"/action/add", map[string]string{
-		"_csrf": csrf,
 		"uid":   "1",
 		"uname": user.Email,
 	})
@@ -59,12 +57,18 @@ func TestOrgTeamEmailInvite(t *testing.T) {
 
 	session = loginUser(t, user.Name)
 
-	// join the team
+	// get the invite page
 	inviteURL := fmt.Sprintf("/org/invite/%s", invites[0].Token)
-	csrf = GetCSRF(t, session, inviteURL)
-	req = NewRequestWithValues(t, "POST", inviteURL, map[string]string{
-		"_csrf": csrf,
-	})
+	req = NewRequest(t, "GET", inviteURL)
+	resp = session.MakeRequest(t, req, http.StatusOK)
+	doc := NewHTMLParser(t, resp.Body)
+
+	// check the button exists
+	submitButton := doc.Find(`button:contains('Join')`).Length()
+	assert.Equal(t, 1, submitButton)
+
+	// join the team
+	req = NewRequest(t, "POST", inviteURL)
 	resp = session.MakeRequest(t, req, http.StatusSeeOther)
 	req = NewRequest(t, "GET", test.RedirectURL(resp))
 	session.MakeRequest(t, req, http.StatusOK)
@@ -96,7 +100,6 @@ func TestOrgTeamEmailInviteRedirectsExistingUser(t *testing.T) {
 
 	teamURL := fmt.Sprintf("/org/%s/teams/%s", org.Name, team.Name)
 	req := NewRequestWithValues(t, "POST", teamURL+"/action/add", map[string]string{
-		"_csrf": GetCSRF(t, session, teamURL),
 		"uid":   "1",
 		"uname": user.Email,
 	})
@@ -114,9 +117,7 @@ func TestOrgTeamEmailInviteRedirectsExistingUser(t *testing.T) {
 	req = NewRequest(t, "GET", fmt.Sprintf("/user/login?redirect_to=%s", url.QueryEscape(inviteURL)))
 	resp = MakeRequest(t, req, http.StatusOK)
 
-	doc := NewHTMLParser(t, resp.Body)
 	req = NewRequestWithValues(t, "POST", "/user/login", map[string]string{
-		"_csrf":     doc.GetCSRF(),
 		"user_name": "user5",
 		"password":  "password",
 	})
@@ -138,9 +139,7 @@ func TestOrgTeamEmailInviteRedirectsExistingUser(t *testing.T) {
 	session.jar.SetCookies(baseURL, cr.Cookies())
 
 	// make the request
-	req = NewRequestWithValues(t, "POST", test.RedirectURL(resp), map[string]string{
-		"_csrf": GetCSRF(t, session, test.RedirectURL(resp)),
-	})
+	req = NewRequest(t, "POST", test.RedirectURL(resp))
 	resp = session.MakeRequest(t, req, http.StatusSeeOther)
 	req = NewRequest(t, "GET", test.RedirectURL(resp))
 	session.MakeRequest(t, req, http.StatusOK)
@@ -167,7 +166,6 @@ func TestOrgTeamEmailInviteRedirectsNewUser(t *testing.T) {
 
 	teamURL := fmt.Sprintf("/org/%s/teams/%s", org.Name, team.Name)
 	req := NewRequestWithValues(t, "POST", teamURL+"/action/add", map[string]string{
-		"_csrf": GetCSRF(t, session, teamURL),
 		"uid":   "1",
 		"uname": "doesnotexist@example.com",
 	})
@@ -185,9 +183,7 @@ func TestOrgTeamEmailInviteRedirectsNewUser(t *testing.T) {
 	req = NewRequest(t, "GET", fmt.Sprintf("/user/sign_up?redirect_to=%s", url.QueryEscape(inviteURL)))
 	resp = MakeRequest(t, req, http.StatusOK)
 
-	doc := NewHTMLParser(t, resp.Body)
 	req = NewRequestWithValues(t, "POST", "/user/sign_up", map[string]string{
-		"_csrf":     doc.GetCSRF(),
 		"user_name": "doesnotexist",
 		"email":     "doesnotexist@example.com",
 		"password":  "examplePassword!1",
@@ -211,9 +207,7 @@ func TestOrgTeamEmailInviteRedirectsNewUser(t *testing.T) {
 	session.jar.SetCookies(baseURL, cr.Cookies())
 
 	// make the redirected request
-	req = NewRequestWithValues(t, "POST", test.RedirectURL(resp), map[string]string{
-		"_csrf": GetCSRF(t, session, test.RedirectURL(resp)),
-	})
+	req = NewRequest(t, "POST", test.RedirectURL(resp))
 	resp = session.MakeRequest(t, req, http.StatusSeeOther)
 	req = NewRequest(t, "GET", test.RedirectURL(resp))
 	session.MakeRequest(t, req, http.StatusOK)
@@ -233,13 +227,7 @@ func TestOrgTeamEmailInviteRedirectsNewUserWithActivation(t *testing.T) {
 		t.Skip()
 		return
 	}
-
-	// enable email confirmation temporarily
-	defer func(prevVal bool) {
-		setting.Service.RegisterEmailConfirm = prevVal
-	}(setting.Service.RegisterEmailConfirm)
-	setting.Service.RegisterEmailConfirm = true
-
+	defer test.MockVariableValue(&setting.Service.RegisterEmailConfirm, true)()
 	defer tests.PrepareTestEnv(t)()
 
 	org := unittest.AssertExistsAndLoadBean(t, &organization.Organization{ID: 3})
@@ -250,7 +238,6 @@ func TestOrgTeamEmailInviteRedirectsNewUserWithActivation(t *testing.T) {
 
 	teamURL := fmt.Sprintf("/org/%s/teams/%s", org.Name, team.Name)
 	req := NewRequestWithValues(t, "POST", teamURL+"/action/add", map[string]string{
-		"_csrf": GetCSRF(t, session, teamURL),
 		"uid":   "1",
 		"uname": "doesnotexist@example.com",
 	})
@@ -268,9 +255,7 @@ func TestOrgTeamEmailInviteRedirectsNewUserWithActivation(t *testing.T) {
 	req = NewRequest(t, "GET", fmt.Sprintf("/user/sign_up?redirect_to=%s", url.QueryEscape(inviteURL)))
 	inviteResp := MakeRequest(t, req, http.StatusOK)
 
-	doc := NewHTMLParser(t, resp.Body)
 	req = NewRequestWithValues(t, "POST", "/user/sign_up", map[string]string{
-		"_csrf":     doc.GetCSRF(),
 		"user_name": "doesnotexist",
 		"email":     "doesnotexist@example.com",
 		"password":  "examplePassword!1",
@@ -310,9 +295,7 @@ func TestOrgTeamEmailInviteRedirectsNewUserWithActivation(t *testing.T) {
 	// should be redirected to accept the invite
 	assert.Equal(t, inviteURL, test.RedirectURL(resp))
 
-	req = NewRequestWithValues(t, "POST", test.RedirectURL(resp), map[string]string{
-		"_csrf": GetCSRF(t, session, test.RedirectURL(resp)),
-	})
+	req = NewRequest(t, "POST", test.RedirectURL(resp))
 	resp = session.MakeRequest(t, req, http.StatusSeeOther)
 	req = NewRequest(t, "GET", test.RedirectURL(resp))
 	session.MakeRequest(t, req, http.StatusOK)
@@ -346,7 +329,6 @@ func TestOrgTeamEmailInviteRedirectsExistingUserWithLogin(t *testing.T) {
 
 	teamURL := fmt.Sprintf("/org/%s/teams/%s", org.Name, team.Name)
 	req := NewRequestWithValues(t, "POST", teamURL+"/action/add", map[string]string{
-		"_csrf": GetCSRF(t, session, teamURL),
 		"uid":   "1",
 		"uname": user.Email,
 	})
@@ -369,9 +351,7 @@ func TestOrgTeamEmailInviteRedirectsExistingUserWithLogin(t *testing.T) {
 	assert.Equal(t, inviteURL, test.RedirectURL(resp))
 
 	// make the request
-	req = NewRequestWithValues(t, "POST", test.RedirectURL(resp), map[string]string{
-		"_csrf": GetCSRF(t, session, test.RedirectURL(resp)),
-	})
+	req = NewRequest(t, "POST", test.RedirectURL(resp))
 	resp = session.MakeRequest(t, req, http.StatusSeeOther)
 	req = NewRequest(t, "GET", test.RedirectURL(resp))
 	session.MakeRequest(t, req, http.StatusOK)
@@ -379,4 +359,90 @@ func TestOrgTeamEmailInviteRedirectsExistingUserWithLogin(t *testing.T) {
 	isMember, err = organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, user.ID)
 	require.NoError(t, err)
 	assert.True(t, isMember)
+}
+
+// Test that a user can accept a team invite linked to their existing account
+func TestOrgTeamEmailInviteExistingUser(t *testing.T) {
+	if setting.MailService == nil {
+		t.Skip()
+		return
+	}
+
+	defer tests.PrepareTestEnv(t)()
+
+	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
+	inviter := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+
+	isMember, err := organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, user.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
+
+	// create the invite
+	invite, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, user, team)
+	require.NoError(t, err)
+
+	// log in the invited user
+	session := loginUser(t, "user5")
+
+	// view the invite
+	inviteURL := fmt.Sprintf("/org/invite/%s", invite.Token)
+	req := NewRequest(t, "GET", inviteURL)
+	session.MakeRequest(t, req, http.StatusOK)
+
+	// accept the invite
+	req = NewRequest(t, "POST", inviteURL)
+	resp := session.MakeRequest(t, req, http.StatusSeeOther)
+	req = NewRequest(t, "GET", test.RedirectURL(resp))
+	session.MakeRequest(t, req, http.StatusOK)
+
+	isMember, err = organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, user.ID)
+	require.NoError(t, err)
+	assert.True(t, isMember)
+}
+
+// Test that a user cannot accept an invite if it was meant for another user
+func TestOrgTeamEmailInviteCannotBeAcceptedByOtherUser(t *testing.T) {
+	if setting.MailService == nil {
+		t.Skip()
+		return
+	}
+
+	defer tests.PrepareTestEnv(t)()
+
+	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
+	inviter := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	invited := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+	attacker := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 11})
+
+	isMember, err := organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, invited.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
+	isMember, err = organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, attacker.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
+
+	// create the invite for the invited user
+	invite, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, invited, team)
+	require.NoError(t, err)
+
+	// log in as the attacker
+	session := loginUser(t, attacker.Name)
+
+	// viewing the invite doesn't work
+	inviteURL := fmt.Sprintf("/org/invite/%s", invite.Token)
+	req := NewRequest(t, "GET", inviteURL)
+	session.MakeRequest(t, req, http.StatusNotFound)
+
+	// accepting the invite doesn't either
+	req = NewRequest(t, "POST", inviteURL)
+	session.MakeRequest(t, req, http.StatusNotFound)
+
+	// neither the invited user nor the attacker are part of the team
+	isMember, err = organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, invited.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
+	isMember, err = organization.IsTeamMember(db.DefaultContext, team.OrgID, team.ID, attacker.ID)
+	require.NoError(t, err)
+	assert.False(t, isMember)
 }

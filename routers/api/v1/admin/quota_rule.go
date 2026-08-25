@@ -4,7 +4,7 @@
 package admin
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 
 	quota_model "forgejo.org/models/quota"
@@ -83,7 +83,7 @@ func CreateQuotaRule(ctx *context.APIContext) {
 	form := web.GetForm(ctx).(*api.CreateQuotaRuleOptions)
 
 	if form.Limit == nil {
-		ctx.Error(http.StatusUnprocessableEntity, "quota_model.ParseLimitSubject", fmt.Errorf("[Limit]: Required"))
+		ctx.Error(http.StatusUnprocessableEntity, "quota_model.ParseLimitSubject", errors.New("[Limit]: Required"))
 		return
 	}
 
@@ -128,7 +128,7 @@ func GetQuotaRule(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	ctx.JSON(http.StatusOK, convert.ToQuotaRuleInfo(*ctx.QuotaRule, true))
+	ctx.JSON(http.StatusOK, convert.ToQuotaRuleInfo(*ctx.QuotaRule(), true))
 }
 
 // EditQuotaRule changes an existing quota rule
@@ -177,7 +177,7 @@ func EditQuotaRule(ctx *context.APIContext) {
 		subjects = &subjs
 	}
 
-	rule, err := ctx.QuotaRule.Edit(ctx, form.Limit, subjects)
+	rule, err := ctx.QuotaRule().Edit(ctx, form.Limit, subjects)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "quota_model.rule.Edit", err)
 		return
@@ -188,7 +188,7 @@ func EditQuotaRule(ctx *context.APIContext) {
 
 // DeleteQuotaRule deletes a quota rule
 func DeleteQuotaRule(ctx *context.APIContext) {
-	// swagger:operation DELETE /admin/quota/rules/{quotarule} admin adminDEleteQuotaRule
+	// swagger:operation DELETE /admin/quota/rules/{quotarule} admin adminDeleteQuotaRule
 	// ---
 	// summary: Deletes a quota rule
 	// produces:
@@ -209,7 +209,7 @@ func DeleteQuotaRule(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	err := quota_model.DeleteRuleByName(ctx, ctx.QuotaRule.Name)
+	err := quota_model.DeleteRuleByName(ctx, ctx.QuotaRule().Name)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "quota_model.DeleteRuleByName", err)
 		return

@@ -36,7 +36,7 @@ func TestSet(t *testing.T) {
 		called++
 		assert.True(t, slices.Contains(values, value))
 	}
-	assert.EqualValues(t, len(values), called)
+	assert.Equal(t, len(values), called)
 
 	s = SetOf("key6", "key7")
 	assert.False(t, s.Contains("key1"))
@@ -47,4 +47,11 @@ func TestSet(t *testing.T) {
 	assert.False(t, s.IsSubset([]string{"key1"}))
 
 	assert.True(t, s.IsSubset([]string{}))
+
+	t.Run("Clone", func(t *testing.T) {
+		clonedSet := s.Clone()
+		clonedSet.Remove("key6")
+		assert.False(t, clonedSet.Contains("key6"))
+		assert.True(t, s.Contains("key6"))
+	})
 }

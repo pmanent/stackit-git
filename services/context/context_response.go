@@ -1,4 +1,5 @@
 // Copyright 2023 The Gitea Authors. All rights reserved.
+// Copyright 2024 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package context
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"forgejo.org/models/auth"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/httplib"
@@ -76,7 +78,10 @@ func (ctx *Context) RedirectToFirst(location ...string) string {
 	return setting.AppSubURL + "/"
 }
 
-const tplStatus500 base.TplName = "status/500"
+const (
+	tplStatus404 base.TplName = "status/404"
+	tplStatus500 base.TplName = "status/500"
+)
 
 // HTML calls Context.HTML and renders the template to HTTP response
 func (ctx *Context) HTML(status int, name base.TplName) {
@@ -135,6 +140,20 @@ func (ctx *Context) RenderWithErr(msg any, tpl base.TplName, form any) {
 	ctx.HTML(http.StatusOK, tpl)
 }
 
+// validateTwoFactorRequirement sets ctx-data to hide/show ui-elements depending on the GlobalTwoFactorRequirement
+func (ctx *Context) validateTwoFactorRequirement() {
+	if ctx.Doer == nil || !ctx.Doer.MustHaveTwoFactor() {
+		return
+	}
+
+	hasTwoFactor, err := auth.HasTwoFactorByUID(ctx, ctx.Doer.ID)
+	if err != nil {
+		log.ErrorWithSkip(2, "Error getting 2fa: %s", err)
+	}
+	ctx.Data["MustEnableTwoFactor"] = !hasTwoFactor
+	ctx.Data["HideNavbarLinks"] = !hasTwoFactor
+}
+
 // NotFound displays a 404 (Not Found) page and prints the given error, if any.
 func (ctx *Context) NotFound(logMsg string, logErr error) {
 	ctx.notFoundInternal(logMsg, logErr)
@@ -162,9 +181,10 @@ func (ctx *Context) notFoundInternal(logMsg string, logErr error) {
 		return
 	}
 
+	ctx.validateTwoFactorRequirement()
 	ctx.Data["IsRepo"] = ctx.Repo.Repository != nil
-	ctx.Data["Title"] = "Page Not Found"
-	ctx.HTML(http.StatusNotFound, base.TplName("status/404"))
+	ctx.Data["Title"] = ctx.Locale.TrString("error.not_found.title")
+	ctx.HTML(http.StatusNotFound, tplStatus404)
 }
 
 // ServerError displays a 500 (Internal Server Error) page and prints the given error, if any.
@@ -175,7 +195,8 @@ func (ctx *Context) ServerError(logMsg string, logErr error) {
 func (ctx *Context) serverErrorInternal(logMsg string, logErr error) {
 	if logErr != nil {
 		log.ErrorWithSkip(2, "%s: %v", logMsg, logErr)
-		if _, ok := logErr.(*net.OpError); ok || errors.Is(logErr, &net.OpError{}) {
+		var opError *net.OpError
+		if errors.As(logErr, &opError) {
 			// This is an error within the underlying connection
 			// and further rendering will not work so just return
 			return
@@ -187,7 +208,7 @@ func (ctx *Context) serverErrorInternal(logMsg string, logErr error) {
 		}
 	}
 
-	ctx.Data["Title"] = "Internal Server Error"
+	ctx.validateTwoFactorRequirement()
 	ctx.HTML(http.StatusInternalServerError, tplStatus500)
 }
 

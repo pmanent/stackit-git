@@ -56,16 +56,16 @@ func TestLogger(t *testing.T) {
 
 	dump := logger.DumpWriters()
 	assert.Empty(t, dump)
-	assert.EqualValues(t, NONE, logger.GetLevel())
+	assert.Equal(t, NONE, logger.GetLevel())
 	assert.False(t, logger.IsEnabled())
 
 	w1 := newDummyWriter("dummy-1", DEBUG, 0)
 	logger.AddWriters(w1)
-	assert.EqualValues(t, DEBUG, logger.GetLevel())
+	assert.Equal(t, DEBUG, logger.GetLevel())
 
 	w2 := newDummyWriter("dummy-2", WARN, 200*time.Millisecond)
 	logger.AddWriters(w2)
-	assert.EqualValues(t, DEBUG, logger.GetLevel())
+	assert.Equal(t, DEBUG, logger.GetLevel())
 
 	dump = logger.DumpWriters()
 	assert.Len(t, dump, 2)
@@ -142,4 +142,20 @@ func TestLoggerExpressionFilter(t *testing.T) {
 	logger.Close()
 
 	assert.Equal(t, []string{"foo\n", "foo bar\n", "by filename\n"}, w1.GetLogs())
+}
+
+func TestLoggerExclusionFilter(t *testing.T) {
+	logger := NewLoggerWithWriters(t.Context(), "test")
+
+	w1 := newDummyWriter("dummy-1", DEBUG, 0)
+	w1.Mode.Exclusion = "foo.*"
+	logger.AddWriters(w1)
+
+	logger.Info("foo")
+	logger.Info("bar")
+	logger.Info("foo bar")
+	logger.SendLogEvent(&Event{Level: INFO, Filename: "foo.go", MsgSimpleText: "by filename"})
+	logger.Close()
+
+	assert.Equal(t, []string{"bar\n"}, w1.GetLogs())
 }

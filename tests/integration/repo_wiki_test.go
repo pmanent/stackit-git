@@ -33,6 +33,7 @@ func TestWikiSearchContent(t *testing.T) {
 	assert.Equal(t, []string{
 		"Home",
 		"Page With Spaced Name",
+		"Page With Unescaped Special Chars: (1)",
 		"Unescaped File",
 	}, res)
 }
@@ -44,13 +45,11 @@ func TestWikiBranchNormalize(t *testing.T) {
 	session := loginUser(t, username)
 	settingsURLStr := "/user2/repo1/settings"
 
-	assertNormalizeButton := func(present bool) string {
+	assertNormalizeButton := func(present bool) {
 		req := NewRequest(t, "GET", settingsURLStr) //.AddTokenAuth(token)
 		resp := session.MakeRequest(t, req, http.StatusOK)
 		htmlDoc := NewHTMLParser(t, resp.Body)
 		htmlDoc.AssertElement(t, "button[data-modal='#rename-wiki-branch-modal']", present)
-
-		return htmlDoc.GetCSRF()
 	}
 
 	// By default the repo wiki branch is empty
@@ -77,11 +76,10 @@ func TestWikiBranchNormalize(t *testing.T) {
 	assert.Equal(t, wikiBranch, repo.GetWikiBranchName())
 
 	// And as such, the button appears!
-	csrf := assertNormalizeButton(true)
+	assertNormalizeButton(true)
 
 	// Invoking the normalization renames the wiki branch back to the default
 	req = NewRequestWithValues(t, "POST", settingsURLStr, map[string]string{
-		"_csrf":     csrf,
 		"action":    "rename-wiki-branch",
 		"repo_name": repo.FullName(),
 	})
@@ -102,7 +100,6 @@ func TestWikiTOC(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 
 		req := NewRequestWithValues(t, "POST", "/user2/repo1/wiki/Home?action=_edit", map[string]string{
-			"_csrf":   GetCSRF(t, session, "/user2/repo1/wiki/Home"),
 			"title":   "Home",
 			"content": "# [Helpdesk](Helpdesk)",
 		})
@@ -112,7 +109,7 @@ func TestWikiTOC(t *testing.T) {
 		resp := MakeRequest(t, req, http.StatusOK)
 		htmlDoc := NewHTMLParser(t, resp.Body)
 
-		assert.EqualValues(t, "Helpdesk", htmlDoc.Find(".wiki-content-toc a").Text())
+		assert.Equal(t, "Helpdesk", htmlDoc.Find(".wiki-content-toc a").Text())
 	})
 }
 
@@ -169,9 +166,7 @@ func TestWikiPermissions(t *testing.T) {
 
 	t.Run("saved unchanged settings", func(t *testing.T) {
 		session := loginUser(t, "user5")
-		csrf := GetCSRF(t, session, "/user5/repo4/settings/units")
 		req := NewRequestWithValues(t, "POST", "/user5/repo4/settings/units", map[string]string{
-			"_csrf":       csrf,
 			"enable_wiki": "on",
 		})
 		session.MakeRequest(t, req, http.StatusSeeOther)
@@ -193,9 +188,7 @@ func TestWikiPermissions(t *testing.T) {
 
 	t.Run("globally writable", func(t *testing.T) {
 		session := loginUser(t, "user5")
-		csrf := GetCSRF(t, session, "/user5/repo4/settings/units")
 		req := NewRequestWithValues(t, "POST", "/user5/repo4/settings/units", map[string]string{
-			"_csrf":                   csrf,
 			"enable_wiki":             "on",
 			"globally_writeable_wiki": "on",
 		})

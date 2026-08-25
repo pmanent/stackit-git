@@ -92,7 +92,7 @@ func checkContextUser(ctx *context.Context, uid int64) *user_model.User {
 
 	if !ctx.Doer.IsAdmin {
 		orgsAvailable := []*organization.Organization{}
-		for i := 0; i < len(orgs); i++ {
+		for i := range orgs {
 			if orgs[i].CanCreateRepo() {
 				orgsAvailable = append(orgsAvailable, orgs[i])
 			}
@@ -317,20 +317,45 @@ const (
 	tplStarUnstar   base.TplName = "repo/star_unstar"
 )
 
-func ActionWatch(watch bool) func(ctx *context.Context) {
+func ActionWatch(ctx *context.Context) {
+	watchSelection := repo_model.WatchSelection{
+		Issues:       ctx.FormBool("watch_issues"),
+		PullRequests: ctx.FormBool("watch_pull_requests"),
+		Releases:     ctx.FormBool("watch_releases"),
+	}
+
+	err := repo_model.WatchRepoExplicitly(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID, watchSelection)
+	if err != nil {
+		ctx.ServerError(fmt.Sprintf("Action (watch, %t)", watchSelection), err)
+		return
+	}
+
+	ctx.Data["RepoWatchSelection"] = repo_model.GetWatchSelection(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID)
+
+	// we have to reload the repository because NumStars or NumWatching (used in the templates) has just changed
+	ctx.Data["Repository"], err = repo_model.GetRepositoryByName(ctx, ctx.Repo.Repository.OwnerID, ctx.Repo.Repository.Name)
+	if err != nil {
+		ctx.ServerError(fmt.Sprintf("Action (watch, %t)", watchSelection), err)
+		return
+	}
+
+	ctx.HTML(http.StatusOK, tplWatchUnwatch)
+}
+
+func ActionWatchConst(watchSelection repo_model.WatchSelection) func(ctx *context.Context) {
 	return func(ctx *context.Context) {
-		err := repo_model.WatchRepo(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID, watch)
+		err := repo_model.WatchRepoExplicitly(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID, watchSelection)
 		if err != nil {
-			ctx.ServerError(fmt.Sprintf("Action (watch, %t)", watch), err)
+			ctx.ServerError(fmt.Sprintf("Action (watch, %t)", watchSelection), err)
 			return
 		}
 
-		ctx.Data["IsWatchingRepo"] = repo_model.IsWatching(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID)
+		ctx.Data["RepoWatchSelection"] = repo_model.GetWatchSelection(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID)
 
-		// we have to reload the repository because NumStars or NumWatching (used in the templates) has just changed
+		// We have to reload the repository because NumWatching (used in the templates) might have just changed.
 		ctx.Data["Repository"], err = repo_model.GetRepositoryByName(ctx, ctx.Repo.Repository.OwnerID, ctx.Repo.Repository.Name)
 		if err != nil {
-			ctx.ServerError(fmt.Sprintf("Action (watch, %t)", watch), err)
+			ctx.ServerError(fmt.Sprintf("Action (watch, %t)", watchSelection), err)
 			return
 		}
 
@@ -634,6 +659,7 @@ func SearchRepo(ctx *context.Context) {
 		opts.Mirror = optional.Some(false)
 		opts.Collaborate = optional.Some(true)
 	case "":
+		break
 	default:
 		ctx.Error(http.StatusUnprocessableEntity, fmt.Sprintf("Invalid search mode: \"%s\"", mode))
 		return
@@ -687,14 +713,11 @@ func SearchRepo(ctx *context.Context) {
 
 	ctx.SetTotalCountHeader(count)
 
-	latestCommitStatuses, err := commitstatus_service.FindReposLastestCommitStatuses(ctx, repos)
+	latestCommitStatuses, err := commitstatus_service.FindReposLatestCommitStatuses(ctx, repos)
 	if err != nil {
-		log.Error("FindReposLastestCommitStatuses: %v", err)
+		log.Error("FindReposLatestCommitStatuses: %v", err)
 		ctx.JSON(http.StatusInternalServerError, nil)
 		return
-	}
-	if !ctx.Repo.CanRead(unit.TypeActions) {
-		git_model.CommitStatusesHideActionsURL(ctx, latestCommitStatuses)
 	}
 
 	results := make([]*repo_service.WebSearchRepository, len(repos))
@@ -781,4 +804,28 @@ func PrepareBranchList(ctx *context.Context) {
 		brs = append([]string{ctx.Repo.Repository.DefaultBranch}, brs...)
 	}
 	ctx.Data["Branches"] = brs
+}
+
+func SyncFork(ctx *context.Context) {
+	redirectURL := fmt.Sprintf("%s/src/branch/%s", ctx.Repo.RepoLink, util.PathEscapeSegments(ctx.Repo.BranchName))
+	branch := ctx.FormString("branch")
+
+	syncForkInfo, err := repo_service.GetSyncForkInfo(ctx, ctx.Repo.Repository, branch)
+	if err != nil {
+		ctx.ServerError("GetSyncForkInfo", err)
+		return
+	}
+
+	if !syncForkInfo.Allowed {
+		ctx.Redirect(redirectURL)
+		return
+	}
+
+	err = repo_service.SyncFork(ctx, ctx.Doer, ctx.Repo.Repository, branch)
+	if err != nil {
+		ctx.ServerError("SyncFork", err)
+		return
+	}
+
+	ctx.Redirect(redirectURL)
 }

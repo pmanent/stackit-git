@@ -2,28 +2,31 @@
 // Copyright 2023 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-package activitypub
+package activitypub_test
 
 import (
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/activitypub"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCurrentTime(t *testing.T) {
-	date := CurrentTime()
+	date := activitypub.CurrentTime()
 	_, err := time.Parse(http.TimeFormat, date)
 	require.NoError(t, err)
 	assert.Equal(t, "GMT", date[len(date)-3:])
@@ -62,18 +65,44 @@ Set up a user called "me" for all tests
 */
 
 func TestClientCtx(t *testing.T) {
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, true)()
 	require.NoError(t, unittest.PrepareTestDatabase())
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	pubID := "myGpgId"
-	cf, err := NewClientFactory()
+	cf, err := activitypub.NewClientFactory()
 	log.Debug("ClientFactory: %v\nError: %v", cf, err)
 	require.NoError(t, err)
 
-	c, err := cf.WithKeys(db.DefaultContext, user, pubID)
+	c, err := cf.WithKeys(db.DefaultContext, user, pubID, nil)
 
 	log.Debug("Client: %v\nError: %v", c, err)
 	require.NoError(t, err)
-	_ = NewContext(db.DefaultContext, cf)
+	_ = activitypub.NewContext(db.DefaultContext, cf)
+}
+
+func TestClientNilHostsCtx(t *testing.T) {
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, false)()
+	require.NoError(t, unittest.PrepareTestDatabase())
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	pubID := "myGpgId"
+	cf, err := activitypub.NewClientFactory()
+	log.Debug("ClientFactory: %v\nError: %v", cf, err)
+	require.NoError(t, err)
+
+	_, err = cf.WithKeys(db.DefaultContext, user, pubID, nil)
+	require.Error(t, err)
+
+	_, err = cf.WithKeys(db.DefaultContext, user, pubID, nil)
+	require.Error(t, err)
+
+	_, err = cf.WithKeys(db.DefaultContext, user, pubID, []*url.URL{nil})
+	require.Error(t, err)
+
+	testURL, err := url.Parse("https://example.dev")
+	require.NoError(t, err)
+
+	_, err = cf.WithKeys(db.DefaultContext, user, pubID, []*url.URL{testURL, nil})
+	require.Error(t, err)
 }
 
 /* TODO: bring this test to work or delete
@@ -108,25 +137,29 @@ func TestActivityPubSignedGet(t *testing.T) {
 */
 
 func TestActivityPubSignedPost(t *testing.T) {
+	defer test.MockVariableValue(&setting.Federation.InsecureAllowInvalidHosts, true)()
 	require.NoError(t, unittest.PrepareTestDatabase())
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	pubID := "https://example.com/pubID"
-	cf, err := NewClientFactory()
-	require.NoError(t, err)
-	c, err := cf.WithKeys(db.DefaultContext, user, pubID)
-	require.NoError(t, err)
 
 	expected := "BODY"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Regexp(t, "^"+setting.Federation.DigestAlgorithm, r.Header.Get("Digest"))
 		assert.Contains(t, r.Header.Get("Signature"), pubID)
-		assert.Equal(t, ActivityStreamsContentType, r.Header.Get("Content-Type"))
+		assert.Equal(t, activitypub.ActivityStreamsContentType, r.Header.Get("Content-Type"))
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		assert.Equal(t, expected, string(body))
 		fmt.Fprint(w, expected)
 	}))
 	defer srv.Close()
+
+	cf, err := activitypub.NewClientFactory()
+	require.NoError(t, err)
+	srvURL, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	c, err := cf.WithKeys(db.DefaultContext, user, pubID, []*url.URL{srvURL})
+	require.NoError(t, err)
 
 	r, err := c.Post([]byte(expected), srv.URL)
 	require.NoError(t, err)

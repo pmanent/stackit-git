@@ -35,10 +35,18 @@ func TaskStatus(ctx *context.Context) {
 		var translatableMessage admin_model.TranslatableMessage
 		if err := json.Unmarshal([]byte(message), &translatableMessage); err != nil {
 			translatableMessage = admin_model.TranslatableMessage{
-				Format: "migrate.migrating_failed.error",
+				Format: "repo.migrate.migrating_failed.error",
 				Args:   []any{task.Message},
 			}
 		}
+
+		// Convert float64 to integers. Currently no usage of floats.
+		for i := range translatableMessage.Args {
+			if arg, ok := translatableMessage.Args[i].(float64); ok {
+				translatableMessage.Args[i] = int64(arg)
+			}
+		}
+
 		message = ctx.Locale.TrString(translatableMessage.Format, translatableMessage.Args...)
 	}
 

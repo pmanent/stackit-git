@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"forgejo.org/models/db"
+	"forgejo.org/services/stats"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,7 +67,7 @@ func BeanExists(t testing.TB, bean any, conditions ...any) bool {
 }
 
 // AssertExistsAndLoadBean assert that a bean exists and load it from the test database
-func AssertExistsAndLoadBean[T any](t testing.TB, bean T, conditions ...any) T {
+func AssertExistsAndLoadBean[T any](t require.TestingT, bean T, conditions ...any) T {
 	exists, err := LoadBeanIfExists(bean, conditions...)
 	require.NoError(t, err)
 	assert.True(t, exists,
@@ -161,4 +162,8 @@ func GetCountByCond(t testing.TB, tableName string, cond builder.Cond) int64 {
 func AssertCountByCond(t testing.TB, tableName string, cond builder.Cond, expected int) bool {
 	return assert.EqualValues(t, expected, GetCountByCond(t, tableName, cond),
 		"Failed consistency test, the counted bean (of table %s) was %+v", tableName, cond)
+}
+
+func FlushAsyncCalcs(t testing.TB) {
+	require.NoError(t, stats.Flush(t.Context()))
 }

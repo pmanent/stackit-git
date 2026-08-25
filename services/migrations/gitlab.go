@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"forgejo.org/modules/log"
 	base "forgejo.org/modules/migration"
 	"forgejo.org/modules/structs"
+	"forgejo.org/services/migrations/allowlist"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
@@ -64,10 +66,13 @@ type gitlabIIDResolver struct {
 }
 
 func (r *gitlabIIDResolver) recordIssueIID(issueIID int) {
-	if r.frozen {
-		panic("cannot record issue IID after pull request IID generation has started")
+	if int64(issueIID) <= r.maxIssueIID {
+		return
 	}
-	r.maxIssueIID = max(r.maxIssueIID, int64(issueIID))
+	if r.frozen {
+		panic("cannot record bigger issue IID after pull request IID generation has started")
+	}
+	r.maxIssueIID = int64(issueIID)
 }
 
 func (r *gitlabIIDResolver) generatePullRequestNumber(mrIID int) int64 {
@@ -95,11 +100,12 @@ type GitlabDownloader struct {
 //	Use either a username/password, personal token entered into the username field, or anonymous/public access
 //	Note: Public access only allows very basic access
 func NewGitlabDownloader(ctx context.Context, baseURL, repoPath, username, password, token string) (*GitlabDownloader, error) {
-	gitlabClient, err := gitlab.NewClient(token, gitlab.WithBaseURL(baseURL), gitlab.WithHTTPClient(NewMigrationHTTPClient()))
+	gitlabClient, err := gitlab.NewClient(token, gitlab.WithBaseURL(baseURL), gitlab.WithHTTPClient(allowlist.NewMigrationHTTPClient()))
 	// Only use basic auth if token is blank and password is NOT
 	// Basic auth will fail with empty strings, but empty token will allow anonymous public API usage
 	if token == "" && password != "" {
-		gitlabClient, err = gitlab.NewBasicAuthClient(username, password, gitlab.WithBaseURL(baseURL), gitlab.WithHTTPClient(NewMigrationHTTPClient()))
+		//nolint // SA1019 gitlab.NewBasicAuthClient is deprecated: GitLab recommends against using this authentication method
+		gitlabClient, err = gitlab.NewBasicAuthClient(username, password, gitlab.WithBaseURL(baseURL), gitlab.WithHTTPClient(allowlist.NewMigrationHTTPClient()))
 	}
 
 	if err != nil {
@@ -213,7 +219,7 @@ func (g *GitlabDownloader) GetTopics() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return gr.TagList, err
+	return gr.Topics, err
 }
 
 // GetMilestones returns milestones
@@ -328,14 +334,13 @@ func (g *GitlabDownloader) convertGitlabRelease(rel *gitlab.Release) *base.Relea
 		PublisherName:   rel.Author.Username,
 	}
 
-	httpClient := NewMigrationHTTPClient()
+	httpClient := allowlist.NewMigrationHTTPClient()
 
-	for k, asset := range rel.Assets.Links {
+	for _, asset := range rel.Assets.Links {
 		assetID := asset.ID // Don't optimize this, for closure we need a local variable
 		r.Assets = append(r.Assets, &base.ReleaseAsset{
 			ID:            int64(asset.ID),
 			Name:          asset.Name,
-			ContentType:   &rel.Assets.Sources[k].Format,
 			Size:          &zero,
 			DownloadCount: &zero,
 			DownloadFunc: func() (io.ReadCloser, error) {
@@ -401,15 +406,18 @@ type gitlabIssueContext struct {
 //	Note: issue label description and colors are not supported by the go-gitlab library at this time
 func (g *GitlabDownloader) GetIssues(page, perPage int) ([]*base.Issue, bool, error) {
 	state := "all"
-	sort := "asc"
+	// we want most recent issues first, to get the biggest issue IID immediately
+	sort := "desc"
+	orderBy := "created_at"
 
 	if perPage > g.maxPerPage {
 		perPage = g.maxPerPage
 	}
 
 	opt := &gitlab.ListProjectIssuesOptions{
-		State: &state,
-		Sort:  &sort,
+		State:   &state,
+		Sort:    &sort,
+		OrderBy: &orderBy,
 		ListOptions: gitlab.ListOptions{
 			PerPage: perPage,
 			Page:    page,
@@ -423,6 +431,14 @@ func (g *GitlabDownloader) GetIssues(page, perPage int) ([]*base.Issue, bool, er
 		return nil, false, fmt.Errorf("error while listing issues: %w", err)
 	}
 	for _, issue := range issues {
+		// record the issue IID, to be used in GetPullRequests()
+		g.iidResolver.recordIssueIID(issue.IID)
+
+		// Do not include confidential issues as long as Forgejo does not support them, see https://codeberg.org/forgejo/design/issues/2
+		if issue.Confidential {
+			continue
+		}
+
 		labels := make([]*base.Label, 0, len(issue.Labels))
 		for _, l := range issue.Labels {
 			labels = append(labels, &base.Label{
@@ -457,7 +473,7 @@ func (g *GitlabDownloader) GetIssues(page, perPage int) ([]*base.Issue, bool, er
 			Number:       int64(issue.IID),
 			PosterID:     int64(issue.Author.ID),
 			PosterName:   issue.Author.Username,
-			Content:      issue.Description,
+			Content:      g.convertMRReference(issue.Description),
 			Milestone:    milestone,
 			State:        issue.State,
 			Created:      *issue.CreatedAt,
@@ -469,9 +485,6 @@ func (g *GitlabDownloader) GetIssues(page, perPage int) ([]*base.Issue, bool, er
 			ForeignIndex: int64(issue.IID),
 			Context:      gitlabIssueContext{IsMergeRequest: false},
 		})
-
-		// record the issue IID, to be used in GetPullRequests()
-		g.iidResolver.recordIssueIID(issue.IID)
 	}
 
 	return allIssues, len(issues) < perPage, nil
@@ -510,6 +523,9 @@ func (g *GitlabDownloader) GetComments(commentable base.Commentable) ([]*base.Co
 		}
 		for _, comment := range comments {
 			for _, note := range comment.Notes {
+				if note.Internal {
+					continue
+				}
 				allComments = append(allComments, g.convertNoteToComment(commentable.GetLocalIndex(), note))
 			}
 		}
@@ -592,7 +608,7 @@ func (g *GitlabDownloader) convertNoteToComment(localIndex int64, note *gitlab.N
 		PosterID:    int64(note.Author.ID),
 		PosterName:  note.Author.Username,
 		PosterEmail: note.Author.Email,
-		Content:     note.Body,
+		Content:     g.convertMRReference(note.Body),
 		Created:     *note.CreatedAt,
 		Meta:        map[string]any{},
 	}
@@ -705,7 +721,7 @@ func (g *GitlabDownloader) GetPullRequests(page, perPage int) ([]*base.PullReque
 			Number:         newPRNumber,
 			PosterName:     pr.Author.Username,
 			PosterID:       int64(pr.Author.ID),
-			Content:        pr.Description,
+			Content:        g.convertMRReference(pr.Description),
 			Milestone:      milestone,
 			State:          pr.State,
 			Created:        *pr.CreatedAt,
@@ -791,4 +807,16 @@ func (g *GitlabDownloader) awardsToReactions(awards []*gitlab.AwardEmoji) []*bas
 		}
 	}
 	return result
+}
+
+var mrFinder = regexp.MustCompile(`![0-9]+`)
+
+// In gitlab, issues and merge-request have split numbering
+// Adjust the merge-request numbers (preserve the issue numbers)
+func (g *GitlabDownloader) convertMRReference(body string) string {
+	return mrFinder.ReplaceAllStringFunc(body, func(s string) string {
+		oldVal, _ := strconv.Atoi(s[1:]) // skip the leading exclamation mark
+		newVal := g.iidResolver.generatePullRequestNumber(oldVal)
+		return "!" + strconv.FormatInt(newVal, 10)
+	})
 }

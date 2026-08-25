@@ -20,6 +20,9 @@ type swaggerParameterBodies struct {
 	ForgeLike ffed.ForgeLike
 
 	// in:body
+	APRemoteFollowOption api.APRemoteFollowOption `json:"body"`
+
+	// in:body
 	AddCollaboratorOption api.AddCollaboratorOption
 
 	// in:body
@@ -239,4 +242,7 @@ type swaggerParameterBodies struct {
 
 	// in:body
 	NoteOptions api.NoteOptions
+
+	// in:body
+	RegisterRunnerOptions api.RegisterRunnerOptions
 }

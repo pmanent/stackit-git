@@ -69,11 +69,7 @@ func GetTreeBySHA(ctx context.Context, repo *repo_model.Repository, gitRepo *git
 	if len(entries) > perPage {
 		tree.Truncated = true
 	}
-	if rangeStart+perPage < len(entries) {
-		rangeEnd = rangeStart + perPage
-	} else {
-		rangeEnd = len(entries)
-	}
+	rangeEnd = min(rangeStart+perPage, len(entries))
 	tree.Entries = make([]api.GitEntry, rangeEnd-rangeStart)
 	for e := rangeStart; e < rangeEnd; e++ {
 		i := e - rangeStart
@@ -87,7 +83,7 @@ func GetTreeBySHA(ctx context.Context, repo *repo_model.Repository, gitRepo *git
 		if entries[e].IsDir() {
 			copy(treeURL[copyPos:], entries[e].ID.String())
 			tree.Entries[i].URL = string(treeURL)
-		} else if entries[e].IsSubModule() {
+		} else if entries[e].IsSubmodule() {
 			// In Github Rest API Version=2022-11-28, if a tree entry is a submodule,
 			// its url will be returned as an empty string.
 			// So the URL will be set to "" here.

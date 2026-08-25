@@ -15,6 +15,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/log"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/private"
 	"forgejo.org/modules/util"
 	"forgejo.org/services/context"
@@ -34,17 +35,27 @@ func GenerateActionsRunnerToken(ctx *context.PrivateContext) {
 		return
 	}
 
-	owner, repo, err := parseScope(ctx, genRequest.Scope)
+	owner, repo, err := ParseScope(ctx, genRequest.Scope)
 	if err != nil {
 		log.Error("parseScope failed: %v", err)
 		ctx.JSON(http.StatusInternalServerError, private.Response{
 			Err: err.Error(),
 		})
+		return
 	}
 
-	token, err := actions_model.GetLatestRunnerToken(ctx, owner, repo)
+	ownerID := optional.None[int64]()
+	if owner != 0 {
+		ownerID = optional.Some(owner)
+	}
+	repoID := optional.None[int64]()
+	if repo != 0 {
+		repoID = optional.Some(repo)
+	}
+
+	token, err := actions_model.GetLatestRunnerToken(ctx, ownerID, repoID)
 	if errors.Is(err, util.ErrNotExist) || (token != nil && !token.IsActive) {
-		token, err = actions_model.NewRunnerToken(ctx, owner, repo)
+		token, err = actions_model.NewRunnerToken(ctx, ownerID, repoID)
 		if err != nil {
 			errMsg := fmt.Sprintf("error while creating runner token: %v", err)
 			log.Error("NewRunnerToken failed: %v", errMsg)
@@ -66,32 +77,24 @@ func GenerateActionsRunnerToken(ctx *context.PrivateContext) {
 }
 
 func ParseScope(ctx gocontext.Context, scope string) (ownerID, repoID int64, err error) {
-	return parseScope(ctx, scope)
-}
-
-func parseScope(ctx gocontext.Context, scope string) (ownerID, repoID int64, err error) {
-	ownerID = 0
-	repoID = 0
 	if scope == "" {
-		return ownerID, repoID, nil
+		return 0, 0, nil
 	}
 
 	ownerName, repoName, found := strings.Cut(scope, "/")
 
 	u, err := user_model.GetUserByName(ctx, ownerName)
 	if err != nil {
-		return ownerID, repoID, err
+		return 0, 0, err
 	}
-	ownerID = u.ID
 
 	if !found {
-		return ownerID, repoID, nil
+		return u.ID, 0, nil
 	}
 
 	r, err := repo_model.GetRepositoryByName(ctx, u.ID, repoName)
 	if err != nil {
-		return ownerID, repoID, err
+		return 0, 0, err
 	}
-	repoID = r.ID
-	return ownerID, repoID, nil
+	return 0, r.ID, nil
 }

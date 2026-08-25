@@ -1,13 +1,20 @@
 #!/bin/bash
 
-echo "Post create"
+PROJECT_ROOT=$PWD
+source "$PWD/.devcontainer/commands/utils/colors.sh"
 
-# go version
+printf "[${BRed}${On_Yellow}STARTING${RESET}] ${Purple}->${RESET} Post create\n"
 
-# ls
+PROJECT_ROOT=$PWD
+# SRC_DIR="$PROJECT_ROOT/src/core"
+# OUT_FILE="$PROJECT_ROOT/src/core/core"
 
-# make deps
+go version
+go env
+# go build -o "$OUT_FILE" '-gcflags=all=-N -l' "$SRC_DIR/main.go"
+# mkdir -p "$PROJECT_ROOT/src/core/data/migrations/postgresql"
+# cp -r "$PROJECT_ROOT/make/migrations/postgresql" "$PROJECT_ROOT/src/core/data/migrations"
 
-# rm -rf ./data/
+printf "[${BRed}${On_Yellow}Ends${RESET}] ${Purple}->${RESET} Post create\n"
 
-# mkdir -p ./data/
+make deps

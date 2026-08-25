@@ -73,6 +73,8 @@ type AccessToken struct {
 	UpdatedUnix       timeutil.TimeStamp `xorm:"INDEX updated"`
 	HasRecentActivity bool               `xorm:"-"`
 	HasUsed           bool               `xorm:"-"`
+
+	ResourceAllRepos bool `xorm:"NOT NULL DEFAULT TRUE"` // flag for whether AccessTokenResourceRepo instances will limit the resources this access token can access (false) or won't limit them (true).
 }
 
 // AfterLoad is invoked from XORM after setting the values of all fields of this object.
@@ -98,28 +100,17 @@ func init() {
 
 // NewAccessToken creates new access token.
 func NewAccessToken(ctx context.Context, t *AccessToken) error {
-	err := generateAccessToken(t)
-	if err != nil {
-		return err
-	}
-	_, err = db.GetEngine(ctx).Insert(t)
+	generateAccessToken(t)
+	_, err := db.GetEngine(ctx).Insert(t)
 	return err
 }
 
-func generateAccessToken(t *AccessToken) error {
-	salt, err := util.CryptoRandomString(10)
-	if err != nil {
-		return err
-	}
-	token, err := util.CryptoRandomBytes(20)
-	if err != nil {
-		return err
-	}
+func generateAccessToken(t *AccessToken) {
+	salt := util.CryptoRandomString(util.RandomStringMedium)
 	t.TokenSalt = salt
-	t.Token = hex.EncodeToString(token)
+	t.Token = hex.EncodeToString(util.CryptoRandomBytes(20))
 	t.TokenHash = HashToken(t.Token, t.TokenSalt)
 	t.TokenLastEight = t.Token[len(t.Token)-8:]
-	return nil
 }
 
 // DisplayPublicOnly whether to display this as a public-only token.
@@ -129,6 +120,13 @@ func (t *AccessToken) DisplayPublicOnly() bool {
 		return false
 	}
 	return publicOnly
+}
+
+// UpdateLastUsed updates the time this token was last used to now.
+func (t *AccessToken) UpdateLastUsed(ctx context.Context) error {
+	t.UpdatedUnix = timeutil.TimeStampNow()
+	_, err := db.GetEngine(ctx).ID(t.ID).Cols("updated_unix").NoAutoTime().Update(t)
+	return err
 }
 
 func getAccessTokenIDFromCache(token string) int64 {
@@ -224,23 +222,25 @@ func (opts ListAccessTokensOptions) ToOrders() string {
 	return "created_unix DESC"
 }
 
-// UpdateAccessToken updates information of access token.
-func UpdateAccessToken(ctx context.Context, t *AccessToken) error {
-	_, err := db.GetEngine(ctx).ID(t.ID).AllCols().Update(t)
-	return err
-}
-
 // DeleteAccessTokenByID deletes access token by given ID.
 func DeleteAccessTokenByID(ctx context.Context, id, userID int64) error {
-	cnt, err := db.GetEngine(ctx).ID(id).Delete(&AccessToken{
-		UID: userID,
+	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := db.DeleteBeans(ctx,
+			&AccessTokenResourceRepo{TokenID: id},
+		); err != nil {
+			return fmt.Errorf("DeleteBeans: %w", err)
+		}
+
+		cnt, err := db.GetEngine(ctx).ID(id).Delete(&AccessToken{
+			UID: userID,
+		})
+		if err != nil {
+			return err
+		} else if cnt != 1 {
+			return ErrAccessTokenNotExist{}
+		}
+		return nil
 	})
-	if err != nil {
-		return err
-	} else if cnt != 1 {
-		return ErrAccessTokenNotExist{}
-	}
-	return nil
 }
 
 // RegenerateAccessTokenByID regenerates access token by given ID.
@@ -254,13 +254,11 @@ func RegenerateAccessTokenByID(ctx context.Context, id, userID int64) (*AccessTo
 		return nil, ErrAccessTokenNotExist{}
 	}
 
-	err = generateAccessToken(t)
-	if err != nil {
-		return nil, err
-	}
+	generateAccessToken(t)
 
 	// Reset the creation time, token is unused
 	t.UpdatedUnix = timeutil.TimeStampNow()
 
-	return t, UpdateAccessToken(ctx, t)
+	_, err = db.GetEngine(ctx).ID(t.ID).Cols("token_salt", "token", "token_hash", "token_last_eight", "updated_unix").NoAutoTime().Update(t)
+	return t, err
 }

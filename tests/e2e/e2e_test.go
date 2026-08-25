@@ -20,6 +20,7 @@ import (
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 	"forgejo.org/modules/testlogger"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
@@ -30,14 +31,15 @@ import (
 var testE2eWebRoutes *web.Route
 
 func TestMain(m *testing.M) {
+	tests.DelegateToMainApp()
+
 	defer log.GetManager().Close()
 
 	managerCtx, cancel := context.WithCancel(context.Background())
 	graceful.InitManager(managerCtx)
 	defer cancel()
 
-	tests.InitTest(true)
-	setting.Quota.Enabled = true
+	tests.InitTest()
 	initChangedFiles()
 	testE2eWebRoutes = routers.NormalRoutes()
 
@@ -70,10 +72,10 @@ func TestMain(m *testing.M) {
 	os.Exit(exitVal)
 }
 
-// TestE2e should be the only test e2e necessary. It will collect all "*.test.e2e.js" files in this directory and build a test for each.
+// TestE2e should be the only test e2e necessary. It will collect all "*.test.e2e.ts" files in this directory and build a test for each.
 func TestE2e(t *testing.T) {
 	// Find the paths of all e2e test files in test directory.
-	searchGlob := filepath.Join(filepath.Dir(setting.AppPath), "tests", "e2e", "*.test.e2e.ts")
+	searchGlob := filepath.Join(setting.AppWorkPath, "tests", "e2e", "*.test.e2e.ts")
 	paths, err := filepath.Glob(searchGlob)
 	if err != nil {
 		t.Fatal(err)
@@ -103,9 +105,28 @@ func TestE2e(t *testing.T) {
 		}
 
 		t.Run(testname, func(t *testing.T) {
+			// Add test-specific fixures or config options.
+			// Note: this breaks test execution through Playwright Extension for VSCode
+			// Note: these tests only work properly via `make test-e2e-sqlite#filename`
+			if testname == "buttons.test.e2e" || testname == "dropdown.test.e2e" || testname == "modal.test.e2e" || testname == "hashbox.test.e2e" {
+				// Allow access to /-/demo/
+				defer test.MockVariableValue(&setting.IsProd, false)()
+				defer test.MockVariableValue(&testE2eWebRoutes, routers.NormalRoutes())()
+			}
+			if testname == "codemirror.test.e2e" {
+				defer test.MockVariableValue(&setting.DisableGitHooks, false)()
+			}
+			if testname == "user-settings.test.e2e" {
+				defer test.MockVariableValue(&setting.Quota.Enabled, true)()
+				defer test.MockVariableValue(&testE2eWebRoutes, routers.NormalRoutes())()
+			}
+			if testname == "runner-management.test.e2e" {
+				defer unittest.OverrideFixtures("tests/e2e/fixtures/runner-management")()
+			}
+
 			// Default 2 minute timeout
 			onForgejoRun(t, func(*testing.T, *url.URL) {
-				defer DeclareGitRepos(t)()
+				DeclareGitRepos(t)
 				thisTest := runArgs
 				// when all tests are run, use unique artifacts directories per test to preserve artifacts from other tests
 				if testVisual {

@@ -23,8 +23,7 @@ import (
 
 func TestSignup(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-
-	setting.Service.EnableCaptcha = false
+	defer test.MockVariableValue(&setting.Service.EnableCaptcha, false)()
 
 	req := NewRequestWithValues(t, "POST", "/user/sign_up", map[string]string{
 		"user_name": "exampleUser",
@@ -37,13 +36,16 @@ func TestSignup(t *testing.T) {
 	// should be able to view new user's page
 	req = NewRequest(t, "GET", "/exampleUser")
 	MakeRequest(t, req, http.StatusOK)
+
+	// check default values
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "exampleUser"})
+	assert.True(t, user.EnableRepoUnitHints)
 }
 
 func TestSignupAsRestricted(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-
-	setting.Service.EnableCaptcha = false
-	setting.Service.DefaultUserIsRestricted = true
+	defer test.MockVariableValue(&setting.Service.EnableCaptcha, false)()
+	defer test.MockVariableValue(&setting.Service.DefaultUserIsRestricted, true)()
 
 	req := NewRequestWithValues(t, "POST", "/user/sign_up", map[string]string{
 		"user_name": "restrictedUser",
@@ -63,8 +65,7 @@ func TestSignupAsRestricted(t *testing.T) {
 
 func TestSignupEmail(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-
-	setting.Service.EnableCaptcha = false
+	defer test.MockVariableValue(&setting.Service.EnableCaptcha, false)()
 
 	tests := []struct {
 		email      string
@@ -188,10 +189,10 @@ func TestSignupImageCaptcha(t *testing.T) {
 	assert.True(t, ok)
 	assert.Len(t, digits, 6)
 
-	digitStr := ""
+	var digitStr strings.Builder
 	// Convert digits to ASCII digits.
 	for _, digit := range digits {
-		digitStr += string(digit + '0')
+		digitStr.WriteString(string(digit + '0'))
 	}
 
 	req = NewRequestWithValues(t, "POST", "/user/sign_up", map[string]string{
@@ -200,7 +201,7 @@ func TestSignupImageCaptcha(t *testing.T) {
 		"password":             "examplePassword!1",
 		"retype":               "examplePassword!1",
 		"img-captcha-id":       idCaptcha,
-		"img-captcha-response": digitStr,
+		"img-captcha-response": digitStr.String(),
 	})
 	MakeRequest(t, req, http.StatusSeeOther)
 

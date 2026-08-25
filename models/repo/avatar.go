@@ -4,13 +4,16 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image/png"
 	"net/url"
 	"strings"
 
 	"forgejo.org/models/db"
 	"forgejo.org/modules/avatar"
+	"forgejo.org/modules/avatarstore"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/storage"
@@ -30,7 +33,7 @@ func ExistsWithAvatarAtStoragePath(ctx context.Context, storagePath string) (boo
 
 // RelAvatarLink returns a relative link to the repository's avatar.
 func (repo *Repository) RelAvatarLink(ctx context.Context) string {
-	return repo.relAvatarLink(ctx)
+	return repo.relAvatarLink(ctx, 0)
 }
 
 // generateRandomAvatar generates a random avatar for repository.
@@ -47,17 +50,15 @@ func generateRandomAvatar(ctx context.Context, repo *Repository) error {
 
 	// >>> @@@ STACKIT CODE @@@
 	// User Story 56494
-	// For small image the process can be serialized
-
-	/*
-		if err := storage.SaveFrom(storage.RepoAvatars, repo.CustomAvatarRelativePath(), func(w io.Writer) error {
-			if err := png.Encode(w, img); err != nil {
-				log.Error("Encode: %v", err)
-			}
-			return err
-		}); err != nil {
-	*/
-	if err := storage.SaveFromDirect(storage.Avatars, repo.CustomAvatarRelativePath(), img); err != nil {
+	// Was storage.SaveFrom, which streams through an io.Pipe and passes size -1
+	// to the object store; the S3/MinIO backend stores that as an empty object.
+	// avatarstore serializes the image first so the write carries an explicit
+	// content length, and it precomputes the resized variants at the same time.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return fmt.Errorf("Encode: %w", err)
+	}
+	if err := avatarstore.StoreAvatar(repo.CustomAvatarRelativePath(), buf.Bytes(), img, storage.RepoAvatars); err != nil {
 		// <<< @@@ STACKIT CODE @@@
 		return fmt.Errorf("Failed to create dir %s: %w", repo.CustomAvatarRelativePath(), err)
 	}
@@ -71,7 +72,7 @@ func generateRandomAvatar(ctx context.Context, repo *Repository) error {
 	return nil
 }
 
-func (repo *Repository) relAvatarLink(ctx context.Context) string {
+func (repo *Repository) relAvatarLink(ctx context.Context, size int) string {
 	// If no avatar - path is empty
 	avatarPath := repo.CustomAvatarRelativePath()
 	if len(avatarPath) == 0 {
@@ -87,12 +88,21 @@ func (repo *Repository) relAvatarLink(ctx context.Context) string {
 			return ""
 		}
 	}
-	return setting.AppSubURL + "/repo-avatars/" + url.PathEscape(repo.Avatar)
+	cachedSize := avatar.BestAvatarCachedSize(size)
+	if cachedSize == 0 {
+		return setting.AppSubURL + "/repo-avatars/" + url.PathEscape(repo.Avatar)
+	}
+	return fmt.Sprintf("%s/repo-avatars/%s?size=%d", setting.AppSubURL, url.PathEscape(repo.Avatar), cachedSize)
 }
 
 // AvatarLink returns a link to the repository's avatar.
 func (repo *Repository) AvatarLink(ctx context.Context) string {
-	link := repo.relAvatarLink(ctx)
+	return repo.AvatarLinkWithSize(ctx, 0)
+}
+
+// Returns URL to the smallest resized version of the avatar bigger than the supplied size
+func (repo *Repository) AvatarLinkWithSize(ctx context.Context, size int) string {
+	link := repo.relAvatarLink(ctx, size)
 	// we only prepend our AppURL to our known (relative, internal) avatar link to get an absolute URL
 	if strings.HasPrefix(link, "/") && !strings.HasPrefix(link, "//") {
 		return setting.AppURL + strings.TrimPrefix(link, setting.AppSubURL)[1:]

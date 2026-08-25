@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,8 +96,8 @@ func (ca GitAttribute) String() string {
 // sometimes used within gitlab-language: https://docs.gitlab.com/ee/user/project/highlighting.html#override-syntax-highlighting-for-a-file-type
 func (ca GitAttribute) Prefix() string {
 	s := ca.String()
-	if i := strings.IndexByte(s, '?'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "?"); ok {
+		return before
 	}
 	return s
 }
@@ -116,7 +117,7 @@ func (ca GitAttribute) Bool() optional.Option[bool] {
 // instantiation.
 func (repo *Repository) gitCheckAttrCommand(treeish string, attributes ...string) (*Command, *RunOpts, context.CancelFunc, error) {
 	if len(attributes) == 0 {
-		return nil, nil, nil, fmt.Errorf("no provided attributes to check-attr")
+		return nil, nil, nil, errors.New("no provided attributes to check-attr")
 	}
 
 	env := os.Environ()

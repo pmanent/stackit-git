@@ -8,13 +8,17 @@ import (
 	"forgejo.org/services/context"
 )
 
-// https://docs.github.com/en/rest/actions/self-hosted-runners?apiVersion=2022-11-28#create-a-registration-token-for-an-organization
-
-// GetRegistrationToken returns the token to register global runners
-func GetRegistrationToken(ctx *context.APIContext) {
-	// swagger:operation GET /admin/runners/registration-token admin adminGetRunnerRegistrationToken
+// GetRunnerRegistrationToken returns a token to register global runners
+//
+// Deprecated: This operation has been deprecated in Forgejo 15. Use the web UI or RegisterRunner instead.
+func GetRunnerRegistrationToken(ctx *context.APIContext) {
+	// swagger:operation GET /admin/actions/runners/registration-token admin adminGetRunnerRegistrationToken
 	// ---
-	// summary: Get an global actions runner registration token
+	// summary: Get a runner registration token for registering global runners
+	// description: >
+	//   This operation has been deprecated in Forgejo 15.
+	//   Use the web UI or [`/admin/actions/runners`](#/admin/registerAdminRunner) instead.
+	// deprecated: true
 	// produces:
 	// - application/json
 	// parameters:
@@ -25,11 +29,58 @@ func GetRegistrationToken(ctx *context.APIContext) {
 	shared.GetRegistrationToken(ctx, 0, 0)
 }
 
-// SearchActionRunJobs return a list of actions jobs filtered by the provided parameters
+// GetRegistrationToken returns the token to register global runners
+//
+// Deprecated: This operation has been deprecated in Forgejo 15. Use the web UI or RegisterRunner instead.
+func GetRegistrationToken(ctx *context.APIContext) {
+	// swagger:operation GET /admin/runners/registration-token admin adminGetRegistrationToken
+	// ---
+	// summary: Get a runner registration token for registering global runners
+	// description: >
+	//   This operation has been deprecated in Forgejo 15.
+	//   Use the web UI or [`/admin/actions/runners`](#/admin/registerAdminRunner) instead.
+	// deprecated: true
+	// produces:
+	// - application/json
+	// parameters:
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/RegistrationToken"
+
+	shared.GetRegistrationToken(ctx, 0, 0)
+}
+
+// GetActionRunJobs returns a list of action run jobs
+func GetActionRunJobs(ctx *context.APIContext) {
+	// swagger:operation GET /admin/actions/runners/jobs admin adminGetActionRunJobs
+	// ---
+	// summary: Get action run jobs
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: labels
+	//   in: query
+	//   description: a comma separated list of labels to search for
+	//   type: string
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/RunJobList"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
+	shared.GetActionRunJobs(ctx, 0, 0)
+}
+
+// SearchActionRunJobs returns a list of actions jobs filtered by the provided parameters
+//
+// Deprecated: This operation has been deprecated in Forgejo 15. Use GetActionRunJobs instead.
 func SearchActionRunJobs(ctx *context.APIContext) {
 	// swagger:operation GET /admin/runners/jobs admin adminSearchRunJobs
 	// ---
-	// summary: Search action jobs according filter conditions
+	// summary: Search action jobs according to filter conditions
+	// description: >
+	//   This operation has been deprecated in Forgejo 15.
+	//   Use [`/admin/actions/runners/jobs`](#/admin/adminGetActionRunJobs) instead.
+	// deprecated: true
 	// produces:
 	// - application/json
 	// parameters:
@@ -45,8 +96,110 @@ func SearchActionRunJobs(ctx *context.APIContext) {
 	shared.GetActionRunJobs(ctx, 0, 0)
 }
 
-// >>> @@@@ STACKIT Code @@@
+// ListRunners returns all runners, no matter whether they are global runners or scoped to an organization, user, or repository
+func ListRunners(ctx *context.APIContext) {
+	// swagger:operation GET /admin/actions/runners admin getAdminRunners
+	// ---
+	// summary: Get all runners, no matter whether they are global runners or scoped to an organization, user, or repository
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: visible
+	//   in: query
+	//   description: whether to include all visible runners (true) or only those that are directly owned by the instance (false)
+	//   type: boolean
+	// - name: page
+	//   in: query
+	//   description: page number of results to return (1-based)
+	//   type: integer
+	// - name: limit
+	//   in: query
+	//   description: page size of results
+	//   type: integer
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/ActionRunnerList"
+	//   "400":
+	//     "$ref": "#/responses/error"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+	shared.ListRunners(ctx, 0, 0)
+}
 
+// GetRunner returns a particular runner, no matter whether it is a global runner or scoped to an organization, user, or repository
+func GetRunner(ctx *context.APIContext) {
+	// swagger:operation GET /admin/actions/runners/{runner_id} admin getAdminRunner
+	// ---
+	// summary: Get a particular runner, no matter whether it is a global runner or scoped to an organization, user, or repository
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: runner_id
+	//   in: path
+	//   description: ID of the runner
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/ActionRunner"
+	//   "400":
+	//     "$ref": "#/responses/error"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+	shared.GetRunner(ctx, 0, 0, ctx.ParamsInt64("runner_id"))
+}
+
+// RegisterRunner registers a new global runner
+func RegisterRunner(ctx *context.APIContext) {
+	// swagger:operation POST /admin/actions/runners admin registerAdminRunner
+	// ---
+	// summary: Register a new global runner
+	// consumes:
+	// - application/json
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: body
+	//   in: body
+	//   schema:
+	//     "$ref": "#/definitions/RegisterRunnerOptions"
+	// responses:
+	//   "201":
+	//     "$ref": "#/responses/RegisterRunnerResponse"
+	//   "400":
+	//     "$ref": "#/responses/error"
+	//   "401":
+	//     "$ref": "#/responses/unauthorized"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+
+	shared.RegisterRunner(ctx, 0, 0)
+}
+
+// DeleteRunner removes a particular runner, no matter whether it is a global runner or scoped to an organization, user, or repository
+func DeleteRunner(ctx *context.APIContext) {
+	// swagger:operation DELETE /admin/runners/{runner_id} admin deleteAdminRunner
+	// ---
+	// summary: Delete a particular runner, no matter whether it is a global runner or scoped to an organization, user, or repository
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: runner_id
+	//   in: path
+	//   description: ID of the runner
+	//   type: string
+	//   required: true
+	// responses:
+	//   "204":
+	//     description: runner has been deleted
+	//   "400":
+	//     "$ref": "#/responses/error"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+	shared.DeleteRunner(ctx, 0, 0, ctx.ParamsInt64("runner_id"))
+}
+
+// >>> @@@@ STACKIT Code @@@
 // GetRunnerConsumption returns the consumption for runners.
 // The consumption can be filtered by start and end date, runner types and runner labels,
 func GetRunnerConsumption(ctx *context.APIContext) {
@@ -60,43 +213,34 @@ func GetRunnerConsumption(ctx *context.APIContext) {
 	//   in: query
 	//   description: |-
 	//     Limit results to items with a creation timestamp greater than or equal to this value (inclusive).
-	//     Must be in RFC3339 format.
+	//     Must be in RFC3339 format. Example: 2023-01-01T00:00:00Z
 	//   type: string
 	//   required: true
-	//   example: "2023-01-01T00:00:00Z"
 	// - name: end_date
 	//   in: query
 	//   description: |-
 	//     Limit results to items with a creation timestamp less than or equal to this value (inclusive).
-	//     Must be in RFC3339 format.
+	//     Must be in RFC3339 format. Example: 2023-01-31T23:59:59Z
 	//   type: string
 	//   required: true
-	//   example: "2023-01-31T23:59:59Z"
 	// - name: runner_types
 	//   in: query
 	//   description: |-
 	//     A comma-separated list of runner types to search for.
-	//     Possible values are: `system-global`, `individual`, `repository`, `organization`, `stackit`.
+	//     Possible values are: system-global, individual, repository, organization, stackit.
 	//   type: string
 	// - name: runner_labels
 	//   in: query
-	//   description: A comma-separated list of runner labels to search for.
+	//   description: "A comma-separated list of runner labels to search for. Example: ubuntu,ubuntu-latest"
 	//   type: string
-	//   example: "ubuntu,ubuntu-latest"
 	// responses:
 	//   "200":
 	//     description: "A successful response detailing the consumption metrics for runners matching the filter criteria."
 	//     schema:
 	//       "$ref": "#/definitions/RunnerConsumption"
-	//     examples:
-	//       application/json: {"meta":{"total_tasks_processed":5,"filtered_by":{"runner_types":["stackit"],"start_date":"2025-01-01T00:00:00Z","end_date":"2025-12-31T23:59:59Z"}},"data":[{"runner_id":1,"runner_type":"stackit","runner_labels":["stackit-ubuntu-20","stackit-docker"],"metrics":{"total_duration_in_seconds":1860,"total_tasks_processed":5}}]}
 	//   "400":
-	//     description: "Bad Request, e.g. missing required parameters"
-	//     schema:
-	//       "$ref": "#/definitions/APIError"
-	//     examples:
-	//       application/json: { "message": "start_date is required", "url": "URL" }
+	//     "$ref": "#/responses/error"
 	shared.GetRunnerConsumption(ctx)
 }
 
-//>>> @@@@ STACKIT Code @@@
+// >>> @@@@ STACKIT Code @@@

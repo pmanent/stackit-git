@@ -13,6 +13,7 @@ import (
 
 	"forgejo.org/models"
 	asymkey_model "forgejo.org/models/asymkey"
+	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	packages_model "forgejo.org/models/packages"
@@ -25,6 +26,7 @@ import (
 	"forgejo.org/modules/storage"
 	"forgejo.org/modules/util"
 	"forgejo.org/services/agit"
+	"forgejo.org/services/auth/source/oauth2"
 	org_service "forgejo.org/services/org"
 	"forgejo.org/services/packages"
 	container_service "forgejo.org/services/packages/container"
@@ -36,9 +38,33 @@ func RenameUser(ctx context.Context, u *user_model.User, newUserName string) err
 	return renameUser(ctx, u, newUserName, false)
 }
 
-// RenameUser renames a user as an admin.
+// AdminRenameUser renames a user as an admin.
 func AdminRenameUser(ctx context.Context, u *user_model.User, newUserName string) error {
 	return renameUser(ctx, u, newUserName, true)
+}
+
+// CanUserRename returns if the given user can be renamed.
+//
+// This is merely a precondition, you likely want to use [RenameUser] or [AdminRenameUser]
+// which also takes into consideration username cooldown of a new username.
+func CanUserRename(ctx context.Context, user *user_model.User) (bool, error) {
+	// Non-local users are not allowed to change their username.
+	// Organizations can always be renamed.
+	if user.IsOrganization() || user.IsLocal() {
+		return true, nil
+	}
+
+	// If the user's authentication source is OAuth2 and that source allows for
+	// username changes then don't make a fuzz about it.
+	if !user.IsOAuth2() {
+		return false, nil
+	}
+
+	source, err := auth.GetSourceByID(ctx, user.LoginSource)
+	if err != nil {
+		return false, err
+	}
+	return source.Cfg.(*oauth2.Source).AllowUsernameChange, nil
 }
 
 func renameUser(ctx context.Context, u *user_model.User, newUserName string, doerIsAdmin bool) error {
@@ -46,11 +72,17 @@ func renameUser(ctx context.Context, u *user_model.User, newUserName string, doe
 		return nil
 	}
 
-	// Non-local users are not allowed to change their username.
-	if !u.IsOrganization() && !u.IsLocal() {
-		return user_model.ErrUserIsNotLocal{
-			UID:  u.ID,
-			Name: u.Name,
+	// If the doer is an admin, then allow the rename - they know better.
+	if !doerIsAdmin {
+		canRenamed, err := CanUserRename(ctx, u)
+		if err != nil {
+			return err
+		}
+		if !canRenamed {
+			return user_model.ErrUserIsNotLocal{
+				UID:  u.ID,
+				Name: u.Name,
+			}
 		}
 	}
 
@@ -162,7 +194,7 @@ func DeleteUser(ctx context.Context, u *user_model.User, purge bool) error {
 		return err
 	}
 
-	hasPrincipialSSHKey, err := db.GetEngine(ctx).Where("owner_id = ? AND type = ?", u.ID, asymkey_model.KeyTypePrincipal).Table("public_key").Exist()
+	hasPrincipalSSHKey, err := db.GetEngine(ctx).Where("owner_id = ? AND type = ?", u.ID, asymkey_model.KeyTypePrincipal).Table("public_key").Exist()
 	if err != nil {
 		return err
 	}
@@ -302,7 +334,7 @@ func DeleteUser(ctx context.Context, u *user_model.User, purge bool) error {
 		}
 	}
 
-	if hasPrincipialSSHKey {
+	if hasPrincipalSSHKey {
 		if err = asymkey_model.RewriteAllPrincipalKeys(ctx); err != nil {
 			return err
 		}

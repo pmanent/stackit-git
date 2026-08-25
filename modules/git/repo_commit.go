@@ -11,6 +11,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"forgejo.org/modules/cache"
 	"forgejo.org/modules/log"
@@ -216,10 +217,15 @@ type CommitsByFileAndRangeOptions struct {
 	File     string
 	Not      string
 	Page     int
+	PageSize int
 }
 
 // CommitsByFileAndRange return the commits according revision file and the page
 func (repo *Repository) CommitsByFileAndRange(opts CommitsByFileAndRangeOptions) ([]*Commit, error) {
+	if opts.PageSize <= 0 {
+		opts.PageSize = setting.Git.CommitsRangeSize
+	}
+
 	skip := (opts.Page - 1) * setting.Git.CommitsRangeSize
 
 	stdoutReader, stdoutWriter := io.Pipe()
@@ -230,7 +236,7 @@ func (repo *Repository) CommitsByFileAndRange(opts CommitsByFileAndRangeOptions)
 	go func() {
 		stderr := strings.Builder{}
 		gitCmd := NewCommand(repo.Ctx, "rev-list").
-			AddOptionFormat("--max-count=%d", setting.Git.CommitsRangeSize).
+			AddOptionFormat("--max-count=%d", opts.PageSize).
 			AddOptionFormat("--skip=%d", skip)
 		gitCmd.AddDynamicArguments(opts.Revision)
 
@@ -443,50 +449,43 @@ func (repo *Repository) getCommitsBeforeLimit(id ObjectID, num int) ([]*Commit, 
 }
 
 func (repo *Repository) getBranches(commit *Commit, limit int) ([]string, error) {
-	if CheckGitVersionAtLeast("2.7.0") == nil {
-		stdout, _, err := NewCommand(repo.Ctx, "for-each-ref", "--format=%(refname:strip=2)").
-			AddOptionFormat("--count=%d", limit).
-			AddOptionValues("--contains", commit.ID.String(), BranchPrefix).
-			RunStdString(&RunOpts{Dir: repo.Path})
-		if err != nil {
-			return nil, err
-		}
+	command := NewCommand(repo.Ctx, "for-each-ref", "--format=%(refname:strip=2)").AddOptionValues("--contains", commit.ID.String(), BranchPrefix)
 
-		branches := strings.Fields(stdout)
-		return branches, nil
+	if limit != -1 {
+		command = command.AddOptionFormat("--count=%d", limit)
 	}
 
-	stdout, _, err := NewCommand(repo.Ctx, "branch").AddOptionValues("--contains", commit.ID.String()).RunStdString(&RunOpts{Dir: repo.Path})
+	stdout, _, err := command.RunStdString(&RunOpts{Dir: repo.Path})
 	if err != nil {
 		return nil, err
 	}
 
-	refs := strings.Split(stdout, "\n")
-
-	var max int
-	if len(refs) > limit {
-		max = limit
-	} else {
-		max = len(refs) - 1
-	}
-
-	branches := make([]string, max)
-	for i, ref := range refs[:max] {
-		parts := strings.Fields(ref)
-
-		branches[i] = parts[len(parts)-1]
-	}
+	branches := strings.Fields(stdout)
 	return branches, nil
 }
 
-// GetCommitsFromIDs get commits from commit IDs
-func (repo *Repository) GetCommitsFromIDs(commitIDs []string) []*Commit {
+// GetCommitsFromIDs get commits from commit IDs. If ignoreExistence is
+// specified, then commits that no longer exists are still returned but
+// without any information except the ID.
+func (repo *Repository) GetCommitsFromIDs(commitIDs []string, ignoreExistence bool) []*Commit {
 	commits := make([]*Commit, 0, len(commitIDs))
 
 	for _, commitID := range commitIDs {
 		commit, err := repo.GetCommit(commitID)
 		if err == nil && commit != nil {
 			commits = append(commits, commit)
+		} else if ignoreExistence && IsErrNotExist(err) {
+			// It's entirely possible the commit no longer exists, we only care
+			// about the status and verification. Verification is no longer possible,
+			// but getting the status is still possible with just the ID. We do have
+			// to assume the commitID is not shortened, we cannot recover the full
+			// commitID.
+			id, err := NewIDFromString(commitID)
+			if err == nil {
+				commits = append(commits, &Commit{
+					ID: id,
+				})
+			}
 		}
 	}
 
@@ -645,19 +644,9 @@ func (repo *Repository) getCommitFromBatchReader(rd *bufio.Reader, id ObjectID) 
 	}
 }
 
-// ConvertToGitID returns a GitHash object from a potential ID string
+// ConvertToGitID returns a ObjectID object from a potential ID string
+// The resulting ObjectID is guaranteed to exist.
 func (repo *Repository) ConvertToGitID(commitID string) (ObjectID, error) {
-	objectFormat, err := repo.GetObjectFormat()
-	if err != nil {
-		return nil, err
-	}
-	if len(commitID) == objectFormat.FullLength() && objectFormat.IsValid(commitID) {
-		ID, err := NewIDFromString(commitID)
-		if err == nil {
-			return ID, nil
-		}
-	}
-
 	wr, rd, cancel, err := repo.CatFileBatchCheck(repo.Ctx)
 	if err != nil {
 		return nil, err
@@ -676,4 +665,15 @@ func (repo *Repository) ConvertToGitID(commitID string) (ObjectID, error) {
 	}
 
 	return MustIDFromString(string(sha)), nil
+}
+
+// GetLatestCommitTime returns time for latest commit in repository (across all branches)
+func (repo *Repository) GetLatestCommitTime() (time.Time, error) {
+	cmd := NewCommand(repo.Ctx, "for-each-ref", "--sort=-committerdate", "--count=1", "--format=%(committerdate)", BranchPrefix)
+	stdout, _, err := cmd.RunStdString(&RunOpts{Dir: repo.Path})
+	if err != nil {
+		return time.Time{}, err
+	}
+	commitTime := strings.TrimSpace(stdout)
+	return time.Parse("Mon Jan _2 15:04:05 2006 -0700", commitTime)
 }

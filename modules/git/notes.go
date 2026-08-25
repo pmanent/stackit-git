@@ -1,4 +1,5 @@
 // Copyright 2019 The Gitea Authors. All rights reserved.
+// Copyright 2025 The Forgejo Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package git
@@ -23,19 +24,17 @@ type Note struct {
 }
 
 // GetNote retrieves the git-notes data for a given commit.
-// FIXME: Add LastCommitCache support
-func GetNote(ctx context.Context, repo *Repository, commitID string, note *Note) error {
+func GetNote(ctx context.Context, repo *Repository, commitID string) (*Note, error) {
 	log.Trace("Searching for git note corresponding to the commit %q in the repository %q", commitID, repo.Path)
 	notes, err := repo.GetCommit(NotesRef)
 	if err != nil {
-		if IsErrNotExist(err) {
-			return err
+		if !IsErrNotExist(err) {
+			log.Error("Unable to get commit from ref %q. Error: %v", NotesRef, err)
 		}
-		log.Error("Unable to get commit from ref %q. Error: %v", NotesRef, err)
-		return err
+		return nil, err
 	}
 
-	path := ""
+	var path strings.Builder
 
 	tree := &notes.Tree
 	log.Trace("Found tree with ID %q while searching for git note corresponding to the commit %q", tree.ID, commitID)
@@ -45,12 +44,12 @@ func GetNote(ctx context.Context, repo *Repository, commitID string, note *Note)
 	for len(commitID) > 2 {
 		entry, err = tree.GetTreeEntryByPath(commitID)
 		if err == nil {
-			path += commitID
+			path.WriteString(commitID)
 			break
 		}
 		if IsErrNotExist(err) {
 			tree, err = tree.SubTree(commitID[0:2])
-			path += commitID[0:2] + "/"
+			path.WriteString(commitID[0:2] + "/")
 			commitID = commitID[2:]
 		}
 		if err != nil {
@@ -58,7 +57,7 @@ func GetNote(ctx context.Context, repo *Repository, commitID string, note *Note)
 			if !IsErrNotExist(err) {
 				log.Error("Unable to find git note corresponding to the commit %q. Error: %v", originalCommitID, err)
 			}
-			return err
+			return nil, err
 		}
 	}
 
@@ -66,7 +65,7 @@ func GetNote(ctx context.Context, repo *Repository, commitID string, note *Note)
 	dataRc, err := blob.DataAsync()
 	if err != nil {
 		log.Error("Unable to read blob with ID %q. Error: %v", blob.ID, err)
-		return err
+		return nil, err
 	}
 	closed := false
 	defer func() {
@@ -77,26 +76,18 @@ func GetNote(ctx context.Context, repo *Repository, commitID string, note *Note)
 	d, err := io.ReadAll(dataRc)
 	if err != nil {
 		log.Error("Unable to read blob with ID %q. Error: %v", blob.ID, err)
-		return err
+		return nil, err
 	}
 	_ = dataRc.Close()
 	closed = true
-	note.Message = d
 
-	treePath := ""
-	if idx := strings.LastIndex(path, "/"); idx > -1 {
-		treePath = path[:idx]
-		path = path[idx+1:]
-	}
-
-	lastCommits, err := GetLastCommitForPaths(ctx, notes, treePath, []string{path})
+	lastCommit, err := repo.getCommitByPathWithID(notes.ID, path.String())
 	if err != nil {
-		log.Error("Unable to get the commit for the path %q. Error: %v", treePath, err)
-		return err
+		log.Error("Unable to get the commit for the path %q. Error: %v", path.String(), err)
+		return nil, err
 	}
-	note.Commit = lastCommits[path]
 
-	return nil
+	return &Note{Message: d, Commit: lastCommit}, nil
 }
 
 func SetNote(ctx context.Context, repo *Repository, commitID, notes, doerName, doerEmail string) error {

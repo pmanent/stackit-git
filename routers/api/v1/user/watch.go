@@ -4,7 +4,7 @@
 package user
 
 import (
-	std_context "context"
+	"errors"
 	"net/http"
 
 	"forgejo.org/models/db"
@@ -17,58 +17,32 @@ import (
 	"forgejo.org/services/convert"
 )
 
-// >>> @@@ STACKIT CODE @@@
-// innerGetWatchedRepos returns the repos that the subject-user with the specified userID is watching that the requesting-user can see
-func innerGetWatchedRepos(ctx std_context.Context, subject, doer *user_model.User, private bool, listOptions db.ListOptions) ([]*api.Repository, int64, error) {
-	watchedRepos, total, err := repo_model.GetWatchedRepos(ctx, subject.ID, private, listOptions)
+// getWatchedRepos returns the repos that the user with the specified userID is watching
+func getWatchedRepos(ctx *context.APIContext, user *user_model.User, private bool, listOptions db.ListOptions) ([]*api.Repository, int64, error) {
+	watchedRepos, total, err := repo_model.GetWatchedRepos(ctx, user.ID, private, listOptions, ctx.Reducer())
 	if err != nil {
 		return nil, 0, err
 	}
 
 	repos := make([]*api.Repository, 0, len(watchedRepos))
 	for _, watched := range watchedRepos {
-		permission, err := access_model.GetUserRepoPermission(ctx, watched, subject)
+		// AllAccessAuthorizationReducer (session auth, all-repos PATs) adds no SQL filter,
+		// so limited-org repos with is_private=false pass the query; verify access explicitly.
+		if user.ID != ctx.Doer().ID {
+			if hasAccess, err := access_model.HasAccess(ctx, ctx.Doer().ID, watched); err != nil {
+				return nil, 0, err
+			} else if !hasAccess {
+				continue
+			}
+		}
+		permission, err := access_model.GetUserRepoPermissionWithReducer(ctx, watched, ctx.Doer(), ctx.Reducer())
 		if err != nil {
 			return nil, 0, err
 		}
-		// Check to see if the user who is requesting the watch list has permissions to see the repo:
-		doerHasAccess, err := access_model.HasAccess(ctx, doer.ID, watched)
-		if err != nil {
-			return nil, 0, err
-		}
-		if doerHasAccess {
-			repos = append(repos, convert.ToRepo(ctx, watched, permission))
-		}
+		repos = append(repos, convert.ToRepo(ctx, watched, permission))
 	}
 	return repos, total, nil
 }
-
-/* Upstream Forgejo was using the same "getWatchedRepos" implementation for both my own watched repos and those of other users,
-which was not correctly applying the permissions model of repo visibility.
-It was possible for a user to get the watched repos of another user,
-and thereby discover information about private repos that they were not privy to.
-For this reason, we have separted the "getWatchedRepos" logic into distinct implementations for these distinct use-cases
-to ensure that repo-visibility rules are respected when fetching the subscriptions of another user. */
-
-// innerGetMyWatchedRepos returns the repos that the user with the specified userID is watching
-func innerGetMyWatchedRepos(ctx std_context.Context, user *user_model.User, private bool, listOptions db.ListOptions) ([]*api.Repository, int64, error) {
-	watchedRepos, total, err := repo_model.GetWatchedRepos(ctx, user.ID, private, listOptions)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	repos := make([]*api.Repository, len(watchedRepos))
-	for i, watched := range watchedRepos {
-		permission, err := access_model.GetUserRepoPermission(ctx, watched, user)
-		if err != nil {
-			return nil, 0, err
-		}
-		repos[i] = convert.ToRepo(ctx, watched, permission)
-	}
-	return repos, total, nil
-}
-
-// <<< @@@ STACKIT CODE @@@
 
 // GetWatchedRepos returns the repos that the user specified in ctx is watching
 func GetWatchedRepos(ctx *context.APIContext) {
@@ -97,15 +71,19 @@ func GetWatchedRepos(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
+	// >>> @@@ STACKIT CODE @@@
 	// prevent a non-admin user to request the subscriptions of an admin
-	if !ctx.Doer.IsAdmin && ctx.ContextUser.IsAdmin {
-		ctx.JSON(http.StatusForbidden, "non-admin user can't request subscriptions of an admin")
+	if !ctx.IsUserSiteAdmin() && ctx.User().IsAdmin {
+		ctx.Error(http.StatusForbidden, "GetWatchedRepos", errors.New("non-admin user can't request subscriptions of an admin"))
 		return
 	}
-	private := ctx.ContextUser.ID == ctx.Doer.ID
-	repos, total, err := innerGetWatchedRepos(ctx, ctx.ContextUser, ctx.Doer, private, utils.GetListOptions(ctx))
+	// <<< @@@ STACKIT CODE @@@
+
+	private := ctx.User().ID == ctx.Doer().ID
+	repos, total, err := getWatchedRepos(ctx, ctx.User(), private, utils.GetListOptions(ctx))
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "getWatchedRepos", err)
+		return
 	}
 
 	ctx.SetTotalCountHeader(total)
@@ -136,9 +114,10 @@ func GetMyWatchedRepos(ctx *context.APIContext) {
 	//   "403":
 	//     "$ref": "#/responses/forbidden"
 
-	repos, total, err := innerGetMyWatchedRepos(ctx, ctx.Doer, true, utils.GetListOptions(ctx))
+	repos, total, err := getWatchedRepos(ctx, ctx.Doer(), true, utils.GetListOptions(ctx))
 	if err != nil {
-		ctx.Error(http.StatusInternalServerError, "innerGetMyWatchedRepos", err)
+		ctx.Error(http.StatusInternalServerError, "getWatchedRepos", err)
+		return
 	}
 
 	ctx.SetTotalCountHeader(total)
@@ -168,14 +147,14 @@ func IsWatching(ctx *context.APIContext) {
 	//   "404":
 	//     description: User is not watching this repo or repo do not exist
 
-	if repo_model.IsWatching(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID) {
+	if repo_model.IsWatcher(ctx, ctx.Doer().ID, ctx.Repo().Repository.ID) {
 		ctx.JSON(http.StatusOK, api.WatchInfo{
 			Subscribed:    true,
 			Ignored:       false,
 			Reason:        nil,
-			CreatedAt:     ctx.Repo.Repository.CreatedUnix.AsTime(),
-			URL:           subscriptionURL(ctx.Repo.Repository),
-			RepositoryURL: ctx.Repo.Repository.APIURL(),
+			CreatedAt:     ctx.Repo().Repository.CreatedUnix.AsTime(),
+			URL:           subscriptionURL(ctx.Repo().Repository),
+			RepositoryURL: ctx.Repo().Repository.APIURL(),
 		})
 	} else {
 		ctx.NotFound()
@@ -204,7 +183,7 @@ func Watch(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	err := repo_model.WatchRepo(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID, true)
+	err := repo_model.WatchRepoExplicitly(ctx, ctx.Doer().ID, ctx.Repo().Repository.ID, repo_model.WatchAllSelection)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "WatchRepo", err)
 		return
@@ -213,9 +192,9 @@ func Watch(ctx *context.APIContext) {
 		Subscribed:    true,
 		Ignored:       false,
 		Reason:        nil,
-		CreatedAt:     ctx.Repo.Repository.CreatedUnix.AsTime(),
-		URL:           subscriptionURL(ctx.Repo.Repository),
-		RepositoryURL: ctx.Repo.Repository.APIURL(),
+		CreatedAt:     ctx.Repo().Repository.CreatedUnix.AsTime(),
+		URL:           subscriptionURL(ctx.Repo().Repository),
+		RepositoryURL: ctx.Repo().Repository.APIURL(),
 	})
 }
 
@@ -241,7 +220,7 @@ func Unwatch(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	err := repo_model.WatchRepo(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID, false)
+	err := repo_model.WatchRepoExplicitly(ctx, ctx.Doer().ID, ctx.Repo().Repository.ID, repo_model.WatchNoneSelection)
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "UnwatchRepo", err)
 		return

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -23,7 +24,7 @@ import (
 )
 
 // RequiredVersion is the minimum Git version required
-const RequiredVersion = "2.0.0"
+const RequiredVersion = "2.34.1"
 
 var (
 	// GitExecutable is the command name of git
@@ -33,20 +34,22 @@ var (
 	// DefaultContext is the default context to run git commands in, must be initialized by git.InitXxx
 	DefaultContext context.Context
 
-	SupportProcReceive     bool // >= 2.29
 	SupportHashSha256      bool // >= 2.42, SHA-256 repositories no longer an ‘experimental curiosity’
 	InvertedGitFlushEnv    bool // 2.43.1
+	SupportFetchPorcelain  bool // >= 2.41
 	SupportCheckAttrOnBare bool // >= 2.40
+	SupportGitMergeTree    bool // >= 2.38
+	SupportGrepMaxCount    bool // >= 2.38
 
 	HasSSHExecutable bool
 
-	gitVersion *version.Version
+	GitVersion *version.Version
 )
 
 // loadGitVersion returns current Git version from shell. Internal usage only.
 func loadGitVersion() error {
 	// doesn't need RWMutex because it's executed by Init()
-	if gitVersion != nil {
+	if GitVersion != nil {
 		return nil
 	}
 	stdout, _, runErr := NewCommand(DefaultContext, "version").RunStdString(nil)
@@ -62,7 +65,7 @@ func loadGitVersion() error {
 	versionString := fields[2]
 
 	var err error
-	gitVersion, err = version.NewVersion(versionString)
+	GitVersion, err = version.NewVersion(versionString)
 	return err
 }
 
@@ -88,7 +91,7 @@ func SetExecutablePath(path string) error {
 		return err
 	}
 
-	if gitVersion.LessThan(versionRequired) {
+	if GitVersion.LessThan(versionRequired) {
 		moreHint := "get git: https://git-scm.com/downloads"
 		if runtime.GOOS == "linux" {
 			// there are a lot of CentOS/RHEL users using old git, so we add a special hint for them
@@ -97,7 +100,7 @@ func SetExecutablePath(path string) error {
 				moreHint = "get git: https://git-scm.com/downloads/linux and https://ius.io"
 			}
 		}
-		return fmt.Errorf("installed git version %q is not supported, Gitea requires git version >= %q, %s", gitVersion.Original(), RequiredVersion, moreHint)
+		return fmt.Errorf("installed git version %q is not supported, Gitea requires git version >= %q, %s", GitVersion.Original(), RequiredVersion, moreHint)
 	}
 
 	return nil
@@ -105,18 +108,10 @@ func SetExecutablePath(path string) error {
 
 // VersionInfo returns git version information
 func VersionInfo() string {
-	if gitVersion == nil {
+	if GitVersion == nil {
 		return "(git not found)"
 	}
-	format := "%s"
-	args := []any{gitVersion.Original()}
-	// Since git wire protocol has been released from git v2.18
-	if setting.Git.EnableAutoGitWireProtocol && CheckGitVersionAtLeast("2.18") == nil {
-		format += ", Wire Protocol %s Enabled"
-		args = append(args, "Version 2") // for focus color
-	}
-
-	return fmt.Sprintf(format, args...)
+	return GitVersion.Original()
 }
 
 func checkInit() error {
@@ -170,17 +165,11 @@ func InitFull(ctx context.Context) (err error) {
 		_ = os.Setenv("GNUPGHOME", filepath.Join(HomeDir(), ".gnupg"))
 	}
 
-	// Since git wire protocol has been released from git v2.18
-	if setting.Git.EnableAutoGitWireProtocol && CheckGitVersionAtLeast("2.18") == nil {
-		globalCommandArgs = append(globalCommandArgs, "-c", "protocol.version=2")
-	}
-
 	// Explicitly disable credential helper, otherwise Git credentials might leak
-	if CheckGitVersionAtLeast("2.9") == nil {
-		globalCommandArgs = append(globalCommandArgs, "-c", "credential.helper=")
-	}
-	SupportProcReceive = CheckGitVersionAtLeast("2.29") == nil
+	globalCommandArgs = append(globalCommandArgs, "-c", "credential.helper=")
+
 	SupportHashSha256 = CheckGitVersionAtLeast("2.42") == nil
+	SupportFetchPorcelain = CheckGitVersionAtLeast("2.41") == nil
 	SupportCheckAttrOnBare = CheckGitVersionAtLeast("2.40") == nil
 	if SupportHashSha256 {
 		SupportedObjectFormats = append(SupportedObjectFormats, Sha256ObjectFormat)
@@ -189,17 +178,21 @@ func InitFull(ctx context.Context) (err error) {
 	}
 
 	InvertedGitFlushEnv = CheckGitVersionEqual("2.43.1") == nil
+	SupportGitMergeTree = CheckGitVersionAtLeast("2.38") == nil
+	SupportGrepMaxCount = CheckGitVersionAtLeast("2.38") == nil
 
 	if setting.LFS.StartServer {
-		if CheckGitVersionAtLeast("2.1.2") != nil {
-			return errors.New("LFS server support requires Git >= 2.1.2")
-		}
 		globalCommandArgs = append(globalCommandArgs, "-c", "filter.lfs.required=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=")
 	}
 
 	// Detect the presence of the ssh executable in $PATH.
 	_, err = exec.LookPath("ssh")
 	HasSSHExecutable = err == nil
+
+	err = InitDelegateHooks(HomeDir())
+	if err != nil {
+		return err
+	}
 
 	return syncGitConfig()
 }
@@ -230,38 +223,32 @@ func syncGitConfig() (err error) {
 		}
 	}
 
-	// Set git some configurations - these must be set to these values for gitea to work correctly
+	if err := configSet("core.hooksPath", path.Join(HomeDir(), "hooks")); err != nil {
+		return err
+	}
+
+	// Set git some configurations - these must be set to these values for forgejo to work correctly
 	if err := configSet("core.quotePath", "false"); err != nil {
 		return err
 	}
 
-	if CheckGitVersionAtLeast("2.10") == nil {
-		if err := configSet("receive.advertisePushOptions", "true"); err != nil {
-			return err
-		}
+	if err := configSet("receive.advertisePushOptions", "true"); err != nil {
+		return err
 	}
 
-	if CheckGitVersionAtLeast("2.18") == nil {
-		if err := configSet("core.commitGraph", "true"); err != nil {
-			return err
-		}
-		if err := configSet("gc.writeCommitGraph", "true"); err != nil {
-			return err
-		}
-		if err := configSet("fetch.writeCommitGraph", "true"); err != nil {
-			return err
-		}
+	if err := configSet("core.commitGraph", "true"); err != nil {
+		return err
+	}
+	if err := configSet("gc.writeCommitGraph", "true"); err != nil {
+		return err
+	}
+	if err := configSet("fetch.writeCommitGraph", "true"); err != nil {
+		return err
 	}
 
-	if SupportProcReceive {
-		// set support for AGit flow
-		if err := configAddNonExist("receive.procReceiveRefs", "refs/for"); err != nil {
-			return err
-		}
-	} else {
-		if err := configUnsetAll("receive.procReceiveRefs", "refs/for"); err != nil {
-			return err
-		}
+	// set support for AGit flow
+	if err := configAddNonExist("receive.procReceiveRefs", "refs/for"); err != nil {
+		return err
 	}
 
 	// Due to CVE-2022-24765, git now denies access to git directories which are not owned by current user
@@ -278,8 +265,49 @@ func syncGitConfig() (err error) {
 		return err
 	}
 
-	// By default partial clones are disabled, enable them from git v2.22
-	if !setting.Git.DisablePartialClone && CheckGitVersionAtLeast("2.22") == nil {
+	switch setting.Repository.Signing.Format {
+	case "ssh":
+		// Get the ssh-keygen binary that Git will use.
+		// This can be overridden in app.ini in [git.config] section, so we must
+		// query this information.
+		sshKeygenPath, err := configGet("gpg.ssh.program")
+		if err != nil {
+			return err
+		}
+		// git is very stubborn and does not give a default value, so we must do
+		// this ourselves.
+		if len(sshKeygenPath) == 0 {
+			// Default value of git, very unlikely to change.
+			// https://github.com/git/git/blob/5b97a56fa0e7d580dc8865b73107407c9b3f0eff/gpg-interface.c#L116
+			sshKeygenPath = "ssh-keygen"
+		}
+
+		// Although there's a version requirement of 8.2p1, there's no cross-version
+		// method to get the version of ssh-keygen. Therefore we do a simple binary
+		// presence check and hope for the best.
+		if _, err := exec.LookPath(sshKeygenPath); err != nil {
+			if errors.Is(err, exec.ErrNotFound) {
+				return errors.New("git signing requires a ssh-keygen binary")
+			}
+			return err
+		}
+
+		if err := configSet("gpg.format", "ssh"); err != nil {
+			return err
+		}
+		// openpgp is already the default value, so in the case of a non SSH format
+		// set the value to openpgp.
+	default:
+		if err := configSet("gpg.format", "openpgp"); err != nil {
+			return err
+		}
+	}
+
+	if err = configSet("receive.hideRefs", "refs/pull/"); err != nil {
+		return err
+	}
+
+	if !setting.Git.DisablePartialClone {
 		if err = configSet("uploadpack.allowfilter", "true"); err != nil {
 			return err
 		}
@@ -303,8 +331,8 @@ func CheckGitVersionAtLeast(atLeast string) error {
 	if err != nil {
 		return err
 	}
-	if gitVersion.Compare(atLeastVersion) < 0 {
-		return fmt.Errorf("installed git binary version %s is not at least %s", gitVersion.Original(), atLeast)
+	if GitVersion.Compare(atLeastVersion) < 0 {
+		return fmt.Errorf("installed git binary version %s is not at least %s", GitVersion.Original(), atLeast)
 	}
 	return nil
 }
@@ -318,10 +346,19 @@ func CheckGitVersionEqual(equal string) error {
 	if err != nil {
 		return err
 	}
-	if !gitVersion.Equal(atLeastVersion) {
-		return fmt.Errorf("installed git binary version %s is not equal to %s", gitVersion.Original(), equal)
+	if !GitVersion.Equal(atLeastVersion) {
+		return fmt.Errorf("installed git binary version %s is not equal to %s", GitVersion.Original(), equal)
 	}
 	return nil
+}
+
+func configGet(key string) (string, error) {
+	stdout, _, err := NewCommand(DefaultContext, "config", "--global", "--get").AddDynamicArguments(key).RunStdString(nil)
+	if err != nil && !IsErrorExitCode(err, 1) {
+		return "", fmt.Errorf("failed to get git config %s, err: %w", key, err)
+	}
+
+	return strings.TrimSpace(stdout), nil
 }
 
 func configSet(key, value string) error {
